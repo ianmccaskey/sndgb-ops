@@ -71,6 +71,56 @@ export async function listB44Products(cfg: B44Config): Promise<B44Product[]> {
   return Array.isArray(data) ? data as B44Product[] : [];
 }
 
+export type B44OrderItem = {
+  product_id?: string;
+  product_name?: string;
+  price?: number;
+  quantity?: number;
+  [key: string]: unknown;
+};
+
+export type B44Order = {
+  id: string;
+  order_number?: string;
+  group_buy_id?: string;
+  customer_name?: string;
+  customer_email?: string;
+  customer_phone?: string;
+  discord_username?: string;
+  shipping_address_line1?: string;
+  shipping_address_line2?: string;
+  shipping_city?: string;
+  shipping_state?: string;
+  shipping_zip_code?: string;
+  payment_method?: string;
+  subtotal?: number;
+  tip?: number;
+  admin_fee?: number;
+  shipping_fee?: number;
+  total?: number;
+  transaction_hashtags?: string;
+  customer_notes?: string | null;
+  notes?: string | null;
+  status?: string;
+  created_date?: string;
+  items?: B44OrderItem[];
+  [key: string]: unknown;
+};
+
+/** All orders for one group buy, filtered server-side and paginated. */
+export async function listB44Orders(cfg: B44Config, gbExternalId: string): Promise<B44Order[]> {
+  const out: B44Order[] = [];
+  const limit = 1000;
+  const q = encodeURIComponent(JSON.stringify({ group_buy_id: gbExternalId }));
+  for (let skip = 0; ; skip += limit) {
+    const batch = await b44Get(cfg, `/entities/Order?q=${q}&sort=-created_date&limit=${limit}&skip=${skip}`);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    out.push(...batch as B44Order[]);
+    if (batch.length < limit) break;
+  }
+  return out;
+}
+
 /**
  * Scope products to one group buy without assuming the linking field's name.
  * Checks the common base44 shapes (`group_buy_id` string, `group_buy_ids`

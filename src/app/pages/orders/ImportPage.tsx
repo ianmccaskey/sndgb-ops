@@ -1,25 +1,31 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
+import listProducts from '@/actions/products/listProducts';
 import importUpsertOrder from '@/actions/orders/importUpsertOrder';
 import replaceOrderItems from '@/actions/orders/replaceOrderItems';
 import importPayments from '@/actions/orders/importPayments';
 import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { fmtUSD } from '@/lib/fmt';
-import { parseOrderPaste, ParsedOrder } from '@/lib/parseOrderImport';
+import { parseOrderPaste, ParsedOrder, ParseResult } from '@/lib/parseOrderImport';
+import { B44_DEFAULT_APP_ID, listB44Orders } from '@/lib/base44';
+import { mapB44Orders } from '@/lib/mapB44Order';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ClipboardPaste, CheckCircle2, XCircle } from 'lucide-react';
+import { ClipboardPaste, CloudDownload, CheckCircle2, XCircle } from 'lucide-react';
 
 type CampaignProduct = { sku_code: string };
+type CatalogProduct = { external_id: string | null; sku_code: string };
 
 type RowState = { orderNumber: string; ok: boolean; message: string };
 
+const EMPTY_RESULT: ParseResult = { orders: [], errors: [] };
+
 export function ImportPage() {
-  const { groupBuyId, groupBuy } = useApp();
+  const { groupBuyId, groupBuy, settings } = useApp();
   const [text, setText] = useState('');
   const [importing, setImporting] = useState(false);
   const [results, setResults] = useState<RowState[]>([]);
@@ -30,12 +36,57 @@ export function ImportPage() {
     () => new Set(rows<CampaignProduct>(rawProducts).map(p => p.sku_code)),
     [rawProducts],
   );
+  const [rawCatalog] = useLoadAction(listProducts, [], {});
+  const skuByExternalId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of rows<CatalogProduct>(rawCatalog)) {
+      if (p.external_id) m.set(p.external_id, p.sku_code);
+    }
+    return m;
+  }, [rawCatalog]);
 
   const [doUpsert] = useMutateAction(importUpsertOrder);
   const [doItems] = useMutateAction(replaceOrderItems);
   const [doPayments] = useMutateAction(importPayments);
 
-  const parsed = useMemo(() => parseOrderPaste(text), [text]);
+  // Ordering-app pull — same preview/import flow as paste, different source.
+  const cfg = useMemo(() => ({
+    appId: settings.base44_app_id || B44_DEFAULT_APP_ID,
+    token: settings.base44_token || '',
+  }), [settings.base44_app_id, settings.base44_token]);
+  const canPull = !!cfg.token && !!groupBuy?.external_id;
+  const [pulled, setPulled] = useState<ParseResult | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [pullError, setPullError] = useState('');
+
+  const pull = async () => {
+    if (!canPull || !groupBuy?.external_id) return;
+    setPulling(true); setPullError(''); setResults([]);
+    try {
+      const orders = await listB44Orders(cfg, groupBuy.external_id);
+      setPulled(mapB44Orders(orders, skuByExternalId));
+      setText('');
+    } catch (e: unknown) {
+      setPullError(e instanceof Error ? e.message : 'Failed to pull orders');
+    } finally {
+      setPulling(false);
+    }
+  };
+
+  // Pull automatically when the page opens with a linked, configured campaign.
+  const autoPulled = useRef(false);
+  const catalogReady = rawCatalog != null;
+  useEffect(() => {
+    if (!autoPulled.current && canPull && catalogReady) {
+      autoPulled.current = true;
+      pull();
+    }
+  }, [canPull, catalogReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const parsed = useMemo(
+    () => (text.trim() !== '' ? parseOrderPaste(text) : pulled ?? EMPTY_RESULT),
+    [text, pulled],
+  );
 
   // Pre-flight: every SKU in every order must exist as a campaign product,
   // otherwise line items would silently vanish at insert time.
@@ -128,20 +179,42 @@ export function ImportPage() {
           <ClipboardPaste className="h-6 w-6 text-violet-600" /> Import Orders
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Paste rows from the ordering app export (tab-separated, header optional) into <span className="font-medium">{groupBuy?.name}</span>.
-          Re-importing the same orders is safe — they update in place, they don't duplicate.
+          Orders for <span className="font-medium">{groupBuy?.name}</span> pull straight from the ordering app;
+          the paste box below stays as a fallback. Re-importing the same orders is safe — they update in place, they don't duplicate.
         </p>
       </div>
 
+      <Card>
+        <CardContent className="pt-4 space-y-2">
+          <div className="flex items-center gap-3 flex-wrap">
+            <Button size="sm" onClick={pull} disabled={!canPull || pulling}>
+              <CloudDownload className="w-4 h-4 mr-1" />
+              {pulling ? 'Pulling…' : 'Pull from ordering app'}
+            </Button>
+            {!canPull && (
+              <p className="text-sm text-muted-foreground">
+                Needs the ordering-app JWT (Settings) and a linked campaign (Products → Ordering app).
+              </p>
+            )}
+            {pulled && text.trim() === '' && !pulling && (
+              <p className="text-sm text-muted-foreground">
+                {pulled.orders.length} orders pulled from the ordering app{pulled.errors.length > 0 ? `, ${pulled.errors.length} skipped` : ''}.
+              </p>
+            )}
+          </div>
+          {pullError && <p className="text-sm text-red-600">{pullError}</p>}
+        </CardContent>
+      </Card>
+
       <Textarea
-        placeholder="Paste order rows here…"
+        placeholder="Or paste order rows here (overrides the pulled set while non-empty)…"
         value={text}
         onChange={e => { setText(e.target.value); setResults([]); }}
-        rows={8}
+        rows={6}
         className="font-mono text-xs"
       />
 
-      {text.trim() !== '' && (
+      {(text.trim() !== '' || pulled) && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">
