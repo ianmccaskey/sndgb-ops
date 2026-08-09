@@ -24,17 +24,12 @@ import {
  */
 const NON_IMPORTABLE_STATUS = /cancel|refund|reject|void|denied/i;
 
-/**
- * Statuses allowed to import as active orders. Everything not listed here and
- * not terminal-bad is skipped with a visible preview error — a status the app
- * has never seen (chargeback? expired? test?) must be deliberately added, not
- * silently counted as revenue. 'pending' is the normal state for a live buy;
- * payment truth comes from the on-chain reconciliation, not this field.
- */
-const IMPORTABLE_STATUS = new Set([
-  '', 'pending', 'paid', 'confirmed', 'processing', 'completed', 'complete',
-  'shipped', 'delivered', 'fulfilled', 'modified',
-]);
+// Any other status ('pending', 'verified', 'shipped', …) imports normally.
+// Whether an order represents real money is decided by the on-chain payment
+// reconciliation, NOT by this status field, so we deliberately do not gate
+// imports on an allowlist of statuses — that only skips legitimate orders
+// whenever the ordering app uses a status we didn't predict. Terminal-bad
+// statuses (above) are the sole exception and reconcile as cancellations.
 
 export type B44Cancellation = {
   orderNumber: string;
@@ -57,10 +52,6 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
     return null;
   }
   const status = String(o.status || '').trim();
-  if (!IMPORTABLE_STATUS.has(status.toLowerCase())) {
-    errors.push({ line: index + 1, text: orderNumber, reason: `Unknown status '${status}' — not imported; if it's a legitimate active state, add it to IMPORTABLE_STATUS in mapB44Order.ts` });
-    return null;
-  }
   if (!o.items || o.items.length === 0) {
     errors.push({ line: index + 1, text: orderNumber, reason: 'No line items — skipped (importing would erase any existing items for this order)' });
     return null;
