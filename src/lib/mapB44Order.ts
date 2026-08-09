@@ -53,9 +53,22 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
   const items: ParsedItem[] = [];
   for (const it of o.items ?? []) {
     const qty = Number(it.quantity ?? 0);
-    const sku = (it.product_id && skuByExternalId.get(it.product_id)) || String(it.product_name || '').trim();
+    const pid = String(it.product_id || '').trim();
+    let sku: string;
+    if (pid) {
+      // An id the catalog doesn't know is an identity failure, not a excuse to
+      // guess by name — a renamed/stale product could bind to the wrong SKU.
+      const mapped = skuByExternalId.get(pid);
+      if (!mapped) {
+        errors.push({ line: index + 1, text: orderNumber, reason: `Product not synced: '${it.product_name || pid}' (ordering-app id ${pid}) — pull products on the Products → Ordering app tab first` });
+        return null;
+      }
+      sku = mapped;
+    } else {
+      sku = String(it.product_name || '').trim();
+    }
     if (!sku || !Number.isFinite(qty) || qty <= 0) {
-      errors.push({ line: index + 1, text: orderNumber, reason: `Unusable item (${it.product_name || it.product_id || '?'} × ${it.quantity ?? '?'})` });
+      errors.push({ line: index + 1, text: orderNumber, reason: `Unusable item (${it.product_name || pid || '?'} × ${it.quantity ?? '?'})` });
       return null;
     }
     items.push({ sku, qty });
