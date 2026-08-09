@@ -30,6 +30,7 @@ type CampaignProduct = {
   testing_cost_usd: string; freight_usd: string; net_profit_per_unit_usd: string;
   total_product_profit_usd: string; owed_to_vendor_usd: string; expected_revenue_usd: string;
   ordered_from_vendor_at: string | null;
+  coa_addon_price_usd: string; coa_addon_limit: string;
 };
 type Adjustment = { id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string };
 
@@ -61,6 +62,9 @@ export function ProductsPage() {
   const [cMoq, setCMoq] = useState('');
   const [cTesting, setCTesting] = useState('225');
   const [cFreight, setCFreight] = useState('0');
+  const [cCoaPrice, setCCoaPrice] = useState('70');
+  const [cCoaLimit, setCCoaLimit] = useState('25');
+  const [cEditing, setCEditing] = useState<number | null>(null); // group_buy_product_id being edited
   const [cError, setCError] = useState('');
 
   // new product form
@@ -95,12 +99,38 @@ export function ProductsPage() {
         group_buy_id: groupBuyId, product_id: Number(cProduct), vendor_id: Number(cVendor),
         unit_cost_usd: cost, margin_usd: margin, target_moq: Number(cMoq),
         testing_cost_usd: Number(cTesting || 0), freight_usd: Number(cFreight || 0),
+        coa_addon_price_usd: Number(cCoaPrice || 0), coa_addon_limit: Number(cCoaLimit || 0),
       });
-      setCProduct(''); setCCost(''); setCPrice(''); setCMoq('');
+      resetCampaignForm();
       reloadCampaign();
     } catch (e: unknown) {
       setCError(e instanceof Error ? e.message : 'Failed to save');
     }
+  };
+
+  const resetCampaignForm = () => {
+    setCEditing(null);
+    setCProduct(''); setCVendor(''); setCCost(''); setCPrice(''); setCMoq('');
+    setCTesting('225'); setCFreight('0'); setCCoaPrice('70'); setCCoaLimit('25');
+    setCError('');
+  };
+
+  // Load an existing campaign line into the form for editing. product_id and
+  // vendor_id aren't in the profit view, so resolve them from the loaded lists.
+  const editCampaignProduct = (c: CampaignProduct) => {
+    const prod = products.find(p => p.sku_code === c.sku_code);
+    const vend = vendors.find(v => v.code === c.vendor_code);
+    setCEditing(c.group_buy_product_id);
+    setCProduct(prod ? String(prod.id) : '');
+    setCVendor(vend ? String(vend.id) : '');
+    setCCost(String(Number(c.unit_cost_usd)));
+    setCPrice(String(Number(c.gb_price_usd)));
+    setCMoq(String(Number(c.target_moq)));
+    setCTesting(String(Number(c.testing_cost_usd)));
+    setCFreight(String(Number(c.freight_usd)));
+    setCCoaPrice(String(Number(c.coa_addon_price_usd)));
+    setCCoaLimit(String(Number(c.coa_addon_limit)));
+    setCError('');
   };
 
   const addProduct = async () => {
@@ -163,7 +193,9 @@ export function ProductsPage() {
                   <TableHead className="text-right">Final</TableHead>
                   <TableHead className="text-right">Owed vendor</TableHead>
                   <TableHead className="text-right">Profit</TableHead>
+                  <TableHead>COA add-on</TableHead>
                   <TableHead>Vendor order</TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -179,6 +211,11 @@ export function ProductsPage() {
                     <TableCell className="text-right font-medium">{fmtNum(c.final_count)}</TableCell>
                     <TableCell className="text-right">{fmtUSD(c.owed_to_vendor_usd, { cents: false })}</TableCell>
                     <TableCell className="text-right text-green-700">{fmtUSD(c.total_product_profit_usd, { cents: false })}</TableCell>
+                    <TableCell className="text-xs">
+                      {Number(c.coa_addon_price_usd) > 0
+                        ? <span>{fmtUSD(c.coa_addon_price_usd)} <span className="text-muted-foreground">× {fmtNum(c.coa_addon_limit)}</span></span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell>
                       {c.ordered_from_vendor_at ? (
                         <button
@@ -197,20 +234,27 @@ export function ProductsPage() {
                         </Button>
                       )}
                     </TableCell>
+                    <TableCell>
+                      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => editCampaignProduct(c)}>Edit</Button>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {campaign.length === 0 && (
-                  <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-6">No products in this campaign yet — add one below.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={13} className="text-center text-muted-foreground py-6">No products in this campaign yet — add one below.</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>
           </div>
 
           <Card className="max-w-3xl">
-            <CardHeader className="pb-2"><CardTitle className="text-base">Add / update campaign product</CardTitle></CardHeader>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">
+                {cEditing ? 'Edit campaign product' : 'Add / update campaign product'}
+              </CardTitle>
+            </CardHeader>
             <CardContent className="space-y-2">
               <div className="flex flex-wrap gap-2">
-                <Select value={cProduct} onValueChange={setCProduct}>
+                <Select value={cProduct} onValueChange={setCProduct} disabled={cEditing != null}>
                   <SelectTrigger className="h-9 w-48"><SelectValue placeholder="Product" /></SelectTrigger>
                   <SelectContent>
                     {products.filter(p => p.active).map(p => <SelectItem key={p.id} value={String(p.id)}>{p.sku_code}</SelectItem>)}
@@ -227,12 +271,18 @@ export function ProductsPage() {
                 <Input placeholder="Target MOQ" value={cMoq} onChange={e => setCMoq(e.target.value)} className="h-9 w-28" />
                 <Input placeholder="Testing $" value={cTesting} onChange={e => setCTesting(e.target.value)} className="h-9 w-24" />
                 <Input placeholder="Freight $" value={cFreight} onChange={e => setCFreight(e.target.value)} className="h-9 w-24" />
+                <Input placeholder="COA add-on $" value={cCoaPrice} onChange={e => setCCoaPrice(e.target.value)} className="h-9 w-32" />
+                <Input placeholder="COA qty available" value={cCoaLimit} onChange={e => setCCoaLimit(e.target.value)} className="h-9 w-36" />
               </div>
               {cCost !== '' && cPrice !== '' && Number(cPrice) >= Number(cCost) && (
                 <p className="text-xs text-muted-foreground">Margin per unit: ${(Number(cPrice) - Number(cCost)).toFixed(2)}</p>
               )}
+              <p className="text-xs text-muted-foreground">COA add-on: set price to 0 for products with no add-on. Qty available is the hard cap (e.g. 25).</p>
               {cError && <p className="text-sm text-red-600">{cError}</p>}
-              <Button size="sm" onClick={saveCampaignProduct}>Save</Button>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={saveCampaignProduct}>{cEditing ? 'Save changes' : 'Save'}</Button>
+                {cEditing && <Button size="sm" variant="ghost" onClick={resetCampaignForm}>Cancel</Button>}
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
