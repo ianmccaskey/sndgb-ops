@@ -6,7 +6,7 @@ function upsertCampaignProduct() {
     query: `
       INSERT INTO group_buy_products
         (group_buy_id, product_id, vendor_id, unit_cost_usd, margin_usd, target_moq,
-         testing_cost_usd, freight_usd, coa_addon_price_usd, coa_addon_limit)
+         testing_cost_usd, freight_usd, qty_cap)
       VALUES (
         {{params.group_buy_id}}::bigint,
         {{params.product_id}}::bigint,
@@ -16,8 +16,7 @@ function upsertCampaignProduct() {
         {{params.target_moq}}::int,
         {{params.testing_cost_usd}}::numeric,
         {{params.freight_usd}}::numeric,
-        {{params.coa_addon_price_usd}}::numeric,
-        {{params.coa_addon_limit}}::int
+        NULLIF({{params.qty_cap}}::text, '')::int
       )
       ON CONFLICT (group_buy_id, product_id) DO UPDATE SET
         vendor_id = EXCLUDED.vendor_id,
@@ -26,8 +25,7 @@ function upsertCampaignProduct() {
         target_moq = EXCLUDED.target_moq,
         testing_cost_usd = EXCLUDED.testing_cost_usd,
         freight_usd = EXCLUDED.freight_usd,
-        coa_addon_price_usd = EXCLUDED.coa_addon_price_usd,
-        coa_addon_limit = EXCLUDED.coa_addon_limit
+        qty_cap = EXCLUDED.qty_cap
       RETURNING id
     `,
   });

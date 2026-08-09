@@ -10,7 +10,7 @@ function listCampaignProducts() {
              vpp.testing_cost_usd, vpp.freight_usd, vpp.testing_per_unit_usd, vpp.freight_per_unit_usd,
              vpp.net_profit_per_unit_usd, vpp.total_product_profit_usd,
              vpp.owed_to_vendor_usd, vpp.expected_revenue_usd, vpp.ordered_from_vendor_at, vpp.status,
-             gbp.coa_addon_price_usd, gbp.coa_addon_limit
+             gbp.qty_cap
       FROM v_product_profit vpp
       JOIN group_buy_products gbp ON gbp.id = vpp.group_buy_product_id
       WHERE vpp.group_buy_id = {{params.group_buy_id}}::bigint

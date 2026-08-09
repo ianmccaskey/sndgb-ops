@@ -30,7 +30,7 @@ type CampaignProduct = {
   testing_cost_usd: string; freight_usd: string; net_profit_per_unit_usd: string;
   total_product_profit_usd: string; owed_to_vendor_usd: string; expected_revenue_usd: string;
   ordered_from_vendor_at: string | null;
-  coa_addon_price_usd: string; coa_addon_limit: string;
+  qty_cap: string | null;
 };
 type Adjustment = { id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string };
 
@@ -62,8 +62,7 @@ export function ProductsPage() {
   const [cMoq, setCMoq] = useState('');
   const [cTesting, setCTesting] = useState('225');
   const [cFreight, setCFreight] = useState('0');
-  const [cCoaPrice, setCCoaPrice] = useState('70');
-  const [cCoaLimit, setCCoaLimit] = useState('25');
+  const [cCap, setCCap] = useState(''); // optional max available; '' = uncapped
   const [cEditing, setCEditing] = useState<number | null>(null); // group_buy_product_id being edited
   const [cError, setCError] = useState('');
 
@@ -99,7 +98,7 @@ export function ProductsPage() {
         group_buy_id: groupBuyId, product_id: Number(cProduct), vendor_id: Number(cVendor),
         unit_cost_usd: cost, margin_usd: margin, target_moq: Number(cMoq),
         testing_cost_usd: Number(cTesting || 0), freight_usd: Number(cFreight || 0),
-        coa_addon_price_usd: Number(cCoaPrice || 0), coa_addon_limit: Number(cCoaLimit || 0),
+        qty_cap: cCap.trim(),
       });
       resetCampaignForm();
       reloadCampaign();
@@ -111,7 +110,7 @@ export function ProductsPage() {
   const resetCampaignForm = () => {
     setCEditing(null);
     setCProduct(''); setCVendor(''); setCCost(''); setCPrice(''); setCMoq('');
-    setCTesting('225'); setCFreight('0'); setCCoaPrice('70'); setCCoaLimit('25');
+    setCTesting('225'); setCFreight('0'); setCCap('');
     setCError('');
   };
 
@@ -128,8 +127,7 @@ export function ProductsPage() {
     setCMoq(String(Number(c.target_moq)));
     setCTesting(String(Number(c.testing_cost_usd)));
     setCFreight(String(Number(c.freight_usd)));
-    setCCoaPrice(String(Number(c.coa_addon_price_usd)));
-    setCCoaLimit(String(Number(c.coa_addon_limit)));
+    setCCap(c.qty_cap == null ? '' : String(Number(c.qty_cap)));
     setCError('');
   };
 
@@ -193,7 +191,7 @@ export function ProductsPage() {
                   <TableHead className="text-right">Final</TableHead>
                   <TableHead className="text-right">Owed vendor</TableHead>
                   <TableHead className="text-right">Profit</TableHead>
-                  <TableHead>COA add-on (planned)</TableHead>
+                  <TableHead className="text-right">Available</TableHead>
                   <TableHead>Vendor order</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
@@ -211,10 +209,12 @@ export function ProductsPage() {
                     <TableCell className="text-right font-medium">{fmtNum(c.final_count)}</TableCell>
                     <TableCell className="text-right">{fmtUSD(c.owed_to_vendor_usd, { cents: false })}</TableCell>
                     <TableCell className="text-right text-green-700">{fmtUSD(c.total_product_profit_usd, { cents: false })}</TableCell>
-                    <TableCell className="text-xs">
-                      {Number(c.coa_addon_price_usd) > 0
-                        ? <span>{fmtUSD(c.coa_addon_price_usd)} <span className="text-muted-foreground">× {fmtNum(c.coa_addon_limit)}</span></span>
-                        : <span className="text-muted-foreground">—</span>}
+                    <TableCell className="text-right text-xs">
+                      {c.qty_cap == null
+                        ? <span className="text-muted-foreground">—</span>
+                        : Number(c.demand_qty) >= Number(c.qty_cap)
+                          ? <span className="text-red-600 font-medium">SOLD OUT ({fmtNum(c.demand_qty)}/{fmtNum(c.qty_cap)})</span>
+                          : <span>{fmtNum(c.demand_qty)}/{fmtNum(c.qty_cap)}</span>}
                     </TableCell>
                     <TableCell>
                       {c.ordered_from_vendor_at ? (
@@ -271,13 +271,12 @@ export function ProductsPage() {
                 <Input placeholder="Target MOQ" value={cMoq} onChange={e => setCMoq(e.target.value)} className="h-9 w-28" />
                 <Input placeholder="Testing $" value={cTesting} onChange={e => setCTesting(e.target.value)} className="h-9 w-24" />
                 <Input placeholder="Freight $" value={cFreight} onChange={e => setCFreight(e.target.value)} className="h-9 w-24" />
-                <Input placeholder="COA add-on $" value={cCoaPrice} onChange={e => setCCoaPrice(e.target.value)} className="h-9 w-32" />
-                <Input placeholder="COA qty available" value={cCoaLimit} onChange={e => setCCoaLimit(e.target.value)} className="h-9 w-36" />
+                <Input placeholder="Max available (optional)" value={cCap} onChange={e => setCCap(e.target.value)} className="h-9 w-44" />
               </div>
               {cCost !== '' && cPrice !== '' && Number(cPrice) >= Number(cCost) && (
                 <p className="text-xs text-muted-foreground">Margin per unit: ${(Number(cPrice) - Number(cCost)).toFixed(2)}</p>
               )}
-              <p className="text-xs text-muted-foreground">COA add-on: set price to 0 for products with no add-on. Qty available (e.g. 25) is recorded for planning — claimed-count tracking and cap enforcement come once COA purchases are mapped from the ordering app.</p>
+              <p className="text-xs text-muted-foreground">Max available caps a limited item (e.g. a COA product at 25) — leave blank for no cap. The Available column flags SOLD OUT when demand reaches it, so you know to close it in the ordering app.</p>
               {cError && <p className="text-sm text-red-600">{cError}</p>}
               <div className="flex gap-2">
                 <Button size="sm" onClick={saveCampaignProduct}>{cEditing ? 'Save changes' : 'Save'}</Button>
