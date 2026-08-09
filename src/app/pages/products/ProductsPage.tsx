@@ -144,7 +144,10 @@ export function ProductsPage() {
     setCEditing(c.group_buy_product_id);
     setCProduct(prod ? String(prod.id) : '');
     setCVendor(vend ? String(vend.id) : '');
-    setCCost(String(Number(c.unit_cost_usd)));
+    // A tiered row stores unit_cost 0 as a placeholder (real cost is the tier).
+    // Don't prefill that 0 — if the editor clears the tier to go flat, the empty
+    // box forces a real unit cost instead of silently saving $0.
+    setCCost(c.cost_tier_price != null ? '' : String(Number(c.unit_cost_usd)));
     setCPrice(String(Number(c.gb_price_usd)));
     setCMoq(String(Number(c.target_moq)));
     setCTesting(String(Number(c.testing_cost_usd)));
