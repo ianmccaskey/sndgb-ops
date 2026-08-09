@@ -83,7 +83,17 @@ export function ProductsPage() {
 
   const saveCampaignProduct = async () => {
     const price = Number(cPrice);
-    const tiered = cTierQty.trim() !== '' && cTierPrice.trim() !== '' && Number(cTierQty) > 0;
+    const tierQtyFilled = cTierQty.trim() !== '';
+    const tierPriceFilled = cTierPrice.trim() !== '';
+    if (tierQtyFilled !== tierPriceFilled) {
+      setCError('Cost tier needs BOTH the tier price and the "per N units" — fill both, or clear both.');
+      return;
+    }
+    const tiered = tierQtyFilled && tierPriceFilled && Number(cTierQty) > 0 && Number(cTierPrice) >= 0;
+    if ((tierQtyFilled || tierPriceFilled) && !tiered) {
+      setCError('Cost tier values are invalid — price ≥ 0 and units > 0.');
+      return;
+    }
     const cost = Number(cCost);
     if (!cProduct || !cVendor || !(price >= 0) || !(Number(cMoq) >= 0)) {
       setCError('Product, vendor, GB price, and MOQ are required.');
@@ -97,7 +107,7 @@ export function ProductsPage() {
       unitCost = 0;
       margin = price;
     } else {
-      if (!(cost >= 0)) { setCError('Enter a unit cost, or a cost tier ($ per N units).'); return; }
+      if (cCost.trim() === '' || !(cost >= 0)) { setCError('Enter a unit cost, or a cost tier ($ per N units).'); return; }
       unitCost = cost;
       margin = +(price - cost).toFixed(2);
       if (margin < 0) { setCError(`GB price ($${price}) can't be below your unit cost ($${cost}).`); return; }

@@ -5,6 +5,10 @@
 -- it stays the flat unit_cost_usd * final_count.
 ALTER TABLE group_buy_products ADD COLUMN IF NOT EXISTS cost_tier_qty INTEGER CHECK (cost_tier_qty IS NULL OR cost_tier_qty > 0);
 ALTER TABLE group_buy_products ADD COLUMN IF NOT EXISTS cost_tier_price NUMERIC(12,2) CHECK (cost_tier_price IS NULL OR cost_tier_price >= 0);
+-- A tier is all-or-nothing: both fields set, or neither. A half-set tier would
+-- make the vendor-cost CASE return NULL and silently zero out vendor liability.
+ALTER TABLE group_buy_products DROP CONSTRAINT IF EXISTS cost_tier_both_or_neither;
+ALTER TABLE group_buy_products ADD CONSTRAINT cost_tier_both_or_neither CHECK ((cost_tier_qty IS NULL) = (cost_tier_price IS NULL));
 
 -- Recompute vendor cost with the tier. Same output columns/order as before, so
 -- CREATE OR REPLACE keeps the dependent views (v_product_profit → v_vendor_balances,
@@ -25,7 +29,7 @@ SELECT
   COALESCE(a.adjustment_qty, 0) AS adjustment_qty,
   COALESCE(d.demand_qty, 0) + COALESCE(a.adjustment_qty, 0) AS final_count,
   (COALESCE(d.demand_qty, 0) >= gbp.target_moq) AS moq_met,
-  CASE WHEN gbp.cost_tier_qty IS NOT NULL
+  CASE WHEN gbp.cost_tier_qty IS NOT NULL AND gbp.cost_tier_price IS NOT NULL
     THEN ROUND(gbp.cost_tier_price * CEIL((COALESCE(d.demand_qty, 0) + COALESCE(a.adjustment_qty, 0))::numeric / gbp.cost_tier_qty), 2)
     ELSE ROUND((COALESCE(d.demand_qty, 0) + COALESCE(a.adjustment_qty, 0)) * gbp.unit_cost_usd, 2)
   END AS vendor_order_value_usd,
