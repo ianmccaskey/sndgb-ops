@@ -31,6 +31,7 @@ type CampaignProduct = {
   total_product_profit_usd: string; owed_to_vendor_usd: string; expected_revenue_usd: string;
   ordered_from_vendor_at: string | null;
   qty_cap: string | null;
+  cost_tier_qty: string | null; cost_tier_price: string | null;
 };
 type Adjustment = { id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string };
 
@@ -63,6 +64,8 @@ export function ProductsPage() {
   const [cTesting, setCTesting] = useState('225');
   const [cFreight, setCFreight] = useState('0');
   const [cCap, setCCap] = useState(''); // optional max available; '' = uncapped
+  const [cTierPrice, setCTierPrice] = useState(''); // optional tiered cost: $ per N units
+  const [cTierQty, setCTierQty] = useState('');
   const [cEditing, setCEditing] = useState<number | null>(null); // group_buy_product_id being edited
   const [cError, setCError] = useState('');
 
@@ -79,26 +82,35 @@ export function ProductsPage() {
   const [aError, setAError] = useState('');
 
   const saveCampaignProduct = async () => {
-    const cost = Number(cCost);
     const price = Number(cPrice);
-    if (!cProduct || !cVendor || !(cost >= 0) || !(price >= 0) || !(Number(cMoq) >= 0)) {
-      setCError('Product, vendor, cost, GB price, and MOQ are required.');
+    const tiered = cTierQty.trim() !== '' && cTierPrice.trim() !== '' && Number(cTierQty) > 0;
+    const cost = Number(cCost);
+    if (!cProduct || !cVendor || !(price >= 0) || !(Number(cMoq) >= 0)) {
+      setCError('Product, vendor, GB price, and MOQ are required.');
       return;
     }
-    // The DB stores margin (GB price = cost + margin, computed). Derive it here
-    // so the organizer only ever types the customer-facing price.
-    const margin = +(price - cost).toFixed(2);
-    if (margin < 0) {
-      setCError(`GB price ($${price}) can't be below your unit cost ($${cost}).`);
-      return;
+    // DB stores margin (GB price = unit_cost + margin, generated). For a flat
+    // line derive margin from the entered price; for a tiered line the real
+    // cost lives in cost_tier_*, so unit_cost is 0 and margin carries the price.
+    let unitCost: number, margin: number;
+    if (tiered) {
+      unitCost = 0;
+      margin = price;
+    } else {
+      if (!(cost >= 0)) { setCError('Enter a unit cost, or a cost tier ($ per N units).'); return; }
+      unitCost = cost;
+      margin = +(price - cost).toFixed(2);
+      if (margin < 0) { setCError(`GB price ($${price}) can't be below your unit cost ($${cost}).`); return; }
     }
     setCError('');
     try {
       await doUpsertCampaign({
         group_buy_id: groupBuyId, product_id: Number(cProduct), vendor_id: Number(cVendor),
-        unit_cost_usd: cost, margin_usd: margin, target_moq: Number(cMoq),
+        unit_cost_usd: unitCost, margin_usd: margin, target_moq: Number(cMoq),
         testing_cost_usd: Number(cTesting || 0), freight_usd: Number(cFreight || 0),
         qty_cap: cCap.trim(),
+        cost_tier_qty: tiered ? cTierQty.trim() : '',
+        cost_tier_price: tiered ? cTierPrice.trim() : '',
       });
       resetCampaignForm();
       reloadCampaign();
@@ -110,7 +122,7 @@ export function ProductsPage() {
   const resetCampaignForm = () => {
     setCEditing(null);
     setCProduct(''); setCVendor(''); setCCost(''); setCPrice(''); setCMoq('');
-    setCTesting('225'); setCFreight('0'); setCCap('');
+    setCTesting('225'); setCFreight('0'); setCCap(''); setCTierPrice(''); setCTierQty('');
     setCError('');
   };
 
@@ -128,6 +140,8 @@ export function ProductsPage() {
     setCTesting(String(Number(c.testing_cost_usd)));
     setCFreight(String(Number(c.freight_usd)));
     setCCap(c.qty_cap == null ? '' : String(Number(c.qty_cap)));
+    setCTierQty(c.cost_tier_qty == null ? '' : String(Number(c.cost_tier_qty)));
+    setCTierPrice(c.cost_tier_price == null ? '' : String(Number(c.cost_tier_price)));
     setCError('');
   };
 
@@ -201,8 +215,12 @@ export function ProductsPage() {
                   <TableRow key={c.group_buy_product_id}>
                     <TableCell className="font-medium">{c.sku_code}</TableCell>
                     <TableCell>{c.vendor_code}</TableCell>
-                    <TableCell className="text-right">{fmtUSD(c.unit_cost_usd)}</TableCell>
-                    <TableCell className="text-right">{fmtUSD(c.margin_usd)}</TableCell>
+                    <TableCell className="text-right">
+                      {c.cost_tier_price != null
+                        ? <span title="Tiered cost">{fmtUSD(c.cost_tier_price)}<span className="text-muted-foreground">/{fmtNum(c.cost_tier_qty)}</span></span>
+                        : fmtUSD(c.unit_cost_usd)}
+                    </TableCell>
+                    <TableCell className="text-right">{c.cost_tier_price != null ? <span className="text-muted-foreground">—</span> : fmtUSD(c.margin_usd)}</TableCell>
                     <TableCell className="text-right font-medium">{fmtUSD(c.gb_price_usd)}</TableCell>
                     <TableCell className="text-right">{fmtNum(c.target_moq)}</TableCell>
                     <TableCell className={`text-right ${c.moq_met ? 'text-green-700 font-medium' : ''}`}>{fmtNum(c.demand_qty)}</TableCell>
@@ -266,17 +284,21 @@ export function ProductsPage() {
                     {vendors.filter(v => v.active).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <Input placeholder="Unit cost $" value={cCost} onChange={e => setCCost(e.target.value)} className="h-9 w-28" />
+                <Input placeholder="Unit cost $" value={cCost} onChange={e => setCCost(e.target.value)} disabled={cTierQty.trim() !== '' && cTierPrice.trim() !== ''} className="h-9 w-28" />
                 <Input placeholder="GB price $ (to customer)" value={cPrice} onChange={e => setCPrice(e.target.value)} className="h-9 w-44" />
                 <Input placeholder="Target MOQ" value={cMoq} onChange={e => setCMoq(e.target.value)} className="h-9 w-28" />
                 <Input placeholder="Testing $" value={cTesting} onChange={e => setCTesting(e.target.value)} className="h-9 w-24" />
                 <Input placeholder="Freight $" value={cFreight} onChange={e => setCFreight(e.target.value)} className="h-9 w-24" />
                 <Input placeholder="Max available (optional)" value={cCap} onChange={e => setCCap(e.target.value)} className="h-9 w-44" />
+                <Input placeholder="Cost tier $ (optional)" value={cTierPrice} onChange={e => setCTierPrice(e.target.value)} className="h-9 w-36" />
+                <Input placeholder="…per N units" value={cTierQty} onChange={e => setCTierQty(e.target.value)} className="h-9 w-28" />
               </div>
-              {cCost !== '' && cPrice !== '' && Number(cPrice) >= Number(cCost) && (
-                <p className="text-xs text-muted-foreground">Margin per unit: ${(Number(cPrice) - Number(cCost)).toFixed(2)}</p>
-              )}
-              <p className="text-xs text-muted-foreground">Max available caps a limited item (e.g. a COA product at 25) — leave blank for no cap. The Available column flags SOLD OUT when demand reaches it, so you know to close it in the ordering app.</p>
+              {cTierQty.trim() !== '' && cTierPrice.trim() !== '' && Number(cTierQty) > 0
+                ? <p className="text-xs text-muted-foreground">Tiered vendor cost: ${Number(cTierPrice).toFixed(2)} per {cTierQty} units (unit cost ignored). GB price ${cPrice || '0'} to customer.</p>
+                : (cCost !== '' && cPrice !== '' && Number(cPrice) >= Number(cCost) && (
+                    <p className="text-xs text-muted-foreground">Margin per unit: ${(Number(cPrice) - Number(cCost)).toFixed(2)}</p>
+                  ))}
+              <p className="text-xs text-muted-foreground">Max available caps a limited item (e.g. a COA product at 25) — the Available column flags SOLD OUT at that demand. Cost tier is for stepped vendor pricing (e.g. $50 per 4 units); fill both tier fields to use it and unit cost is ignored.</p>
               {cError && <p className="text-sm text-red-600">{cError}</p>}
               <div className="flex gap-2">
                 <Button size="sm" onClick={saveCampaignProduct}>{cEditing ? 'Save changes' : 'Save'}</Button>
