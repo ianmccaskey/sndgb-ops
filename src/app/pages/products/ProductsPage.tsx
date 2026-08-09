@@ -57,7 +57,7 @@ export function ProductsPage() {
   const [cProduct, setCProduct] = useState('');
   const [cVendor, setCVendor] = useState('');
   const [cCost, setCCost] = useState('');
-  const [cMargin, setCMargin] = useState('');
+  const [cPrice, setCPrice] = useState('');
   const [cMoq, setCMoq] = useState('');
   const [cTesting, setCTesting] = useState('225');
   const [cFreight, setCFreight] = useState('0');
@@ -76,18 +76,27 @@ export function ProductsPage() {
   const [aError, setAError] = useState('');
 
   const saveCampaignProduct = async () => {
-    if (!cProduct || !cVendor || !(Number(cCost) >= 0) || !(Number(cMargin) >= 0) || !(Number(cMoq) >= 0)) {
-      setCError('Product, vendor, cost, margin, and MOQ are required.');
+    const cost = Number(cCost);
+    const price = Number(cPrice);
+    if (!cProduct || !cVendor || !(cost >= 0) || !(price >= 0) || !(Number(cMoq) >= 0)) {
+      setCError('Product, vendor, cost, GB price, and MOQ are required.');
+      return;
+    }
+    // The DB stores margin (GB price = cost + margin, computed). Derive it here
+    // so the organizer only ever types the customer-facing price.
+    const margin = +(price - cost).toFixed(2);
+    if (margin < 0) {
+      setCError(`GB price ($${price}) can't be below your unit cost ($${cost}).`);
       return;
     }
     setCError('');
     try {
       await doUpsertCampaign({
         group_buy_id: groupBuyId, product_id: Number(cProduct), vendor_id: Number(cVendor),
-        unit_cost_usd: Number(cCost), margin_usd: Number(cMargin), target_moq: Number(cMoq),
+        unit_cost_usd: cost, margin_usd: margin, target_moq: Number(cMoq),
         testing_cost_usd: Number(cTesting || 0), freight_usd: Number(cFreight || 0),
       });
-      setCProduct(''); setCCost(''); setCMargin(''); setCMoq('');
+      setCProduct(''); setCCost(''); setCPrice(''); setCMoq('');
       reloadCampaign();
     } catch (e: unknown) {
       setCError(e instanceof Error ? e.message : 'Failed to save');
@@ -214,11 +223,14 @@ export function ProductsPage() {
                   </SelectContent>
                 </Select>
                 <Input placeholder="Unit cost $" value={cCost} onChange={e => setCCost(e.target.value)} className="h-9 w-28" />
-                <Input placeholder="Margin $" value={cMargin} onChange={e => setCMargin(e.target.value)} className="h-9 w-24" />
+                <Input placeholder="GB price $ (to customer)" value={cPrice} onChange={e => setCPrice(e.target.value)} className="h-9 w-44" />
                 <Input placeholder="Target MOQ" value={cMoq} onChange={e => setCMoq(e.target.value)} className="h-9 w-28" />
                 <Input placeholder="Testing $" value={cTesting} onChange={e => setCTesting(e.target.value)} className="h-9 w-24" />
                 <Input placeholder="Freight $" value={cFreight} onChange={e => setCFreight(e.target.value)} className="h-9 w-24" />
               </div>
+              {cCost !== '' && cPrice !== '' && Number(cPrice) >= Number(cCost) && (
+                <p className="text-xs text-muted-foreground">Margin per unit: ${(Number(cPrice) - Number(cCost)).toFixed(2)}</p>
+              )}
               {cError && <p className="text-sm text-red-600">{cError}</p>}
               <Button size="sm" onClick={saveCampaignProduct}>Save</Button>
             </CardContent>
