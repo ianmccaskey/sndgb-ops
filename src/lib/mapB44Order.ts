@@ -18,8 +18,20 @@ import {
  * Ordering-app statuses that must never become active local orders — the
  * local upsert always writes status 'imported', and every downstream number
  * (revenue, vendor demand, fulfillment) assumes imported orders are real.
+ * They aren't dropped: they surface as cancellations so an order that was
+ * imported while valid gets its local status corrected (the views exclude
+ * cancelled/refunded orders, so demand and revenue self-heal).
  */
 const NON_IMPORTABLE_STATUS = /cancel|refund|reject|void|denied/i;
+
+export type B44Cancellation = {
+  orderNumber: string;
+  /** Local order_status to apply. */
+  status: 'cancelled' | 'refunded';
+  sourceStatus: string;
+};
+
+export type MappedOrders = ParseResult & { cancellations: B44Cancellation[] };
 
 function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>, errors: ParseResult['errors']): ParsedOrder | null {
   const orderNumber = String(o.order_number || '').trim();
@@ -33,10 +45,6 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
     return null;
   }
   const status = String(o.status || '').trim();
-  if (NON_IMPORTABLE_STATUS.test(status)) {
-    errors.push({ line: index + 1, text: orderNumber, reason: `Status '${status}' — not imported (would count as active revenue/demand)` });
-    return null;
-  }
   if (!o.items || o.items.length === 0) {
     errors.push({ line: index + 1, text: orderNumber, reason: 'No line items — skipped (importing would erase any existing items for this order)' });
     return null;
@@ -86,9 +94,23 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
   };
 }
 
-export function mapB44Orders(orders: B44Order[], skuByExternalId: Map<string, string>): ParseResult {
-  const result: ParseResult = { orders: [], errors: [] };
+export function mapB44Orders(orders: B44Order[], skuByExternalId: Map<string, string>): MappedOrders {
+  const result: MappedOrders = { orders: [], errors: [], cancellations: [] };
   orders.forEach((o, i) => {
+    const sourceStatus = String(o.status || '').trim();
+    if (NON_IMPORTABLE_STATUS.test(sourceStatus)) {
+      const orderNumber = String(o.order_number || '').trim();
+      if (!orderNumber) {
+        result.errors.push({ line: i + 1, text: o.id, reason: `Status '${sourceStatus}' without an order number — cannot reconcile` });
+      } else {
+        result.cancellations.push({
+          orderNumber,
+          status: /refund/i.test(sourceStatus) ? 'refunded' : 'cancelled',
+          sourceStatus,
+        });
+      }
+      return;
+    }
     const mapped = mapOne(o, i, skuByExternalId, result.errors);
     if (mapped) result.orders.push(mapped);
   });

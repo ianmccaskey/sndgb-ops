@@ -5,12 +5,13 @@ import listProducts from '@/actions/products/listProducts';
 import importUpsertOrder from '@/actions/orders/importUpsertOrder';
 import replaceOrderItems from '@/actions/orders/replaceOrderItems';
 import importPayments from '@/actions/orders/importPayments';
+import syncOrderStatus from '@/actions/orders/syncOrderStatus';
 import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { fmtUSD } from '@/lib/fmt';
 import { parseOrderPaste, ParsedOrder, ParseResult } from '@/lib/parseOrderImport';
 import { B44_DEFAULT_APP_ID, listB44Orders } from '@/lib/base44';
-import { mapB44Orders } from '@/lib/mapB44Order';
+import { mapB44Orders, MappedOrders } from '@/lib/mapB44Order';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -48,6 +49,7 @@ export function ImportPage() {
   const [doUpsert] = useMutateAction(importUpsertOrder);
   const [doItems] = useMutateAction(replaceOrderItems);
   const [doPayments] = useMutateAction(importPayments);
+  const [doSyncStatus] = useMutateAction(syncOrderStatus);
 
   // Ordering-app pull — same preview/import flow as paste, different source.
   const cfg = useMemo(() => ({
@@ -55,7 +57,7 @@ export function ImportPage() {
     token: settings.base44_token || '',
   }), [settings.base44_app_id, settings.base44_token]);
   const canPull = !!cfg.token && !!groupBuy?.external_id;
-  const [pulled, setPulled] = useState<ParseResult | null>(null);
+  const [pulled, setPulled] = useState<MappedOrders | null>(null);
   const [pulling, setPulling] = useState(false);
   const [pullError, setPullError] = useState('');
 
@@ -102,7 +104,18 @@ export function ImportPage() {
     return missing;
   }, [parsed, campaignSkus]);
 
-  const canImport = enabled && parsed.orders.length > 0 && skuProblems.size === 0 && !importing;
+  // Upstream cancellations only apply when the pulled set is the active source.
+  const cancellations = text.trim() === '' && pulled ? pulled.cancellations : [];
+  const statusCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const o of parsed.orders) {
+      const s = o.status || 'unknown';
+      m.set(s, (m.get(s) || 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [parsed]);
+
+  const canImport = enabled && (parsed.orders.length > 0 || cancellations.length > 0) && skuProblems.size === 0 && !importing;
 
   const runImport = async () => {
     if (!canImport || groupBuyId == null) return;
@@ -113,6 +126,20 @@ export function ImportPage() {
         out.push(await importOne(o, groupBuyId));
       } catch (e: unknown) {
         out.push({ orderNumber: o.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Import failed' });
+      }
+      setResults([...out]);
+    }
+    for (const c of cancellations) {
+      try {
+        const res = await doSyncStatus({ order_number: c.orderNumber, group_buy_id: groupBuyId, status: c.status }) as { id: number }[] | { id: number } | null;
+        const touched = Array.isArray(res) ? res.length > 0 : !!res;
+        out.push({
+          orderNumber: c.orderNumber,
+          ok: true,
+          message: touched ? `marked ${c.status} (source: ${c.sourceStatus})` : `${c.sourceStatus} upstream — not present locally, nothing to do`,
+        });
+      } catch (e: unknown) {
+        out.push({ orderNumber: c.orderNumber, ok: false, message: e instanceof Error ? e.message : `Failed to mark ${c.status}` });
       }
       setResults([...out]);
     }
@@ -204,7 +231,14 @@ export function ImportPage() {
             )}
             {pulled && text.trim() === '' && !pulling && (
               <p className="text-sm text-muted-foreground">
-                {pulled.orders.length} orders pulled from the ordering app{pulled.errors.length > 0 ? `, ${pulled.errors.length} skipped` : ''}.
+                {pulled.orders.length} orders pulled from the ordering app
+                {pulled.cancellations.length > 0 ? `, ${pulled.cancellations.length} upstream cancellation(s)` : ''}
+                {pulled.errors.length > 0 ? `, ${pulled.errors.length} skipped` : ''}.
+                {statusCounts.length > 0 && (
+                  <span className="block text-xs mt-0.5">
+                    Source statuses: {statusCounts.map(([s, n]) => `${s}: ${n}`).join(', ')}
+                  </span>
+                )}
               </p>
             )}
           </div>
@@ -234,6 +268,20 @@ export function ImportPage() {
                 {parsed.errors.map((e, i) => (
                   <div key={i}><span className="font-mono">line {e.line}</span>: {e.reason} — <span className="font-mono text-xs">{e.text}</span></div>
                 ))}
+              </div>
+            )}
+            {cancellations.length > 0 && (
+              <div className="rounded border border-orange-300 bg-orange-50 p-2 text-sm text-orange-900 space-y-1">
+                <p className="font-semibold">Cancelled/refunded upstream — importing will update their local status (views already exclude them from demand and revenue):</p>
+                {cancellations.map(c => {
+                  const res = results.find(r => r.orderNumber === c.orderNumber);
+                  return (
+                    <div key={c.orderNumber}>
+                      <span className="font-mono">{c.orderNumber}</span> → {c.status} <span className="text-xs">({c.sourceStatus})</span>
+                      {res && <span className={`text-xs ml-2 ${res.ok ? 'text-green-700' : 'text-red-600'}`}>{res.message}</span>}
+                    </div>
+                  );
+                })}
               </div>
             )}
             {skuProblems.size > 0 && (
@@ -282,7 +330,9 @@ export function ImportPage() {
               </Table>
             </div>
             <Button onClick={runImport} disabled={!canImport}>
-              {importing ? `Importing… (${results.length}/${parsed.orders.length})` : `Import ${parsed.orders.length} orders`}
+              {importing
+                ? `Importing… (${results.length}/${parsed.orders.length + cancellations.length})`
+                : `Import ${parsed.orders.length} orders${cancellations.length > 0 ? ` + apply ${cancellations.length} cancellation(s)` : ''}`}
             </Button>
           </CardContent>
         </Card>
