@@ -120,6 +120,12 @@ export function ImportPage() {
   };
 
   const importOne = async (o: ParsedOrder, gbId: number): Promise<RowState> => {
+    // replaceOrderItems deletes before inserting, so an empty item set would
+    // silently erase a previously imported order's items. Refuse it here for
+    // every source (pull and paste).
+    if (o.items.length === 0) {
+      throw new Error('Order has no line items — refusing to import (would erase existing items)');
+    }
     // Cash-rail totals include the payment-processor gross-up; make the fee explicit.
     const base = o.subtotal + o.tip + o.adminFee + o.shippingFee;
     const processorFee = o.paymentRail === 'cash' && o.total > base ? +(o.total - base).toFixed(2) : 0;

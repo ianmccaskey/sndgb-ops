@@ -14,6 +14,13 @@ import {
   mapPaymentRail, normalizeState, normalizeZip, parseHashBlob,
 } from '@/lib/parseOrderImport';
 
+/**
+ * Ordering-app statuses that must never become active local orders — the
+ * local upsert always writes status 'imported', and every downstream number
+ * (revenue, vendor demand, fulfillment) assumes imported orders are real.
+ */
+const NON_IMPORTABLE_STATUS = /cancel|refund|reject|void|denied/i;
+
 function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>, errors: ParseResult['errors']): ParsedOrder | null {
   const orderNumber = String(o.order_number || '').trim();
   if (!orderNumber) {
@@ -23,6 +30,15 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
   const customerName = String(o.customer_name || '').replace(/\s+/g, ' ').trim();
   if (!customerName) {
     errors.push({ line: index + 1, text: orderNumber, reason: 'Missing customer name' });
+    return null;
+  }
+  const status = String(o.status || '').trim();
+  if (NON_IMPORTABLE_STATUS.test(status)) {
+    errors.push({ line: index + 1, text: orderNumber, reason: `Status '${status}' — not imported (would count as active revenue/demand)` });
+    return null;
+  }
+  if (!o.items || o.items.length === 0) {
+    errors.push({ line: index + 1, text: orderNumber, reason: 'No line items — skipped (importing would erase any existing items for this order)' });
     return null;
   }
 
@@ -44,11 +60,11 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
     orderNumber,
     externalId: o.id,
     customerName,
+    status: status || null,
     email: String(o.customer_email || '').toLowerCase() || null,
     phone: String(o.customer_phone || '').trim() || null,
     discord: String(o.discord_username || '').trim() || null,
     groupBuyName: null,
-    status: String(o.status || '') || null,
     paymentRail: mapPaymentRail(o.payment_method),
     addressLine1: String(o.shipping_address_line1 || '').trim() || null,
     addressLine2: String(o.shipping_address_line2 || '').trim() || null,
