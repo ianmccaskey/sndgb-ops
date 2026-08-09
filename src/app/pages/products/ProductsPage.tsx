@@ -193,7 +193,7 @@ export function ProductsPage() {
                   <TableHead className="text-right">Final</TableHead>
                   <TableHead className="text-right">Owed vendor</TableHead>
                   <TableHead className="text-right">Profit</TableHead>
-                  <TableHead>COA add-on</TableHead>
+                  <TableHead>COA add-on (planned)</TableHead>
                   <TableHead>Vendor order</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
@@ -277,7 +277,7 @@ export function ProductsPage() {
               {cCost !== '' && cPrice !== '' && Number(cPrice) >= Number(cCost) && (
                 <p className="text-xs text-muted-foreground">Margin per unit: ${(Number(cPrice) - Number(cCost)).toFixed(2)}</p>
               )}
-              <p className="text-xs text-muted-foreground">COA add-on: set price to 0 for products with no add-on. Qty available is the hard cap (e.g. 25).</p>
+              <p className="text-xs text-muted-foreground">COA add-on: set price to 0 for products with no add-on. Qty available (e.g. 25) is recorded for planning — claimed-count tracking and cap enforcement come once COA purchases are mapped from the ordering app.</p>
               {cError && <p className="text-sm text-red-600">{cError}</p>}
               <div className="flex gap-2">
                 <Button size="sm" onClick={saveCampaignProduct}>{cEditing ? 'Save changes' : 'Save'}</Button>
