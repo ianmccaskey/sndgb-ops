@@ -183,6 +183,7 @@ export function OrderingAppSync({ products, onImported }: {
               <Button size="sm" variant="ghost" onClick={() => setB44Buys(null)}>Cancel</Button>
             </div>
           )}
+          {error && <p className="text-sm text-red-600">{error}</p>}
         </CardContent>
       </Card>
 

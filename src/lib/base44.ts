@@ -45,8 +45,11 @@ async function b44Get(cfg: B44Config, path: string): Promise<unknown> {
   const appId = cfg.appId.trim() || B44_DEFAULT_APP_ID;
   let res: Response;
   try {
+    // base44 accepts user JWTs via Authorization and app API keys via the
+    // api_key header; sending the credential both ways covers either kind.
+    const token = cfg.token.trim();
     res = await fetch(`https://base44.app/api/apps/${appId}${path}`, {
-      headers: { Authorization: `Bearer ${cfg.token.trim()}`, accept: 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, api_key: token, accept: 'application/json' },
     });
   } catch {
     throw new Error('Could not reach the ordering app API — check your network connection.');
