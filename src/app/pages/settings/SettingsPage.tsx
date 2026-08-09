@@ -48,6 +48,11 @@ export function SettingsPage() {
   const [heliusKey, setHeliusKey] = useState('');
   const [keysMsg, setKeysMsg] = useState('');
 
+  // ordering app (base44)
+  const [b44AppId, setB44AppId] = useState('');
+  const [b44Token, setB44Token] = useState('');
+  const [b44Msg, setB44Msg] = useState('');
+
   // campaign form
   const [gbName, setGbName] = useState('');
   const [gbStatus, setGbStatus] = useState('draft');
@@ -76,6 +81,11 @@ export function SettingsPage() {
   }, [settings.moralis_api_key, settings.helius_api_key]);
 
   useEffect(() => {
+    setB44AppId(settings.base44_app_id || '');
+    setB44Token(settings.base44_token || '');
+  }, [settings.base44_app_id, settings.base44_token]);
+
+  useEffect(() => {
     if (groupBuy) {
       setGbName(groupBuy.name);
       setGbStatus(groupBuy.status);
@@ -97,6 +107,18 @@ export function SettingsPage() {
       setKeysMsg('Saved.');
     } catch (e: unknown) {
       setKeysMsg(e instanceof Error ? e.message : 'Failed to save');
+    }
+  };
+
+  const saveB44 = async () => {
+    setB44Msg('');
+    try {
+      await doSaveSetting({ key: 'base44_app_id', value: b44AppId.trim() });
+      await doSaveSetting({ key: 'base44_token', value: b44Token.trim() });
+      reloadSettings();
+      setB44Msg('Saved.');
+    } catch (e: unknown) {
+      setB44Msg(e instanceof Error ? e.message : 'Failed to save');
     }
   };
 
@@ -222,6 +244,21 @@ export function SettingsPage() {
             <Button size="sm" onClick={createCampaign}>Create</Button>
           </div>
           {newMsg && <p className="text-sm text-muted-foreground">{newMsg}</p>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-base">Ordering app (base44)</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Field label="App ID (from the base44 editor URL)" value={b44AppId} onChange={setB44AppId} placeholder="69157b827c06411f4ed6bf0f" />
+            <Field label="API JWT" value={b44Token} onChange={setB44Token} type="password" />
+          </div>
+          {b44Msg && <p className="text-sm text-muted-foreground">{b44Msg}</p>}
+          <Button size="sm" onClick={saveB44}>Save ordering app</Button>
+          <p className="text-xs text-muted-foreground">
+            Used by Products → Ordering app to pull each campaign's product list. Leave App ID blank to use the default.
+          </p>
         </CardContent>
       </Card>
 

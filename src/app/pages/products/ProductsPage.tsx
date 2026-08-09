@@ -10,6 +10,7 @@ import listAdjustments from '@/actions/campaign/listAdjustments';
 import addAdjustment from '@/actions/campaign/addAdjustment';
 import deleteAdjustment from '@/actions/campaign/deleteAdjustment';
 import { useApp } from '@/app/AppContext';
+import { OrderingAppSync } from '@/app/pages/products/OrderingAppSync';
 import { rows } from '@/lib/rows';
 import { fmtUSD, fmtNum, fmtDateTime } from '@/lib/fmt';
 import { Button } from '@/components/ui/button';
@@ -135,6 +136,7 @@ export function ProductsPage() {
           <TabsTrigger value="campaign">Campaign products</TabsTrigger>
           <TabsTrigger value="adjustments">Admin adjustments</TabsTrigger>
           <TabsTrigger value="catalog">Product catalog</TabsTrigger>
+          <TabsTrigger value="sync">Ordering app</TabsTrigger>
         </TabsList>
 
         <TabsContent value="campaign" className="mt-4 space-y-4">
@@ -315,6 +317,10 @@ export function ProductsPage() {
               <p className="text-xs text-muted-foreground">The SKU must match exactly how the ordering app writes it in the Items column.</p>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="sync" className="mt-4">
+          <OrderingAppSync products={products} onImported={reloadProducts} />
         </TabsContent>
       </Tabs>
     </div>
