@@ -193,7 +193,7 @@ export function ImportPage() {
       raw_import: JSON.stringify(o.raw),
     }) as { id: number }[] | { id: number };
     const orderId = Array.isArray(upserted) ? upserted[0]?.id : upserted?.id;
-    if (!orderId) throw new Error('Upsert returned no order id');
+    if (!orderId) throw new Error('Refused: this order number already exists under a different campaign');
 
     const itemsRes = await doItems({
       order_id: orderId,

@@ -6,6 +6,9 @@ import { action } from '@uibakery/data';
  *   existing email-less customer with the same display name before creating one.
  * - The order upserts on order_number (always present), so re-pasting an
  *   export can never duplicate orders — it refreshes them.
+ * - order_number is globally unique; if the incoming row's number already
+ *   belongs to an order in a DIFFERENT group buy, the update is refused
+ *   (RETURNING is empty) rather than hijacking that order.
  * - The full original row is preserved in raw_import.
  */
 function importUpsertOrder() {
@@ -62,6 +65,7 @@ function importUpsertOrder() {
         {{params.raw_import}}::jsonb
       FROM cust
       ON CONFLICT (order_number) DO UPDATE SET
+        -- guarded below: never adopt an order that belongs to another campaign
         external_id = COALESCE(EXCLUDED.external_id, orders.external_id),
         payment_rail = EXCLUDED.payment_rail,
         contact_name = EXCLUDED.contact_name,
@@ -82,6 +86,7 @@ function importUpsertOrder() {
         placed_at = EXCLUDED.placed_at,
         customer_note = EXCLUDED.customer_note,
         raw_import = EXCLUDED.raw_import
+      WHERE orders.group_buy_id = EXCLUDED.group_buy_id
       RETURNING id
     `,
   });
