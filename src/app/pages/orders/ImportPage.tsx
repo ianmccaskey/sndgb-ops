@@ -10,7 +10,7 @@ import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { fmtUSD } from '@/lib/fmt';
 import { parseOrderPaste, ParsedOrder, ParseResult } from '@/lib/parseOrderImport';
-import { B44_DEFAULT_APP_ID, listB44Orders } from '@/lib/base44';
+import { B44_DEFAULT_APP_ID, B44Order, listB44Orders } from '@/lib/base44';
 import { mapB44Orders, MappedOrders } from '@/lib/mapB44Order';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -37,7 +37,7 @@ export function ImportPage() {
     () => new Set(rows<CampaignProduct>(rawProducts).map(p => p.sku_code)),
     [rawProducts],
   );
-  const [rawCatalog] = useLoadAction(listProducts, [], {});
+  const [rawCatalog, catalogLoading] = useLoadAction(listProducts, [], {});
   const skuByExternalId = useMemo(() => {
     const m = new Map<string, string>();
     for (const p of rows<CatalogProduct>(rawCatalog)) {
@@ -57,16 +57,20 @@ export function ImportPage() {
     token: settings.base44_token || '',
   }), [settings.base44_app_id, settings.base44_token]);
   const canPull = !!cfg.token && !!groupBuy?.external_id;
-  const [pulled, setPulled] = useState<MappedOrders | null>(null);
+  // Raw pulled orders stay bound to the campaign they were pulled for; the
+  // ParsedOrder mapping is derived below so it re-runs when the catalog loads
+  // and goes inert the moment the campaign selector changes.
+  const [pulled, setPulled] = useState<{ forGroupBuyId: number; orders: B44Order[] } | null>(null);
   const [pulling, setPulling] = useState(false);
   const [pullError, setPullError] = useState('');
 
   const pull = async () => {
-    if (!canPull || !groupBuy?.external_id) return;
+    if (!canPull || !groupBuy?.external_id || groupBuyId == null) return;
+    const forGroupBuyId = groupBuyId;
     setPulling(true); setPullError(''); setResults([]);
     try {
       const orders = await listB44Orders(cfg, groupBuy.external_id);
-      setPulled(mapB44Orders(orders, skuByExternalId));
+      setPulled({ forGroupBuyId, orders });
       setText('');
     } catch (e: unknown) {
       setPullError(e instanceof Error ? e.message : 'Failed to pull orders');
@@ -75,19 +79,26 @@ export function ImportPage() {
     }
   };
 
-  // Pull automatically when the page opens with a linked, configured campaign.
-  const autoPulled = useRef(false);
-  const catalogReady = rawCatalog != null;
+  // Pull automatically once per campaign, only after the catalog has loaded —
+  // the identity mapping is meaningless against an unloaded catalog.
+  const autoPulledFor = useRef<number | null>(null);
   useEffect(() => {
-    if (!autoPulled.current && canPull && catalogReady) {
-      autoPulled.current = true;
+    if (canPull && !catalogLoading && groupBuyId != null && autoPulledFor.current !== groupBuyId) {
+      autoPulledFor.current = groupBuyId;
       pull();
     }
-  }, [canPull, catalogReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canPull, catalogLoading, groupBuyId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { setResults([]); }, [groupBuyId]);
+
+  const pulledMapped = useMemo<MappedOrders | null>(
+    () => (pulled && pulled.forGroupBuyId === groupBuyId ? mapB44Orders(pulled.orders, skuByExternalId) : null),
+    [pulled, groupBuyId, skuByExternalId],
+  );
 
   const parsed = useMemo(
-    () => (text.trim() !== '' ? parseOrderPaste(text) : pulled ?? EMPTY_RESULT),
-    [text, pulled],
+    () => (text.trim() !== '' ? parseOrderPaste(text) : pulledMapped ?? EMPTY_RESULT),
+    [text, pulledMapped],
   );
 
   // Pre-flight: every SKU in every order must exist as a campaign product,
@@ -105,7 +116,7 @@ export function ImportPage() {
   }, [parsed, campaignSkus]);
 
   // Upstream cancellations only apply when the pulled set is the active source.
-  const cancellations = text.trim() === '' && pulled ? pulled.cancellations : [];
+  const cancellations = text.trim() === '' && pulledMapped ? pulledMapped.cancellations : [];
   const statusCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const o of parsed.orders) {
@@ -229,11 +240,11 @@ export function ImportPage() {
                 Needs the ordering-app JWT (Settings) and a linked campaign (Products → Ordering app).
               </p>
             )}
-            {pulled && text.trim() === '' && !pulling && (
+            {pulledMapped && text.trim() === '' && !pulling && (
               <p className="text-sm text-muted-foreground">
-                {pulled.orders.length} orders pulled from the ordering app
-                {pulled.cancellations.length > 0 ? `, ${pulled.cancellations.length} upstream cancellation(s)` : ''}
-                {pulled.errors.length > 0 ? `, ${pulled.errors.length} skipped` : ''}.
+                {pulledMapped.orders.length} orders pulled from the ordering app
+                {pulledMapped.cancellations.length > 0 ? `, ${pulledMapped.cancellations.length} upstream cancellation(s)` : ''}
+                {pulledMapped.errors.length > 0 ? `, ${pulledMapped.errors.length} skipped` : ''}.
                 {statusCounts.length > 0 && (
                   <span className="block text-xs mt-0.5">
                     Source statuses: {statusCounts.map(([s, n]) => `${s}: ${n}`).join(', ')}
@@ -254,7 +265,7 @@ export function ImportPage() {
         className="font-mono text-xs"
       />
 
-      {(text.trim() !== '' || pulled) && (
+      {(text.trim() !== '' || pulledMapped) && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">
