@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { StatusPill } from '@/components/StatusPill';
+import { TxHash } from '@/components/TxHash';
 import { Scale, Zap } from 'lucide-react';
 
 type ReconRow = {
@@ -285,7 +286,7 @@ export function ReconPage() {
                     <TableCell className="font-medium">{p.order_number}</TableCell>
                     <TableCell>{p.customer_name}</TableCell>
                     <TableCell className="uppercase">{p.method}</TableCell>
-                    <TableCell className="font-mono text-xs max-w-[240px] truncate" title={p.tx_hash}>{p.tx_hash}</TableCell>
+                    <TableCell><TxHash method={p.method} hash={p.tx_hash} /></TableCell>
                     <TableCell className="text-right">{fmtUSD(p.total_usd)}</TableCell>
                     <TableCell>
                       {verifying[p.payment_id] && verifying[p.payment_id] !== 'done'

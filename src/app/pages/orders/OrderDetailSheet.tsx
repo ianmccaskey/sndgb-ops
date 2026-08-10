@@ -17,6 +17,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { StatusPill } from '@/components/StatusPill';
+import { TxHash } from '@/components/TxHash';
 
 type OrderRow = {
   id: number; order_number: string; external_id: string | null; status: string;
@@ -160,7 +161,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         <StatusPill value={p.status} />
                         <span className="text-xs uppercase text-muted-foreground">{p.method}</span>
                       </div>
-                      {p.tx_hash && <div className="text-xs font-mono truncate max-w-[300px]" title={p.tx_hash}>{p.tx_hash}</div>}
+                      {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
                       {p.receipt_ref && <div className="text-xs text-muted-foreground">receipt: {p.receipt_ref}</div>}
                     </div>
                     <div className="text-right whitespace-nowrap">{Number(p.amount_usd) > 0 ? fmtUSD(p.amount_usd) : '—'}</div>
