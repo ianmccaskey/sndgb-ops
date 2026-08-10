@@ -84,12 +84,12 @@ export function FinancialsPage() {
         const key = settings.helius_api_key;
         if (!key) throw new Error('Helius key missing (Settings).');
         const b = await getSolBalances(key, w.address);
-        usd = b.usdc + b.usdt; native = b.sol;
+        usd = b.usdc + b.usdt + b.pyusd; native = b.sol;
       } else if (w.chain === 'eth' || w.chain === 'base') {
         const key = settings.moralis_api_key;
         if (!key) throw new Error('Moralis key missing (Settings).');
         const b = await getEvmBalances(key, w.chain as 'eth' | 'base', w.address);
-        usd = b.usdc + b.usdt; native = b.native;
+        usd = b.usdc + b.usdt + b.pyusd; native = b.native;
       } else {
         throw new Error('Fiat wallets are manual — type a balance instead.');
       }

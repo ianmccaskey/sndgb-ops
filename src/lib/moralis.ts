@@ -18,6 +18,8 @@ const STABLES: Record<EvmChain, Record<string, { symbol: string; decimals: numbe
   eth: {
     '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': { symbol: 'USDC', decimals: 6 },
     '0xdac17f958d2ee523a2206206994597c13d831ec7': { symbol: 'USDT', decimals: 6 },
+    // PayPal USD (Paxos-issued) — Ethereum mainnet only, not on Base.
+    '0x6c3ea9036406852006290770bedfcaba0e23a0e8': { symbol: 'PYUSD', decimals: 6 },
   },
   base: {
     '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': { symbol: 'USDC', decimals: 6 },
@@ -43,7 +45,7 @@ async function get(apiKey: string, url: string): Promise<unknown> {
 }
 
 export type ChainTransfer = {
-  token: string;       // 'USDC' | 'USDT' | 'ETH'
+  token: string;       // 'USDC' | 'USDT' | 'PYUSD' | 'ETH'
   amount: number;      // whole units
   to: string;          // recipient address (lowercase)
   from: string | null;
@@ -83,20 +85,21 @@ export async function getEvmTxTransfers(apiKey: string, chain: EvmChain, txHash:
   return transfers;
 }
 
-export type WalletBalances = { usdc: number; usdt: number; native: number };
+export type WalletBalances = { usdc: number; usdt: number; pyusd: number; native: number };
 
 /** Current stablecoin + native balances of an EVM wallet. */
 export async function getEvmBalances(apiKey: string, chain: EvmChain, address: string): Promise<WalletBalances> {
   const nat = await get(apiKey, `${EVM_BASE}/${address}/balance?chain=${chain}`) as { balance?: string };
   const tokens = await get(apiKey, `${EVM_BASE}/${address}/erc20?chain=${chain}`) as
     Array<{ token_address?: string; balance?: string; decimals?: number }>;
-  const out: WalletBalances = { usdc: 0, usdt: 0, native: Number(nat.balance || 0) / 1e18 };
+  const out: WalletBalances = { usdc: 0, usdt: 0, pyusd: 0, native: Number(nat.balance || 0) / 1e18 };
   for (const t of Array.isArray(tokens) ? tokens : []) {
     const meta = STABLES[chain][String(t.token_address || '').toLowerCase()];
     if (!meta) continue;
     const amt = Number(t.balance || 0) / Math.pow(10, Number(t.decimals ?? meta.decimals));
     if (meta.symbol === 'USDC') out.usdc += amt;
     if (meta.symbol === 'USDT') out.usdt += amt;
+    if (meta.symbol === 'PYUSD') out.pyusd += amt;
   }
   return out;
 }

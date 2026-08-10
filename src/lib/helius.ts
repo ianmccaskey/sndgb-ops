@@ -10,13 +10,16 @@
 const MINTS: Record<string, { symbol: string; decimals: number }> = {
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: { symbol: 'USDC', decimals: 6 },
   Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: { symbol: 'USDT', decimals: 6 },
+  // PayPal USD — a Token-2022 mint; Helius enhanced transfers and the
+  // mint-filtered token-account RPC both handle Token-2022 transparently.
+  '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo': { symbol: 'PYUSD', decimals: 6 },
 };
 
 const rpcUrl = (key: string) => `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(key)}`;
 const apiUrl = (key: string) => `https://api.helius.xyz/v0/transactions?api-key=${encodeURIComponent(key)}`;
 
 export type SolTransfer = {
-  token: string;       // 'USDC' | 'USDT' | 'SOL'
+  token: string;       // 'USDC' | 'USDT' | 'PYUSD' | 'SOL'
   amount: number;      // whole units
   to: string;          // recipient owner address
   from: string | null;
@@ -84,12 +87,12 @@ async function rpc(heliusKey: string, method: string, params: unknown[]): Promis
   return j.result;
 }
 
-export type SolBalances = { usdc: number; usdt: number; sol: number };
+export type SolBalances = { usdc: number; usdt: number; pyusd: number; sol: number };
 
 /** Current SOL + stablecoin balances of a wallet. */
 export async function getSolBalances(heliusKey: string, owner: string): Promise<SolBalances> {
   const lamports = await rpc(heliusKey, 'getBalance', [owner]) as { value?: number };
-  const out: SolBalances = { usdc: 0, usdt: 0, sol: Number(lamports?.value || 0) / 1e9 };
+  const out: SolBalances = { usdc: 0, usdt: 0, pyusd: 0, sol: Number(lamports?.value || 0) / 1e9 };
   for (const mint of Object.keys(MINTS)) {
     const accs = await rpc(heliusKey, 'getTokenAccountsByOwner', [owner, { mint }, { encoding: 'jsonParsed' }]) as {
       value?: { account?: { data?: { parsed?: { info?: { tokenAmount?: { uiAmount?: number | null } } } } } }[];
@@ -99,6 +102,7 @@ export async function getSolBalances(heliusKey: string, owner: string): Promise<
     const sym = MINTS[mint].symbol;
     if (sym === 'USDC') out.usdc = total;
     if (sym === 'USDT') out.usdt = total;
+    if (sym === 'PYUSD') out.pyusd = total;
   }
   return out;
 }

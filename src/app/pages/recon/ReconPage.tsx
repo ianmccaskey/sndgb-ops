@@ -53,7 +53,9 @@ async function lookupPayment(
     const wallet = (settings.sol_wallet_address || '').trim();
     const transfers = await getSolTxTransfers(key, p.tx_hash);
     const toUs = wallet ? transfers.filter(t => t.to === wallet) : transfers;
-    const stable = toUs.filter(t => t.token === 'USDC' || t.token === 'USDT').reduce((s, t) => s + t.amount, 0);
+    // Everything the lib maps except the native coin is a USD stablecoin
+    // (USDC/USDT/PYUSD today) — counted at face value.
+    const stable = toUs.filter(t => t.token !== 'SOL').reduce((s, t) => s + t.amount, 0);
     const native = toUs.filter(t => t.token === 'SOL').reduce((s, t) => s + t.amount, 0);
     if (stable === 0 && native === 0) throw new Error(wallet ? 'No transfer to the configured SOL wallet found in this tx.' : 'No stablecoin transfer found in this tx.');
     return {
@@ -70,7 +72,9 @@ async function lookupPayment(
     const wallet = (settings[walletKey] || '').trim().toLowerCase();
     const transfers = await getEvmTxTransfers(key, method, p.tx_hash);
     const toUs = wallet ? transfers.filter(t => t.to === wallet) : transfers;
-    const stable = toUs.filter(t => t.token === 'USDC' || t.token === 'USDT').reduce((s, t) => s + t.amount, 0);
+    // Everything the lib maps except the native coin is a USD stablecoin
+    // (USDC/USDT/PYUSD today) — counted at face value.
+    const stable = toUs.filter(t => t.token !== 'ETH').reduce((s, t) => s + t.amount, 0);
     const native = toUs.filter(t => t.token === 'ETH').reduce((s, t) => s + t.amount, 0);
     if (stable === 0 && native === 0) throw new Error(wallet ? 'No transfer to the configured wallet found in this tx.' : 'No stablecoin transfer found in this tx.');
     return {
