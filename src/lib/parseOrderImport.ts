@@ -93,15 +93,20 @@ export function mapPaymentRail(method: string | null | undefined): 'eth' | 'sol'
   return 'cash'; // 'not_available_', blank, Zelle/Venmo/PayPal
 }
 
-/** "R20 (2); MOTS-C 40 (1); JM'S Pep Tin-RED (1)" → [{sku, qty}] */
+/** "R20 (2); MOTS-C 40 (1); Klow80 (0.5)" → [{sku, qty}] — split kits allow fractional qty. */
 export function parseItemsBlob(blob: string | null | undefined): { items: ParsedItem[]; bad: string[] } {
   const items: ParsedItem[] = [];
   const bad: string[] = [];
   for (const part of String(blob || '').split(';')) {
     const p = part.trim();
     if (!p) continue;
-    const m = p.match(/^(.*?)\s*\((\d+)\)$/);
-    if (m && m[1].trim()) items.push({ sku: m[1].trim(), qty: parseInt(m[2], 10) });
+    // Max two decimals — matches order_items.qty NUMERIC(10,2); finer
+    // fractions must fail loudly, never round silently into demand math.
+    // Zero quantities ("(0)", "(0.00)") are rejected here so they can't
+    // reach the write path after the order header is already upserted.
+    const m = p.match(/^(.*?)\s*\((\d+(?:\.\d{1,2})?)\)$/);
+    const qty = m ? parseFloat(m[2]) : NaN;
+    if (m && m[1].trim() && qty > 0) items.push({ sku: m[1].trim(), qty });
     else bad.push(p);
   }
   return { items, bad };

@@ -201,9 +201,12 @@ export function ImportPage() {
     // multi-row inserts with repeated key columns, which is what silently
     // broke the old replaceOrderItems (and blocked payment sync behind it).
     // Duplicate SKU lines from the source are summed into one row first.
+    // Summed in integer hundredths: quantities are 2-decimal values and the
+    // write boundary rejects finer precision, so float addition (0.1 + 0.2 =
+    // 0.30000000000000004) must never reach the qty param.
     const qtyBySku = new Map<string, number>();
-    for (const it of o.items) qtyBySku.set(it.sku, (qtyBySku.get(it.sku) || 0) + it.qty);
-    const mergedItems = [...qtyBySku.entries()].map(([sku, qty]) => ({ sku, qty }));
+    for (const it of o.items) qtyBySku.set(it.sku, (qtyBySku.get(it.sku) || 0) + Math.round(it.qty * 100));
+    const mergedItems = [...qtyBySku.entries()].map(([sku, cents]) => ({ sku, qty: cents / 100 }));
 
     // Upsert every row FIRST and prove the whole replacement set is writable;
     // only then prune items removed upstream. A mid-loop failure leaves stale

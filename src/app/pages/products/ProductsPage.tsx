@@ -176,9 +176,21 @@ export function ProductsPage() {
       setAError('Product, non-zero qty, and reason are all required — adjustments are audited.');
       return;
     }
+    // Same scale rule as order items (NUMERIC(10,2)): validate on the typed
+    // string, not float math, so 1.15 stays valid and 0.333 is refused.
+    if (!/^-?\d+(?:\.\d{1,2})?$/.test(aQty.trim())) {
+      setAError('Qty must have at most 2 decimal places (split kits use 0.5).');
+      return;
+    }
     setAError('');
     try {
-      await doAddAdj({ group_buy_product_id: Number(aProduct), qty, reason: aReason.trim(), created_by: userName });
+      // The action refuses (returns no row) instead of letting Postgres
+      // round an over-precision qty — surface that as an error, not success.
+      const res = await doAddAdj({ group_buy_product_id: Number(aProduct), qty, reason: aReason.trim(), created_by: userName });
+      // Mutate results can be an array of rows or a singleton object — treat
+      // only an empty/absent result as refused (same handling as ImportPage).
+      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!wrote) throw new Error('Adjustment refused: qty must be non-zero with at most 2 decimal places.');
       setAQty(''); setAReason('');
       reloadAdj(); reloadCampaign();
     } catch (e: unknown) {

@@ -78,6 +78,14 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
       errors.push({ line: index + 1, text: orderNumber, reason: `Unusable item (${it.product_name || pid || '?'} × ${it.quantity ?? '?'})` });
       return null;
     }
+    // qty is stored as NUMERIC(10,2) — reject finer fractions instead of
+    // silently rounding them into demand/revenue math. Checked on the source
+    // value's decimal string, not qty*100 arithmetic: binary floats make
+    // 1.15*100 !== 115, which would reject perfectly valid cent-scale values.
+    if (!/^\d+(?:\.\d{1,2})?$/.test(String(it.quantity ?? ''))) {
+      errors.push({ line: index + 1, text: orderNumber, reason: `Quantity ${it.quantity} for '${it.product_name || pid}' has more than 2 decimal places — cannot store exactly` });
+      return null;
+    }
     items.push({ sku, qty });
   }
 
