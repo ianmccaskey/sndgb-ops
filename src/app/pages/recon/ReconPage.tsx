@@ -5,6 +5,7 @@ import listRailRecon from '@/actions/recon/listRailRecon';
 import listPendingCryptoPayments from '@/actions/recon/listPendingCryptoPayments';
 import recordChainVerification from '@/actions/payments/recordChainVerification';
 import addManualPayment from '@/actions/payments/addManualPayment';
+import findOrderByNumber from '@/actions/orders/findOrderByNumber';
 import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
@@ -99,6 +100,7 @@ export function ReconPage() {
 
   const [doRecord] = useMutateAction(recordChainVerification);
   const [doManual] = useMutateAction(addManualPayment);
+  const [doFindOrder] = useMutateAction(findOrderByNumber);
 
   const [verifying, setVerifying] = useState<Record<number, string>>({});
   const [bulkRunning, setBulkRunning] = useState(false);
@@ -151,13 +153,16 @@ export function ReconPage() {
 
   const addManual = async () => {
     const amt = Number(mAmount);
-    const orderRow = recon.find(r => r.order_number === mOrder.trim());
-    if (!orderRow) { setMError('Order # not found in this campaign.'); return; }
     if (!(amt > 0)) { setMError('Amount must be positive.'); return; }
     setMSaving(true); setMError('');
     try {
+      // Resolve from the DB, not the recon table — the table may be filtered
+      // to a different rail/status and would hide a perfectly valid order.
+      const found = await doFindOrder({ group_buy_id: groupBuyId, order_number: mOrder }) as { id: number }[] | { id: number } | null;
+      const orderId = Array.isArray(found) ? found[0]?.id : found?.id;
+      if (!orderId) { setMError('Order # not found in this campaign.'); setMSaving(false); return; }
       await doManual({
-        order_id: orderRow.order_id, method: mMethod, tx_hash: '', receipt_ref: mRef,
+        order_id: orderId, method: mMethod, tx_hash: '', receipt_ref: mRef,
         amount_usd: amt, notes: '', actor: userName,
       });
       setMOrder(''); setMAmount(''); setMRef('');
