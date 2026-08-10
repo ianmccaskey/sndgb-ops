@@ -121,7 +121,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 value={groupBuyId != null ? String(groupBuyId) : undefined}
                 onValueChange={(v) => setGroupBuyId(Number(v))}
               >
-                <SelectTrigger className="h-8 w-[220px] text-sm">
+                <SelectTrigger className="h-8 w-[150px] sm:w-[220px] text-sm">
                   <SelectValue placeholder="Select a group buy" />
                 </SelectTrigger>
                 <SelectContent>
@@ -136,7 +136,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 </Badge>
               )}
             </div>
-            <div className="ml-auto text-sm text-muted-foreground">{userName}</div>
+            <div className="ml-auto text-sm text-muted-foreground hidden sm:block">{userName}</div>
           </header>
           <main className="flex-1 overflow-y-auto">{children}</main>
         </div>

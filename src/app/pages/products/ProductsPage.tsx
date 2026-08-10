@@ -187,7 +187,7 @@ export function ProductsPage() {
   };
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-4 sm:p-6 space-y-5">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Package className="h-6 w-6 text-violet-600" /> Products & Campaign Setup
@@ -196,7 +196,7 @@ export function ProductsPage() {
       </div>
 
       <Tabs defaultValue="campaign">
-        <TabsList>
+        <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="campaign">Campaign products</TabsTrigger>
           <TabsTrigger value="adjustments">Admin adjustments</TabsTrigger>
           <TabsTrigger value="catalog">Product catalog</TabsTrigger>

@@ -183,7 +183,7 @@ export function ReconPage() {
   };
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-4 sm:p-6 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -220,7 +220,7 @@ export function ReconPage() {
       </div>
 
       <Tabs defaultValue="orders">
-        <TabsList>
+        <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="orders">Per-order</TabsTrigger>
           <TabsTrigger value="pending">Pending crypto ({pending.length})</TabsTrigger>
           <TabsTrigger value="manual">Record P2P payment</TabsTrigger>

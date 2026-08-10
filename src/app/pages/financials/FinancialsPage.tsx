@@ -110,7 +110,7 @@ export function FinancialsPage() {
   };
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-4 sm:p-6 space-y-5">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <BarChart3 className="h-6 w-6 text-violet-600" /> Financials
@@ -189,6 +189,7 @@ export function FinancialsPage() {
             <Button size="sm" onClick={submitExpense}>Add</Button>
           </div>
           {eError && <p className="text-sm text-red-600">{eError}</p>}
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -221,6 +222,7 @@ export function FinancialsPage() {
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
     </div>

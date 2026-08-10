@@ -95,7 +95,7 @@ export function VendorsPage() {
   };
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-4 sm:p-6 space-y-5">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Store className="h-6 w-6 text-violet-600" /> Vendors
@@ -142,7 +142,7 @@ export function VendorsPage() {
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-base">Record vendor payment</CardTitle></CardHeader>
           <CardContent className="space-y-2">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Select value={pVendor} onValueChange={setPVendor}>
                 <SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Vendor" /></SelectTrigger>
                 <SelectContent>
@@ -151,7 +151,7 @@ export function VendorsPage() {
               </Select>
               <Input type="date" value={pDate} onChange={e => setPDate(e.target.value)} className="h-9 w-40" />
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Input placeholder="Amount USD" value={pAmount} onChange={e => setPAmount(e.target.value)} className="h-9 w-36" />
               <Select value={pWallet} onValueChange={setPWallet}>
                 <SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Paid from wallet" /></SelectTrigger>
@@ -161,7 +161,7 @@ export function VendorsPage() {
               </Select>
               <Input placeholder="Method" value={pMethod} onChange={e => setPMethod(e.target.value)} className="h-9 w-24" />
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Input placeholder="Receipt / tx ref (optional)" value={pRef} onChange={e => setPRef(e.target.value)} className="h-9 flex-1" />
               <Input placeholder="Note (e.g. which SKU)" value={pNote} onChange={e => setPNote(e.target.value)} className="h-9 flex-1" />
             </div>
@@ -173,7 +173,7 @@ export function VendorsPage() {
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-base">Add vendor</CardTitle></CardHeader>
           <CardContent className="space-y-2">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Input placeholder="Vendor code (e.g. MEDUSA)" value={nvCode} onChange={e => setNvCode(e.target.value)} className="h-9 flex-1" />
               <Button size="sm" onClick={addNewVendor}>Add</Button>
             </div>
@@ -185,7 +185,7 @@ export function VendorsPage() {
 
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Payment log</CardTitle></CardHeader>
-        <CardContent>
+        <CardContent className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>

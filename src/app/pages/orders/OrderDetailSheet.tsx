@@ -355,8 +355,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   </div>
                 ))}
 
-                <div className="flex gap-2 mt-2">
-                  <Input placeholder="Add correct tx hash…" value={newHash} onChange={e => setNewHash(e.target.value)} className="h-8 flex-1 font-mono text-xs" />
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <Input placeholder="Add correct tx hash…" value={newHash} onChange={e => setNewHash(e.target.value)} className="h-8 flex-1 min-w-40 font-mono text-xs" />
                   <Select value={newHashMethod} onValueChange={setNewHashMethod}>
                     <SelectTrigger className="h-8 w-20"><SelectValue /></SelectTrigger>
                     <SelectContent>

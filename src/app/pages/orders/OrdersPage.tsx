@@ -39,7 +39,7 @@ export function OrdersPage() {
   const orders = rows<OrderListRow>(raw);
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-4 sm:p-6 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -54,7 +54,7 @@ export function OrdersPage() {
             placeholder="Search order #, name, email, discord…"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="h-9 w-64"
+            className="h-9 w-full sm:w-64"
           />
           <Select value={status} onValueChange={setStatus}>
             <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>

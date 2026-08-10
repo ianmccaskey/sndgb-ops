@@ -53,7 +53,7 @@ export function HomePage() {
   ].filter(a => a.count > 0);
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold">{groupBuy?.name || 'Dashboard'}</h1>
         <p className="text-sm text-muted-foreground mt-1">Campaign health at a glance</p>

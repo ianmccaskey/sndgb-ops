@@ -71,7 +71,7 @@ export function FulfillmentPage() {
   };
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-4 sm:p-6 space-y-4">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Truck className="h-6 w-6 text-violet-600" /> Fulfillment
@@ -82,7 +82,7 @@ export function FulfillmentPage() {
       </div>
 
       <Tabs value={stage} onValueChange={setStage}>
-        <TabsList>
+        <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="ready">Ready to pack</TabsTrigger>
           <TabsTrigger value="packed">Packed</TabsTrigger>
           <TabsTrigger value="shipped">Shipped</TabsTrigger>
@@ -144,11 +144,11 @@ export function FulfillmentPage() {
             <DialogTitle>Shipment — {editing?.order_number}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Input placeholder="Carrier" value={carrier} onChange={e => setCarrier(e.target.value)} className="h-9 w-28" />
               <Input placeholder="Tracking #" value={tracking} onChange={e => setTracking(e.target.value)} className="h-9 flex-1" />
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Input placeholder="Label cost $" value={labelCost} onChange={e => setLabelCost(e.target.value)} className="h-9 w-28" />
               <Input placeholder="Box (e.g. 6x4x4)" value={box} onChange={e => setBox(e.target.value)} className="h-9 w-32" />
               <Select value={status} onValueChange={setStatus}>
