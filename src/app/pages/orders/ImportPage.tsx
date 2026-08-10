@@ -205,9 +205,10 @@ export function ImportPage() {
     for (const it of o.items) qtyBySku.set(it.sku, (qtyBySku.get(it.sku) || 0) + it.qty);
     const mergedItems = [...qtyBySku.entries()].map(([sku, qty]) => ({ sku, qty }));
 
-    // Prune items removed upstream BEFORE upserting the current set.
-    await doPruneItems({ order_id: orderId, group_buy_id: gbId, items: JSON.stringify(mergedItems) });
-
+    // Upsert every row FIRST and prove the whole replacement set is writable;
+    // only then prune items removed upstream. A mid-loop failure leaves stale
+    // extra items (a harmless superset, healed on re-run) — never a
+    // destructively pruned partial state.
     let itemsWritten = 0;
     for (const it of mergedItems) {
       const res = await doUpsertItem({ order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty }) as unknown[] | null;
@@ -216,6 +217,7 @@ export function ImportPage() {
     if (itemsWritten !== mergedItems.length) {
       throw new Error(`Only ${itemsWritten}/${mergedItems.length} items matched campaign products`);
     }
+    await doPruneItems({ order_id: orderId, group_buy_id: gbId, items: JSON.stringify(mergedItems) });
 
     if (o.payments.length > 0) {
       const method = o.paymentRail === 'cash' ? 'other' : o.paymentRail;
