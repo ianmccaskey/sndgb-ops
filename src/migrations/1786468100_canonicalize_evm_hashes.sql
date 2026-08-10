@@ -8,8 +8,14 @@
 -- in different casing. Lowercasing those would collide with the non-rejected
 -- unique index, so first keep the earliest copy and auto-reject later ones
 -- (audited in notes) — they are one transaction, not two payments.
+-- Survivor = the most trustworthy copy, not the oldest: verified first, then
+-- verified_at recency, then earliest id. Rejecting a verified row in favor of
+-- a pending one would un-pay an order purely by insertion order.
 WITH dupes AS (
-  SELECT id, ROW_NUMBER() OVER (PARTITION BY lower(tx_hash) ORDER BY id) AS rn
+  SELECT id, ROW_NUMBER() OVER (
+    PARTITION BY lower(tx_hash)
+    ORDER BY (status = 'verified') DESC, verified_at ASC NULLS LAST, id ASC
+  ) AS rn
   FROM payments
   WHERE tx_hash ~ '^0x[0-9a-fA-F]{64}$' AND status <> 'rejected'
 )
