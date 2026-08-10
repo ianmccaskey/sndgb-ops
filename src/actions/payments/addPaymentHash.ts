@@ -2,10 +2,12 @@ import { action } from '@uibakery/data';
 
 /**
  * Attach a transaction hash to an order as a new PENDING payment (it earns
- * 'verified' through the normal on-chain check, never by assertion). A hash
- * on any NON-REJECTED payment is refused (inserted = 0); a hash that exists
- * only as rejected may be re-attached — that's the wrong-order correction:
- * reject it there, add it here.
+ * 'verified' through the normal on-chain check, never by assertion). Refused
+ * (inserted = 0) when the canonical hash exists on any NON-REJECTED payment,
+ * or on THIS order in any status — re-adding a hash rejected on the same
+ * order would defeat the audited rejection. A hash rejected on a DIFFERENT
+ * order may be attached — that's the wrong-order correction: reject it
+ * there, add it here.
  */
 function addPaymentHash() {
   return action('addPaymentHash', 'SQL', {
@@ -23,7 +25,7 @@ function addPaymentHash() {
           AND NOT EXISTS (
             SELECT 1 FROM payments p
             WHERE (CASE WHEN p.tx_hash ~ '^0x[0-9a-fA-F]{64}$' THEN lower(p.tx_hash) ELSE p.tx_hash END) = input.h
-              AND p.status <> 'rejected'
+              AND (p.status <> 'rejected' OR p.order_id = {{params.order_id}}::bigint)
           )
         RETURNING id, order_id, method
       ), audit AS (

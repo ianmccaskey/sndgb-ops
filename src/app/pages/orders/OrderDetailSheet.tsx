@@ -116,7 +116,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     try {
       const res = await doAddHash({ order_id: o.id, method: newHashMethod, tx_hash: h, actor: userName }) as { inserted: string }[] | { inserted: string };
       const inserted = Number(Array.isArray(res) ? res[0]?.inserted : res?.inserted);
-      if (!inserted) { setPayMsg('That hash is already recorded (on this or another order).'); }
+      if (!inserted) { setPayMsg('That hash is already recorded on a non-rejected payment — or was rejected on this very order.'); }
       else { setPayMsg('Added as pending — run Verify on the Reconciliation page to confirm it on-chain.'); setNewHash(''); }
       reloadPayments();
     } catch (e: unknown) {
