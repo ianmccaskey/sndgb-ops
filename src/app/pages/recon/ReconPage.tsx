@@ -254,7 +254,52 @@ export function ReconPage() {
               </SelectContent>
             </Select>
           </div>
-          <div className="border rounded-lg overflow-x-auto">
+          {/* Phones: two-row entries — order # with billed → received on top,
+              customer with diff, rail, status, and native flag below. */}
+          <div className="md:hidden border rounded-lg divide-y">
+            {recon.length === 0 && (
+              <p className="text-center text-muted-foreground py-6 text-sm">Nothing here.</p>
+            )}
+            {recon.map(r => {
+              const diff = parseFloat(r.diff_usd || '0');
+              return (
+                <button
+                  key={r.order_id}
+                  type="button"
+                  onClick={() => setOpenOrderId(r.order_id)}
+                  className="w-full text-left px-3 py-2.5 active:bg-muted/60"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium whitespace-nowrap">{r.order_number}</span>
+                    <span className="text-sm whitespace-nowrap">
+                      {fmtUSD(r.billed_usd)} <span className="text-muted-foreground">→</span> {fmtUSD(r.effective_received_usd)}
+                      {r.override_usd != null && <span className="text-violet-600 text-xs ml-1">(override)</span>}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 mt-1">
+                    <span className="text-sm text-muted-foreground truncate">{r.customer_name}</span>
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      {Math.abs(diff) > 0.005 && (
+                        <span className={`text-xs font-medium ${r.recon_status === 'short' ? 'text-red-600' : r.recon_status === 'over' ? 'text-blue-600' : 'text-muted-foreground'}`}>
+                          {fmtUSD(diff)}
+                        </span>
+                      )}
+                      <span className="text-xs uppercase text-muted-foreground">{r.payment_rail || '—'}</span>
+                      <StatusPill value={r.recon_status} />
+                      {r.native_unpriced && (
+                        <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
+                          native {r.native_unpriced}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Tablets and up: the full table. */}
+          <div className="hidden md:block border rounded-lg overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
