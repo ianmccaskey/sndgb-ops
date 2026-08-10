@@ -90,7 +90,42 @@ export function OrdersPage() {
         </div>
       </div>
 
-      <div className="border rounded-lg overflow-x-auto">
+      {/* Phones: two-row entries with the essentials — no horizontal scrolling.
+          Order # + total on the first row, customer + rail + recon on the second. */}
+      <div className="md:hidden border rounded-lg divide-y">
+        {loading && orders.length === 0 && (
+          <p className="text-center text-muted-foreground py-8 text-sm">Loading…</p>
+        )}
+        {!loading && orders.length === 0 && (
+          <p className="text-center text-muted-foreground py-8 text-sm">No orders yet — pull them on the Import page.</p>
+        )}
+        {orders.map(o => (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => setOpenOrderId(o.id)}
+            className="w-full text-left px-3 py-2.5 active:bg-muted/60"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium whitespace-nowrap">
+                {o.order_number}
+                {o.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 ml-1 text-amber-600" />}
+              </span>
+              <span className="font-medium whitespace-nowrap">{fmtUSD(o.total_usd)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2 mt-1">
+              <span className="text-sm text-muted-foreground truncate">{o.customer_name}</span>
+              <span className="flex items-center gap-1.5 shrink-0">
+                <span className="text-xs uppercase text-muted-foreground">{o.payment_rail || '—'}</span>
+                <StatusPill value={o.recon_status || 'awaiting'} />
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Tablets and up: the full table. */}
+      <div className="hidden md:block border rounded-lg overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
