@@ -3,11 +3,19 @@ import { Link } from 'react-router-dom';
 import { useLoadAction } from '@uibakery/data';
 import getDashboardStats from '@/actions/dashboard/getDashboardStats';
 import getMoqProgress from '@/actions/dashboard/getMoqProgress';
+import getDailyOrderSeries from '@/actions/dashboard/getDailyOrderSeries';
+import listRailRecon from '@/actions/recon/listRailRecon';
+import getPnl from '@/actions/financials/getPnl';
+import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtNum } from '@/lib/fmt';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertTriangle } from 'lucide-react';
+import {
+  MomentumChart, ReconDonut, RailBars, PnlBlock, ProductBars,
+  DailyPoint, RailRow, PnlData, ProductPerfRow,
+} from '@/app/pages/DashboardCharts';
 
 type Stats = {
   order_count: string; billed_usd: string; received_usd: string;
@@ -37,8 +45,16 @@ export function HomePage() {
   const enabled = groupBuyId != null;
   const [rawStats] = useLoadAction(getDashboardStats, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawMoq] = useLoadAction(getMoqProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawDaily] = useLoadAction(getDailyOrderSeries, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawRails] = useLoadAction(listRailRecon, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const s = firstRow<Stats>(rawStats);
   const moq = rows<MoqRow>(rawMoq);
+  const daily = rows<DailyPoint>(rawDaily);
+  const rails = rows<RailRow>(rawRails);
+  const pnl = firstRow<PnlData>(rawPnl);
+  const perfProducts = rows<ProductPerfRow>(rawProducts);
 
   const billed = parseFloat(s?.billed_usd || '0');
   const received = parseFloat(s?.received_usd || '0');
@@ -84,6 +100,27 @@ export function HomePage() {
           </CardContent>
         </Card>
       )}
+
+      <MomentumChart series={daily} endsOn={groupBuy?.ends_on || null} />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {s && (
+          <ReconDonut
+            matched={Math.max(0, Number(s.order_count) - Number(s.short_count) - Number(s.awaiting_count) - Number(s.over_count))}
+            short={Number(s.short_count)}
+            over={Number(s.over_count)}
+            awaiting={Number(s.awaiting_count)}
+            billed={billed}
+            received={received}
+          />
+        )}
+        <RailBars rails={rails} />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {pnl && <PnlBlock pnl={pnl} />}
+        <ProductBars products={perfProducts} />
+      </div>
 
       <Card>
         <CardHeader className="pb-2">
