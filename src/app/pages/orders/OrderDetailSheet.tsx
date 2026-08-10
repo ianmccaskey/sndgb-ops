@@ -8,7 +8,7 @@ import addOverride from '@/actions/payments/addOverride';
 import updatePaymentStatus from '@/actions/payments/updatePaymentStatus';
 import addPaymentHash from '@/actions/payments/addPaymentHash';
 import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
-import { B44_DEFAULT_APP_ID, updateB44Order } from '@/lib/base44';
+import { B44_DEFAULT_APP_ID, getB44Order, updateB44Order } from '@/lib/base44';
 import { normalizeTxHash } from '@/lib/parseOrderImport';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
@@ -130,18 +130,23 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     if (!o?.external_id) return;
     setPushing(true); setPushMsg('');
     try {
-      // Read the ref list from the DB at push time — never from this render's
-      // payments array, which can lag a just-completed reject/add.
-      const res = await doGetTxRefs({ order_id: o.id }) as { refs: string; ref_count: string }[] | { refs: string; ref_count: string };
+      const cfg = { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' };
+      // Read the local ref state from the DB at push time — never from this
+      // render's payments array, which can lag a just-completed reject/add.
+      const res = await doGetTxRefs({ order_id: o.id }) as { refs: string; rejected_refs: string }[] | { refs: string; rejected_refs: string };
       const row = Array.isArray(res) ? res[0] : res;
-      const refs = row?.refs ?? '';
-      const count = Number(row?.ref_count ?? 0);
-      await updateB44Order(
-        { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' },
-        o.external_id,
-        { transaction_hashtags: refs },
-      );
-      setPushMsg(`Pushed ${count} tx ref(s) to the ordering app.`);
+      const local = (row?.refs ?? '').split('|').map(s => s.trim()).filter(Boolean);
+      const rejected = new Set((row?.rejected_refs ?? '').split('|').map(s => s.trim()).filter(Boolean));
+      // Read-merge-write, not last-writer-wins: keep every upstream entry we
+      // didn't explicitly reject (a ref added in the ordering app since the
+      // last pull must survive this push), then append our refs not present.
+      const remote = await getB44Order(cfg, o.external_id);
+      const upstream = String(remote.transaction_hashtags || '').split('|').map(s => s.trim()).filter(Boolean);
+      const kept = upstream.filter(u => !rejected.has(u));
+      const keptSet = new Set(kept);
+      const merged = [...kept, ...local.filter(h => !keptSet.has(h))];
+      await updateB44Order(cfg, o.external_id, { transaction_hashtags: merged.join(' | ') });
+      setPushMsg(`Pushed ${merged.length} tx ref(s) to the ordering app (${rejected.size} rejected ref(s) removed).`);
     } catch (e: unknown) {
       setPushMsg(e instanceof Error ? e.message : 'Push failed');
     } finally {

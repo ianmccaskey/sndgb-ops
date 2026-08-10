@@ -110,6 +110,13 @@ export type B44Order = {
   [key: string]: unknown;
 };
 
+/** Fetch one ordering-app Order by its base44 id. */
+export async function getB44Order(cfg: B44Config, orderId: string): Promise<B44Order> {
+  const data = await b44Get(cfg, `/entities/Order/${encodeURIComponent(orderId)}`);
+  if (!data || typeof data !== 'object') throw new Error('Ordering app returned no order for that id.');
+  return data as B44Order;
+}
+
 /**
  * Partial update of one ordering-app Order (only the provided fields change).
  * Used to push corrections — e.g. a fixed transaction_hashtags list — back to

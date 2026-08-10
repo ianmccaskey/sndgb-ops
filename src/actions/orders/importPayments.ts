@@ -23,10 +23,11 @@ function importPayments() {
           AND EXISTS (SELECT 1 FROM src WHERE kind = 'receipt')
       ), ins_hashes AS (
         INSERT INTO payments (order_id, method, tx_hash, status)
-        SELECT {{params.order_id}}::bigint, s.method::payment_method, s.value, 'pending'
+        SELECT DISTINCT ON (s.value) {{params.order_id}}::bigint, s.method::payment_method, s.value, 'pending'
         FROM src s
         WHERE s.kind = 'tx_hash'
           AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.tx_hash = s.value)
+        ON CONFLICT (tx_hash) WHERE tx_hash IS NOT NULL AND status <> 'rejected' DO NOTHING
         RETURNING id
       ), ins_receipts AS (
         INSERT INTO payments (order_id, method, receipt_ref, status)
