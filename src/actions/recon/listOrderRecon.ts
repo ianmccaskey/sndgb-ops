@@ -4,10 +4,15 @@ function listOrderRecon() {
   return action('listOrderRecon', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT order_id, order_number, customer_name, payment_rail, order_status,
-             billed_usd, received_usd, override_usd, effective_received_usd,
-             diff_usd, pending_payment_count, recon_status
-      FROM v_order_reconciliation
+      SELECT r.order_id, r.order_number, r.customer_name, r.payment_rail, r.order_status,
+             r.billed_usd, r.received_usd, r.override_usd, r.effective_received_usd,
+             r.diff_usd, r.pending_payment_count, r.recon_status,
+             (SELECT string_agg(DISTINCT p.native_symbol, ' + ')
+              FROM payments p
+              WHERE p.order_id = r.order_id
+                AND p.native_symbol IS NOT NULL
+                AND p.status = 'mismatch') AS native_unpriced
+      FROM v_order_reconciliation r
       WHERE group_buy_id = {{params.group_buy_id}}::bigint
         AND ({{params.recon}} = 'all' OR recon_status = {{params.recon}})
         AND (COALESCE({{params.rail}}, 'all') = 'all'

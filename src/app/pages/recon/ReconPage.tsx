@@ -25,6 +25,7 @@ type ReconRow = {
   order_id: number; order_number: string; customer_name: string; payment_rail: string | null;
   order_status: string; billed_usd: string; received_usd: string; override_usd: string | null;
   effective_received_usd: string; diff_usd: string; pending_payment_count: string; recon_status: string;
+  native_unpriced: string | null;
 };
 type RailRow = {
   payment_rail: string | null; order_count: string; billed_usd: string; received_usd: string;
@@ -137,7 +138,13 @@ export function ReconPage() {
       // Zero rows = the payment stopped being pending mid-lookup (e.g. it was
       // rejected in the correction flow) — the stale result was NOT written.
       const wrote = Array.isArray(recorded) ? recorded.length > 0 : !!recorded;
-      setVerifying(v => ({ ...v, [p.payment_id]: wrote ? 'done' : 'skipped — no longer pending' }));
+      const nativeOnly = res.amountUsd === 0 && res.nativeAmount != null && res.nativeAmount > 0;
+      setVerifying(v => ({
+        ...v,
+        [p.payment_id]: !wrote ? 'skipped — no longer pending'
+          : nativeOnly ? `native ${res.nativeAmount} ${res.nativeSymbol} — needs USD pricing`
+          : 'done',
+      }));
     } catch (e: unknown) {
       setVerifying(v => ({ ...v, [p.payment_id]: e instanceof Error ? e.message : 'failed' }));
     }
@@ -270,7 +277,16 @@ export function ReconPage() {
                     <TableCell className={`text-right ${r.recon_status === 'short' ? 'text-red-600' : r.recon_status === 'over' ? 'text-blue-600' : 'text-muted-foreground'}`}>
                       {fmtUSD(r.diff_usd)}
                     </TableCell>
-                    <TableCell><StatusPill value={r.recon_status} /></TableCell>
+                    <TableCell>
+                      <span className="inline-flex items-center gap-1">
+                        <StatusPill value={r.recon_status} />
+                        {r.native_unpriced && (
+                          <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`Customer paid in native ${r.native_unpriced} — the coin amount is recorded but needs a USD value (override or manual pricing).`}>
+                            native {r.native_unpriced}
+                          </span>
+                        )}
+                      </span>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {recon.length === 0 && (

@@ -44,6 +44,7 @@ type ItemRow = { id: number; qty: string; unit_price_usd: string; line_total_usd
 type PaymentRow = {
   id: number; method: string; tx_hash: string | null; receipt_ref: string | null;
   amount_usd: string; status: string; verify_source: string | null; verified_at: string | null; notes: string | null;
+  native_amount: string | null; native_symbol: string | null;
 };
 
 export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null; onClose: () => void }) {
@@ -315,7 +316,15 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         <div className="flex items-center gap-2">
                           <StatusPill value={p.status} />
                           <span className="text-xs uppercase text-muted-foreground">{p.method}</span>
+                          {p.native_symbol && (
+                            <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
+                              native {Number(p.native_amount)} {p.native_symbol}
+                            </span>
+                          )}
                         </div>
+                        {p.native_symbol && p.status === 'mismatch' && (
+                          <div className="text-xs text-amber-700">Customer paid in native {p.native_symbol} — set the USD value via an order override below, then this counts as received.</div>
+                        )}
                         {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
                         {p.receipt_ref && <div className="text-xs text-muted-foreground">receipt: {p.receipt_ref}</div>}
                         {p.status === 'rejected' && p.notes && <div className="text-xs text-muted-foreground">rejected: {p.notes}</div>}
