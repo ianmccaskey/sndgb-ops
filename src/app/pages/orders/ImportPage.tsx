@@ -3,7 +3,8 @@ import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import listProducts from '@/actions/products/listProducts';
 import importUpsertOrder from '@/actions/orders/importUpsertOrder';
-import replaceOrderItems from '@/actions/orders/replaceOrderItems';
+import upsertOrderItem from '@/actions/orders/upsertOrderItem';
+import deleteOrderItemsNotIn from '@/actions/orders/deleteOrderItemsNotIn';
 import importPayments from '@/actions/orders/importPayments';
 import syncOrderStatus from '@/actions/orders/syncOrderStatus';
 import { useApp } from '@/app/AppContext';
@@ -47,7 +48,8 @@ export function ImportPage() {
   }, [rawCatalog]);
 
   const [doUpsert] = useMutateAction(importUpsertOrder);
-  const [doItems] = useMutateAction(replaceOrderItems);
+  const [doUpsertItem] = useMutateAction(upsertOrderItem);
+  const [doPruneItems] = useMutateAction(deleteOrderItemsNotIn);
   const [doPayments] = useMutateAction(importPayments);
   const [doSyncStatus] = useMutateAction(syncOrderStatus);
 
@@ -195,25 +197,43 @@ export function ImportPage() {
     const orderId = Array.isArray(upserted) ? upserted[0]?.id : upserted?.id;
     if (!orderId) throw new Error('Refused: this order number already exists under a different campaign');
 
-    const itemsRes = await doItems({
-      order_id: orderId,
-      group_buy_id: gbId,
-      items: JSON.stringify(o.items),
-    }) as { source_count: string; inserted_count: string }[] | { source_count: string; inserted_count: string };
-    const ir = Array.isArray(itemsRes) ? itemsRes[0] : itemsRes;
-    if (ir && Number(ir.inserted_count) !== Number(ir.source_count)) {
-      throw new Error(`Only ${ir.inserted_count}/${ir.source_count} items matched campaign products`);
+    // Items are written one row per product: UI Bakery's action layer rejects
+    // multi-row inserts with repeated key columns, which is what silently
+    // broke the old replaceOrderItems (and blocked payment sync behind it).
+    // Duplicate SKU lines from the source are summed into one row first.
+    const qtyBySku = new Map<string, number>();
+    for (const it of o.items) qtyBySku.set(it.sku, (qtyBySku.get(it.sku) || 0) + it.qty);
+    const mergedItems = [...qtyBySku.entries()].map(([sku, qty]) => ({ sku, qty }));
+
+    // Prune items removed upstream BEFORE upserting the current set.
+    await doPruneItems({ order_id: orderId, group_buy_id: gbId, items: JSON.stringify(mergedItems) });
+
+    let itemsWritten = 0;
+    for (const it of mergedItems) {
+      const res = await doUpsertItem({ order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty }) as unknown[] | null;
+      if (Array.isArray(res) ? res.length > 0 : !!res) itemsWritten++;
+    }
+    if (itemsWritten !== mergedItems.length) {
+      throw new Error(`Only ${itemsWritten}/${mergedItems.length} items matched campaign products`);
     }
 
     if (o.payments.length > 0) {
       const method = o.paymentRail === 'cash' ? 'other' : o.paymentRail;
-      await doPayments({
-        order_id: orderId,
-        payments: JSON.stringify(o.payments.map(p => ({ kind: p.kind, value: p.value, method: p.kind === 'tx_hash' ? method : 'other' }))),
-      });
+      // Hashes go one per call (multi-row inserts trip the same platform
+      // validation); receipts go together in one call because the action
+      // clears pending receipts per invocation — per-receipt calls would
+      // each wipe the previous one.
+      const hashes = o.payments.filter(p => p.kind === 'tx_hash');
+      const receipts = o.payments.filter(p => p.kind === 'receipt');
+      for (const p of hashes) {
+        await doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method }]) });
+      }
+      if (receipts.length > 0) {
+        await doPayments({ order_id: orderId, payments: JSON.stringify(receipts.map(p => ({ kind: p.kind, value: p.value, method: 'other' }))) });
+      }
     }
 
-    return { orderNumber: o.orderNumber, ok: true, message: `${o.items.length} items, ${o.payments.length} payment refs` };
+    return { orderNumber: o.orderNumber, ok: true, message: `${mergedItems.length} items, ${o.payments.length} payment refs` };
   };
 
   return (
