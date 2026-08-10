@@ -197,9 +197,21 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       try {
         await updateB44Order(cfg, o.external_id, { transaction_hashtags: merged.join(' | ') });
       } catch (pushErr: unknown) {
-        const failLine = `${ts()} push FAILED (${pushErr instanceof Error ? pushErr.message : 'unknown error'}) — upstream unchanged; the line above did not take effect.`;
+        // A thrown PUT is not proof the write didn't land (timeouts can follow
+        // acceptance). Verify by re-reading upstream before asserting anything.
+        let outcome = 'outcome UNKNOWN — could not re-check upstream; verify manually before retrying';
         try {
-          const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ failed: true }) }) as { admin_note: string }[] | { admin_note: string };
+          const check = await getB44Order(cfg, o.external_id);
+          const nowSet = new Set(String(check.transaction_hashtags || '').split('|').map(s => canonicalTxRef(s.trim())).filter(Boolean));
+          const wantSet = new Set(merged.map(h => canonicalTxRef(h)));
+          const same = nowSet.size === wantSet.size && [...wantSet].every(h => nowSet.has(h));
+          outcome = same
+            ? 'verified: the push actually LANDED despite the error — the line above IS in effect'
+            : 'verified: upstream unchanged — the line above did not take effect';
+        } catch { /* keep UNKNOWN */ }
+        const failLine = `${ts()} push error (${pushErr instanceof Error ? pushErr.message : 'unknown error'}) — ${outcome}.`;
+        try {
+          const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ push_error: true, outcome }) }) as { admin_note: string }[] | { admin_note: string };
           syncNote(failLine, Array.isArray(failRes) ? failRes[0]?.admin_note : failRes?.admin_note);
         } catch { /* the visible error below still tells the operator */ }
         throw pushErr;
