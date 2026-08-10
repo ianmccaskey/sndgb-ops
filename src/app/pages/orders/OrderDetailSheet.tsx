@@ -181,6 +181,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         setAdminNote(prev => {
           const pristine = prev === (o.admin_note || '');
           if (pristine && typeof dbNote === 'string') return dbNote;
+          if (prev.includes(line)) return prev; // retries must not duplicate trail lines
           return prev ? `${prev}\n${line}` : line;
         });
       };
