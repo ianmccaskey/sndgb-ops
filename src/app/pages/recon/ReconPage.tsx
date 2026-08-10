@@ -124,7 +124,7 @@ export function ReconPage() {
       const status = res.amountUsd > 0 && Math.abs(res.amountUsd - billed) <= tolerance ? 'verified'
         : res.amountUsd > 0 ? 'verified' // amount is real; order-level recon decides short/over
         : 'mismatch';
-      await doRecord({
+      const recorded = await doRecord({
         payment_id: p.payment_id,
         amount_usd: res.amountUsd,
         native_amount: res.nativeAmount != null ? String(res.nativeAmount) : '',
@@ -133,8 +133,11 @@ export function ReconPage() {
         status,
         notes: res.note,
         actor: userName,
-      });
-      setVerifying(v => ({ ...v, [p.payment_id]: 'done' }));
+      }) as unknown[] | null;
+      // Zero rows = the payment stopped being pending mid-lookup (e.g. it was
+      // rejected in the correction flow) — the stale result was NOT written.
+      const wrote = Array.isArray(recorded) ? recorded.length > 0 : !!recorded;
+      setVerifying(v => ({ ...v, [p.payment_id]: wrote ? 'done' : 'skipped — no longer pending' }));
     } catch (e: unknown) {
       setVerifying(v => ({ ...v, [p.payment_id]: e instanceof Error ? e.message : 'failed' }));
     }

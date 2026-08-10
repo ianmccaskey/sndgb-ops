@@ -3,6 +3,9 @@ import { action } from '@uibakery/data';
 /**
  * Writes the result of an on-chain lookup (Moralis/Helius) onto a payment:
  * the observed USD amount, any native-token details, and verified/mismatch.
+ * Only PENDING rows are written — a payment rejected (or otherwise resolved)
+ * between the lookup starting and finishing must not be overwritten by the
+ * stale result. Zero rows returned = the row was no longer pending.
  */
 function recordChainVerification() {
   return action('recordChainVerification', 'SQL', {
@@ -19,6 +22,7 @@ function recordChainVerification() {
           verified_at = now(),
           notes = NULLIF({{params.notes}}::text, '')
         WHERE id = {{params.payment_id}}::bigint
+          AND status = 'pending'
         RETURNING id, order_id, amount_usd, status
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
