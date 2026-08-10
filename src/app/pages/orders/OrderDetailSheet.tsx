@@ -322,7 +322,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             </span>
                           )}
                         </div>
-                        {p.native_symbol && p.status === 'mismatch' && (
+                        {p.native_symbol && p.status === 'mismatch' && o.override_usd == null && (
                           <div className="text-xs text-amber-700">Customer paid in native {p.native_symbol} — set the USD value via an order override below, then this counts as received.</div>
                         )}
                         {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
