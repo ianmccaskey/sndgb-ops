@@ -95,11 +95,19 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     if (!rejectReason.trim()) { setPayMsg('A reason is required — rejections are audited.'); return; }
     setSaving(true); setPayMsg('');
     try {
-      await doPayStatus({
+      // Guarded by the status this row showed when Reject was clicked — if
+      // the verifier changed it mid-flight, nothing is written and the fresh
+      // state is reloaded for a deliberate second look.
+      const res = await doPayStatus({
         payment_id: p.id, status: 'rejected', amount_usd: 0,
-        notes: rejectReason.trim(), actor: userName,
-      });
-      setRejectingId(null); setRejectReason('');
+        notes: rejectReason.trim(), actor: userName, expected_status: p.status,
+      }) as unknown[] | null;
+      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!wrote) {
+        setPayMsg('This payment changed while you were looking at it (likely just verified) — review the fresh state before rejecting.');
+      } else {
+        setRejectingId(null); setRejectReason('');
+      }
       reloadPayments(); reloadOrder();
     } catch (e: unknown) {
       setPayMsg(e instanceof Error ? e.message : 'Failed to reject payment');
