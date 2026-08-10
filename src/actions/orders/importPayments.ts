@@ -3,9 +3,11 @@ import { action } from '@uibakery/data';
 /**
  * Records imported payment references for an order from a JSON array of
  * {kind: 'tx_hash' | 'receipt', value, method}.
- * - a tx hash that exists in ANY status is skipped: verified payments are
- *   never reset to pending, and rejected hashes are never resurrected by a
- *   re-pull (the correction lives locally until pushed upstream).
+ * - a tx hash that exists on any NON-REJECTED payment is skipped (verified
+ *   payments are never reset to pending), and a hash rejected on THIS order
+ *   is never resurrected by a re-pull. A hash rejected on a DIFFERENT order
+ *   may import here — same reassignment rule as the manual add path, so a
+ *   wrong-order correction completes on the next pull.
  * - pending receipt refs (no hash) are replaced wholesale on re-import;
  *   verified ones are left untouched.
  */
@@ -31,6 +33,7 @@ function importPayments() {
           AND NOT EXISTS (
             SELECT 1 FROM payments p
             WHERE (CASE WHEN p.tx_hash ~ '^0x[0-9a-fA-F]{64}$' THEN lower(p.tx_hash) ELSE p.tx_hash END) = s.value
+              AND (p.status <> 'rejected' OR p.order_id = {{params.order_id}}::bigint)
           )
         ON CONFLICT ((CASE WHEN tx_hash ~ '^0x[0-9a-fA-F]{64}$' THEN lower(tx_hash) ELSE tx_hash END))
           WHERE tx_hash IS NOT NULL AND status <> 'rejected' DO NOTHING
