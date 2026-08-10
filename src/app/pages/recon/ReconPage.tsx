@@ -18,6 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { StatusPill } from '@/components/StatusPill';
 import { TxHash } from '@/components/TxHash';
+import { OrderDetailSheet } from '@/app/pages/orders/OrderDetailSheet';
 import { Scale, Zap } from 'lucide-react';
 
 type ReconRow = {
@@ -84,9 +85,11 @@ async function lookupPayment(
 export function ReconPage() {
   const { groupBuyId, groupBuy, settings, userName } = useApp();
   const [filter, setFilter] = useState('all');
+  const [railFilter, setRailFilter] = useState('all');
+  const [openOrderId, setOpenOrderId] = useState<number | null>(null);
   const enabled = groupBuyId != null;
 
-  const [rawRecon, , , reloadRecon] = useLoadAction(listOrderRecon, [groupBuyId, filter], { group_buy_id: groupBuyId, recon: filter }, { enabled });
+  const [rawRecon, , , reloadRecon] = useLoadAction(listOrderRecon, [groupBuyId, filter, railFilter], { group_buy_id: groupBuyId, recon: filter, rail: railFilter }, { enabled });
   const [rawRails, , , reloadRails] = useLoadAction(listRailRecon, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawPending, , , reloadPending] = useLoadAction(listPendingCryptoPayments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
 
@@ -211,16 +214,29 @@ export function ReconPage() {
         </TabsList>
 
         <TabsContent value="orders" className="mt-4 space-y-3">
-          <Select value={filter} onValueChange={setFilter}>
-            <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All statuses</SelectItem>
-              <SelectItem value="short">short</SelectItem>
-              <SelectItem value="over">over</SelectItem>
-              <SelectItem value="awaiting">awaiting</SelectItem>
-              <SelectItem value="matched">matched</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-wrap gap-2">
+            <Select value={filter} onValueChange={setFilter}>
+              <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="short">short</SelectItem>
+                <SelectItem value="over">over</SelectItem>
+                <SelectItem value="awaiting">awaiting</SelectItem>
+                <SelectItem value="matched">matched</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={railFilter} onValueChange={setRailFilter}>
+              <SelectTrigger className="h-8 w-44"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All payment rails</SelectItem>
+                <SelectItem value="crypto">Crypto (all chains)</SelectItem>
+                <SelectItem value="cash">Cash / P2P</SelectItem>
+                <SelectItem value="eth">Ethereum</SelectItem>
+                <SelectItem value="sol">Solana</SelectItem>
+                <SelectItem value="base">Base</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="border rounded-lg overflow-x-auto">
             <Table>
               <TableHeader>
@@ -236,7 +252,7 @@ export function ReconPage() {
               </TableHeader>
               <TableBody>
                 {recon.map(r => (
-                  <TableRow key={r.order_id}>
+                  <TableRow key={r.order_id} onClick={() => setOpenOrderId(r.order_id)} className="cursor-pointer hover:bg-muted/50">
                     <TableCell className="font-medium">{r.order_number}</TableCell>
                     <TableCell>{r.customer_name}</TableCell>
                     <TableCell>{r.payment_rail}</TableCell>
@@ -283,7 +299,11 @@ export function ReconPage() {
               <TableBody>
                 {pending.map(p => (
                   <TableRow key={p.payment_id}>
-                    <TableCell className="font-medium">{p.order_number}</TableCell>
+                    <TableCell className="font-medium">
+                      <button type="button" className="text-violet-600 hover:underline" onClick={() => setOpenOrderId(p.order_id)}>
+                        {p.order_number}
+                      </button>
+                    </TableCell>
                     <TableCell>{p.customer_name}</TableCell>
                     <TableCell className="uppercase">{p.method}</TableCell>
                     <TableCell><TxHash method={p.method} hash={p.tx_hash} /></TableCell>
@@ -328,6 +348,8 @@ export function ReconPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <OrderDetailSheet orderId={openOrderId} onClose={() => { setOpenOrderId(null); reloadAll(); }} />
     </div>
   );
 }

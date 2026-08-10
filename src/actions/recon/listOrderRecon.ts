@@ -10,6 +10,9 @@ function listOrderRecon() {
       FROM v_order_reconciliation
       WHERE group_buy_id = {{params.group_buy_id}}::bigint
         AND ({{params.recon}} = 'all' OR recon_status = {{params.recon}})
+        AND ({{params.rail}} = 'all'
+             OR ({{params.rail}} = 'crypto' AND payment_rail IN ('eth','sol','base'))
+             OR payment_rail::text = {{params.rail}})
       ORDER BY
         CASE recon_status WHEN 'short' THEN 0 WHEN 'over' THEN 1 WHEN 'awaiting' THEN 2 ELSE 3 END,
         ABS(diff_usd) DESC
