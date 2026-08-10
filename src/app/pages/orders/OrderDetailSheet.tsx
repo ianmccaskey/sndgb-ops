@@ -8,6 +8,8 @@ import addOverride from '@/actions/payments/addOverride';
 import updatePaymentStatus from '@/actions/payments/updatePaymentStatus';
 import addPaymentHash from '@/actions/payments/addPaymentHash';
 import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
+import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
+import { shortHash } from '@/lib/explorer';
 import { B44_DEFAULT_APP_ID, getB44Order, updateB44Order } from '@/lib/base44';
 import { normalizeTxHash, canonicalTxRef } from '@/lib/parseOrderImport';
 import { useApp } from '@/app/AppContext';
@@ -59,6 +61,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doPayStatus] = useMutateAction(updatePaymentStatus);
   const [doAddHash] = useMutateAction(addPaymentHash);
   const [doGetTxRefs] = useMutateAction(getOrderTxRefs);
+  const [doAppendNote] = useMutateAction(appendOrderAdminNote);
 
   const [status, setStatus] = useState('imported');
   const [hold, setHold] = useState(false);
@@ -152,11 +155,32 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       // last pull must survive this push), then append our refs not present.
       const remote = await getB44Order(cfg, o.external_id);
       const upstream = String(remote.transaction_hashtags || '').split('|').map(s => s.trim()).filter(Boolean);
+      const removed = upstream.filter(u => rejected.has(canonicalTxRef(u)));
       const kept = upstream.filter(u => !rejected.has(canonicalTxRef(u)));
       const keptSet = new Set(kept.map(canonicalTxRef));
-      const merged = [...kept, ...local.filter(h => !keptSet.has(canonicalTxRef(h)))];
+      const added = local.filter(h => !keptSet.has(canonicalTxRef(h)));
+      if (removed.length === 0 && added.length === 0) {
+        setPushMsg('Upstream already matches — nothing pushed, no note added.');
+        return;
+      }
+      const merged = [...kept, ...added];
       await updateB44Order(cfg, o.external_id, { transaction_hashtags: merged.join(' | ') });
-      setPushMsg(`Pushed ${merged.length} tx ref(s) to the ordering app (${rejected.size} rejected ref(s) removed).`);
+      // Every upstream mutation leaves a local trail: a summary in the admin
+      // notes (short hashes for readability) and the full lists in audit_log.
+      const parts = [
+        removed.length ? `removed ${removed.map(h => shortHash(h)).join(', ')}` : '',
+        added.length ? `added ${added.map(h => shortHash(h)).join(', ')}` : '',
+        `kept ${kept.length} upstream ref(s)`,
+      ].filter(Boolean).join('; ');
+      const note = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC] ${userName} pushed tx refs to ordering app: ${parts}.`;
+      const noteRes = await doAppendNote({
+        order_id: o.id, note, actor: userName,
+        detail: JSON.stringify({ removed, added, kept_count: kept.length, pushed: merged }),
+      }) as { admin_note: string }[] | { admin_note: string };
+      const newNote = Array.isArray(noteRes) ? noteRes[0]?.admin_note : noteRes?.admin_note;
+      if (typeof newNote === 'string') setAdminNote(newNote);
+      reloadOrder();
+      setPushMsg(`Pushed ${merged.length} tx ref(s) (${removed.length} removed, ${added.length} added) — noted in admin notes.`);
     } catch (e: unknown) {
       setPushMsg(e instanceof Error ? e.message : 'Push failed');
     } finally {
