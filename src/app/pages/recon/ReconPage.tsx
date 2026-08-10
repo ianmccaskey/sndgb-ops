@@ -4,8 +4,7 @@ import listOrderRecon from '@/actions/recon/listOrderRecon';
 import listRailRecon from '@/actions/recon/listRailRecon';
 import listPendingCryptoPayments from '@/actions/recon/listPendingCryptoPayments';
 import recordChainVerification from '@/actions/payments/recordChainVerification';
-import addManualPayment from '@/actions/payments/addManualPayment';
-import findOrderByNumber from '@/actions/orders/findOrderByNumber';
+import addManualPaymentByNumber from '@/actions/payments/addManualPaymentByNumber';
 import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
@@ -99,8 +98,7 @@ export function ReconPage() {
   const pending = rows<PendingPayment>(rawPending);
 
   const [doRecord] = useMutateAction(recordChainVerification);
-  const [doManual] = useMutateAction(addManualPayment);
-  const [doFindOrder] = useMutateAction(findOrderByNumber);
+  const [doManual] = useMutateAction(addManualPaymentByNumber);
 
   const [verifying, setVerifying] = useState<Record<number, string>>({});
   const [bulkRunning, setBulkRunning] = useState(false);
@@ -156,15 +154,15 @@ export function ReconPage() {
     if (!(amt > 0)) { setMError('Amount must be positive.'); return; }
     setMSaving(true); setMError('');
     try {
-      // Resolve from the DB, not the recon table — the table may be filtered
-      // to a different rail/status and would hide a perfectly valid order.
-      const found = await doFindOrder({ group_buy_id: groupBuyId, order_number: mOrder }) as { id: number }[] | { id: number } | null;
-      const orderId = Array.isArray(found) ? found[0]?.id : found?.id;
-      if (!orderId) { setMError('Order # not found in this campaign.'); setMSaving(false); return; }
-      await doManual({
-        order_id: orderId, method: mMethod, tx_hash: '', receipt_ref: mRef,
+      // One atomic statement resolves the order (by campaign + number,
+      // cancelled/refunded excluded) and inserts the payment — the recon
+      // table's filters can't hide a valid order, and no lookup/insert race.
+      const res = await doManual({
+        group_buy_id: groupBuyId, order_number: mOrder, method: mMethod, tx_hash: '', receipt_ref: mRef,
         amount_usd: amt, notes: '', actor: userName,
-      });
+      }) as { inserted: string }[] | { inserted: string };
+      const inserted = Number(Array.isArray(res) ? res[0]?.inserted : res?.inserted);
+      if (!inserted) { setMError('Order # not found in this campaign (or it is cancelled/refunded).'); setMSaving(false); return; }
       setMOrder(''); setMAmount(''); setMRef('');
       reloadAll();
     } catch (e: unknown) {
