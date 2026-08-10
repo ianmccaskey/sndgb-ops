@@ -244,11 +244,14 @@ export function ProductBars({ products }: { products: ProductPerfRow[] }) {
   const top = [...products]
     .sort((a, b) => Number(b.expected_revenue_usd) - Number(a.expected_revenue_usd))
     .slice(0, 8)
-    .map(p => ({
-      sku: p.sku_code.length > 14 ? p.sku_code.slice(0, 13) + '…' : p.sku_code,
-      revenue: Number(p.expected_revenue_usd),
-      profit: Number(p.total_product_profit_usd),
-    }));
+    .map(p => {
+      const sku = String(p.sku_code || '');
+      return {
+        sku: sku.length > 14 ? sku.slice(0, 13) + '…' : sku,
+        revenue: Number(p.expected_revenue_usd),
+        profit: Number(p.total_product_profit_usd),
+      };
+    });
   if (top.length === 0) return null;
 
   return (

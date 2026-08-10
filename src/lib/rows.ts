@@ -7,7 +7,11 @@
  * entry. Route every action result through rows() before iterating.
  */
 export function rows<T>(data: unknown): T[] {
-  return Array.isArray(data) ? (data.filter(x => x != null) as T[]) : [];
+  // Placeholders can also be the defaultValue array (e.g. [groupBuyId] → [1])
+  // — a primitive is never a row, so require object entries.
+  return Array.isArray(data)
+    ? (data.filter(x => x != null && typeof x === 'object') as T[])
+    : [];
 }
 
 /** First non-null row, for single-row lookups (detail queries, settings). */
