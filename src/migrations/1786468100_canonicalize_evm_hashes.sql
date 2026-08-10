@@ -14,7 +14,7 @@
 WITH dupes AS (
   SELECT id, ROW_NUMBER() OVER (
     PARTITION BY lower(tx_hash)
-    ORDER BY (status = 'verified') DESC, verified_at ASC NULLS LAST, id ASC
+    ORDER BY (status = 'verified') DESC, verified_at DESC NULLS LAST, id ASC
   ) AS rn
   FROM payments
   WHERE tx_hash ~ '^0x[0-9a-fA-F]{64}$' AND status <> 'rejected'
