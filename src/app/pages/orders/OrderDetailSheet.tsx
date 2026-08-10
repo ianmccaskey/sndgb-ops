@@ -7,6 +7,7 @@ import updateOrderAdmin from '@/actions/orders/updateOrderAdmin';
 import addOverride from '@/actions/payments/addOverride';
 import updatePaymentStatus from '@/actions/payments/updatePaymentStatus';
 import addPaymentHash from '@/actions/payments/addPaymentHash';
+import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
 import { B44_DEFAULT_APP_ID, updateB44Order } from '@/lib/base44';
 import { normalizeTxHash } from '@/lib/parseOrderImport';
 import { useApp } from '@/app/AppContext';
@@ -57,6 +58,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doOverride] = useMutateAction(addOverride);
   const [doPayStatus] = useMutateAction(updatePaymentStatus);
   const [doAddHash] = useMutateAction(addPaymentHash);
+  const [doGetTxRefs] = useMutateAction(getOrderTxRefs);
 
   const [status, setStatus] = useState('imported');
   const [hold, setHold] = useState(false);
@@ -126,15 +128,20 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
 
   const pushTxRefs = async () => {
     if (!o?.external_id) return;
-    const hashes = payments.filter(p => p.tx_hash && p.status !== 'rejected').map(p => p.tx_hash as string);
     setPushing(true); setPushMsg('');
     try {
+      // Read the ref list from the DB at push time — never from this render's
+      // payments array, which can lag a just-completed reject/add.
+      const res = await doGetTxRefs({ order_id: o.id }) as { refs: string; ref_count: string }[] | { refs: string; ref_count: string };
+      const row = Array.isArray(res) ? res[0] : res;
+      const refs = row?.refs ?? '';
+      const count = Number(row?.ref_count ?? 0);
       await updateB44Order(
         { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' },
         o.external_id,
-        { transaction_hashtags: hashes.join(' | ') },
+        { transaction_hashtags: refs },
       );
-      setPushMsg(`Pushed ${hashes.length} tx ref(s) to the ordering app.`);
+      setPushMsg(`Pushed ${count} tx ref(s) to the ordering app.`);
     } catch (e: unknown) {
       setPushMsg(e instanceof Error ? e.message : 'Push failed');
     } finally {

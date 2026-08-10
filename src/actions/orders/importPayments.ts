@@ -3,8 +3,9 @@ import { action } from '@uibakery/data';
 /**
  * Records imported payment references for an order from a JSON array of
  * {kind: 'tx_hash' | 'receipt', value, method}.
- * - tx hashes are globally unique: re-imports hit ON CONFLICT and do nothing,
- *   so a verified payment is never reset to pending.
+ * - a tx hash that exists in ANY status is skipped: verified payments are
+ *   never reset to pending, and rejected hashes are never resurrected by a
+ *   re-pull (the correction lives locally until pushed upstream).
  * - pending receipt refs (no hash) are replaced wholesale on re-import;
  *   verified ones are left untouched.
  */
@@ -22,9 +23,10 @@ function importPayments() {
           AND EXISTS (SELECT 1 FROM src WHERE kind = 'receipt')
       ), ins_hashes AS (
         INSERT INTO payments (order_id, method, tx_hash, status)
-        SELECT {{params.order_id}}::bigint, method::payment_method, value, 'pending'
-        FROM src WHERE kind = 'tx_hash'
-        ON CONFLICT (tx_hash) WHERE tx_hash IS NOT NULL DO NOTHING
+        SELECT {{params.order_id}}::bigint, s.method::payment_method, s.value, 'pending'
+        FROM src s
+        WHERE s.kind = 'tx_hash'
+          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.tx_hash = s.value)
         RETURNING id
       ), ins_receipts AS (
         INSERT INTO payments (order_id, method, receipt_ref, status)
