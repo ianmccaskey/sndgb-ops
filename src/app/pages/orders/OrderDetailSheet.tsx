@@ -8,6 +8,7 @@ import addOverride from '@/actions/payments/addOverride';
 import updatePaymentStatus from '@/actions/payments/updatePaymentStatus';
 import addPaymentHash from '@/actions/payments/addPaymentHash';
 import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
+import addManualPaymentByNumber from '@/actions/payments/addManualPaymentByNumber';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { shortHash } from '@/lib/explorer';
 import { B44_DEFAULT_APP_ID, getB44Order, updateB44Order } from '@/lib/base44';
@@ -27,7 +28,7 @@ import { StatusPill } from '@/components/StatusPill';
 import { TxHash } from '@/components/TxHash';
 
 type OrderRow = {
-  id: number; order_number: string; external_id: string | null; status: string;
+  id: number; order_number: string; external_id: string | null; status: string; group_buy_id: number;
   payment_rail: string | null; contact_name: string | null; contact_email: string | null;
   contact_phone: string | null; discord_username: string | null;
   address_line1: string | null; address_line2: string | null; city: string | null;
@@ -63,6 +64,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doAddHash] = useMutateAction(addPaymentHash);
   const [doGetTxRefs] = useMutateAction(getOrderTxRefs);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
+  const [doCashPay] = useMutateAction(addManualPaymentByNumber);
 
   const [status, setStatus] = useState('imported');
   const [hold, setHold] = useState(false);
@@ -71,6 +73,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [overrideReason, setOverrideReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  // cash / P2P payment recording (right where the recon click lands)
+  const [cashAmt, setCashAmt] = useState('');
+  const [cashMethod, setCashMethod] = useState('zelle');
+  const [cashRef, setCashRef] = useState('');
+  const [cashMsg, setCashMsg] = useState('');
 
   // payment corrections
   const [rejectingId, setRejectingId] = useState<number | null>(null);
@@ -92,8 +100,33 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       setRejectingId(null); setRejectReason('');
       setNewHash(''); setPayMsg(''); setPushMsg('');
       setNewHashMethod(o.payment_rail === 'sol' || o.payment_rail === 'base' ? o.payment_rail : 'eth');
+      setCashAmt(''); setCashRef(''); setCashMsg('');
+      setCashMethod(o.payment_rail === 'cash' ? 'zelle' : 'other');
     }
   }, [o?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const recordCashPayment = async () => {
+    if (!o) return;
+    const amt = Number(cashAmt);
+    if (!(amt > 0)) { setCashMsg('Amount must be positive.'); return; }
+    setSaving(true); setCashMsg('');
+    try {
+      // Same atomic action as the recon manual tab: resolves by campaign +
+      // order number, refuses cancelled/refunded, audited.
+      const res = await doCashPay({
+        group_buy_id: o.group_buy_id, order_number: o.order_number, method: cashMethod,
+        tx_hash: '', receipt_ref: cashRef, amount_usd: amt, notes: '', actor: userName,
+      }) as { inserted: string }[] | { inserted: string };
+      const inserted = Number(Array.isArray(res) ? res[0]?.inserted : res?.inserted);
+      if (!inserted) { setCashMsg('Could not record — the order may be cancelled/refunded.'); }
+      else { setCashAmt(''); setCashRef(''); setCashMsg('Recorded — counts as received immediately.'); }
+      reloadPayments(); reloadOrder();
+    } catch (e: unknown) {
+      setCashMsg(e instanceof Error ? e.message : 'Failed to record payment');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const rejectPayment = async (p: PaymentRow) => {
     if (!rejectReason.trim()) { setPayMsg('A reason is required — rejections are audited.'); return; }
@@ -354,6 +387,24 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     )}
                   </div>
                 ))}
+
+                <div className={`mt-2 rounded p-2 ${o.payment_rail === 'cash' ? 'border border-green-200 bg-green-50/50' : ''}`}>
+                  {o.payment_rail === 'cash' && (
+                    <p className="text-xs font-medium text-green-900 mb-1.5">Cash order — record the payment here:</p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Input placeholder="Amount $" value={cashAmt} onChange={e => setCashAmt(e.target.value)} className="h-8 w-28 text-xs" />
+                    <Select value={cashMethod} onValueChange={setCashMethod}>
+                      <SelectTrigger className="h-8 w-24 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {['zelle', 'venmo', 'paypal', 'cash', 'other'].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <Input placeholder="Receipt # (optional)" value={cashRef} onChange={e => setCashRef(e.target.value)} className="h-8 flex-1 min-w-32 text-xs" />
+                    <Button size="sm" className="h-8 text-xs" disabled={saving} onClick={recordCashPayment}>Record payment</Button>
+                  </div>
+                  {cashMsg && <p className="text-xs mt-1 text-muted-foreground">{cashMsg}</p>}
+                </div>
 
                 <div className="flex flex-wrap gap-2 mt-2">
                   <Input placeholder="Add correct tx hash…" value={newHash} onChange={e => setNewHash(e.target.value)} className="h-8 flex-1 min-w-40 font-mono text-xs" />
