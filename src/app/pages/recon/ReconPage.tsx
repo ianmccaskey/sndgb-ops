@@ -300,7 +300,7 @@ export function ReconPage() {
                 {pending.map(p => (
                   <TableRow key={p.payment_id}>
                     <TableCell className="font-medium">
-                      <button type="button" className="text-violet-600 hover:underline" onClick={() => setOpenOrderId(p.order_id)}>
+                      <button type="button" className="text-violet-600 hover:underline" onClick={e => { e.stopPropagation(); setOpenOrderId(p.order_id); }}>
                         {p.order_number}
                       </button>
                     </TableCell>
