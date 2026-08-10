@@ -189,7 +189,11 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         order_id: o.id, note, actor: userName,
         detail: JSON.stringify({ removed, added, kept_count: kept.length, pushed: merged }),
       }) as { admin_note: string }[] | { admin_note: string };
-      syncNote(note, Array.isArray(noteRes) ? noteRes[0]?.admin_note : noteRes?.admin_note);
+      const writtenNote = Array.isArray(noteRes) ? noteRes[0]?.admin_note : noteRes?.admin_note;
+      if (typeof writtenNote !== 'string') {
+        throw new Error('Could not write the admin-note trail entry — upstream NOT pushed.');
+      }
+      syncNote(note, writtenNote);
       try {
         await updateB44Order(cfg, o.external_id, { transaction_hashtags: merged.join(' | ') });
       } catch (pushErr: unknown) {
