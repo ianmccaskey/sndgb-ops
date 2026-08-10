@@ -122,9 +122,17 @@ export function normalizeTxHash(method: string, raw: string): string | null {
   let p = (raw || '').trim();
   const ex = p.match(EXPLORER);
   if (ex) p = ex[1];
-  if ((method === 'eth' || method === 'base') && EVM_HASH.test(p)) return p;
+  // EVM hashes are hex — case-insensitive identity, canonicalized lowercase.
+  // Solana signatures are base58 — case IS significant, kept verbatim.
+  if ((method === 'eth' || method === 'base') && EVM_HASH.test(p)) return p.toLowerCase();
   if (method === 'sol' && SOL_SIG.test(p)) return p;
   return null;
+}
+
+/** Canonical form for ref comparison: EVM hashes lowercase, everything else verbatim. */
+export function canonicalTxRef(ref: string): string {
+  const r = (ref || '').trim();
+  return EVM_HASH.test(r) ? r.toLowerCase() : r;
 }
 
 /** Pipe-delimited hash blob → typed payment references; junk is dropped with a note. */
@@ -136,7 +144,8 @@ export function parseHashBlob(blob: string | null | undefined): { payments: Pars
     if (!p) continue;
     const ex = p.match(EXPLORER);
     if (ex) p = ex[1];
-    if (EVM_HASH.test(p) || SOL_SIG.test(p)) payments.push({ kind: 'tx_hash', value: p });
+    if (EVM_HASH.test(p)) payments.push({ kind: 'tx_hash', value: p.toLowerCase() });
+    else if (SOL_SIG.test(p)) payments.push({ kind: 'tx_hash', value: p });
     else if (/^[A-Z0-9-]{8,30}$/i.test(p) && /\d/.test(p)) payments.push({ kind: 'receipt', value: p });
     else junk.push(p);
   }

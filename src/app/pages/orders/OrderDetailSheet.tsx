@@ -9,7 +9,7 @@ import updatePaymentStatus from '@/actions/payments/updatePaymentStatus';
 import addPaymentHash from '@/actions/payments/addPaymentHash';
 import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
 import { B44_DEFAULT_APP_ID, getB44Order, updateB44Order } from '@/lib/base44';
-import { normalizeTxHash } from '@/lib/parseOrderImport';
+import { normalizeTxHash, canonicalTxRef } from '@/lib/parseOrderImport';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
@@ -136,15 +136,17 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       const res = await doGetTxRefs({ order_id: o.id }) as { refs: string; rejected_refs: string }[] | { refs: string; rejected_refs: string };
       const row = Array.isArray(res) ? res[0] : res;
       const local = (row?.refs ?? '').split('|').map(s => s.trim()).filter(Boolean);
-      const rejected = new Set((row?.rejected_refs ?? '').split('|').map(s => s.trim()).filter(Boolean));
+      // Canonical comparison (EVM hashes lowercase) so a checksum-cased copy
+      // upstream still matches the locally stored form; SOL stays verbatim.
+      const rejected = new Set((row?.rejected_refs ?? '').split('|').map(s => canonicalTxRef(s)).filter(Boolean));
       // Read-merge-write, not last-writer-wins: keep every upstream entry we
       // didn't explicitly reject (a ref added in the ordering app since the
       // last pull must survive this push), then append our refs not present.
       const remote = await getB44Order(cfg, o.external_id);
       const upstream = String(remote.transaction_hashtags || '').split('|').map(s => s.trim()).filter(Boolean);
-      const kept = upstream.filter(u => !rejected.has(u));
-      const keptSet = new Set(kept);
-      const merged = [...kept, ...local.filter(h => !keptSet.has(h))];
+      const kept = upstream.filter(u => !rejected.has(canonicalTxRef(u)));
+      const keptSet = new Set(kept.map(canonicalTxRef));
+      const merged = [...kept, ...local.filter(h => !keptSet.has(canonicalTxRef(h)))];
       await updateB44Order(cfg, o.external_id, { transaction_hashtags: merged.join(' | ') });
       setPushMsg(`Pushed ${merged.length} tx ref(s) to the ordering app (${rejected.size} rejected ref(s) removed).`);
     } catch (e: unknown) {
