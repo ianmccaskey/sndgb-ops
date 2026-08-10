@@ -11,16 +11,25 @@ function addPaymentHash() {
   return action('addPaymentHash', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH ins AS (
+      WITH input AS (
+        SELECT CASE WHEN TRIM({{params.tx_hash}}) ~ '^0x[0-9a-fA-F]{64}$'
+                    THEN lower(TRIM({{params.tx_hash}}))
+                    ELSE TRIM({{params.tx_hash}}) END AS h
+      ), ins AS (
         INSERT INTO payments (order_id, method, tx_hash, status)
-        SELECT {{params.order_id}}::bigint, {{params.method}}::payment_method, TRIM({{params.tx_hash}}), 'pending'
-        WHERE TRIM({{params.tx_hash}}) <> ''
-          AND NOT EXISTS (SELECT 1 FROM payments WHERE tx_hash = TRIM({{params.tx_hash}}) AND status <> 'rejected')
+        SELECT {{params.order_id}}::bigint, {{params.method}}::payment_method, input.h, 'pending'
+        FROM input
+        WHERE input.h <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM payments p
+            WHERE (CASE WHEN p.tx_hash ~ '^0x[0-9a-fA-F]{64}$' THEN lower(p.tx_hash) ELSE p.tx_hash END) = input.h
+              AND p.status <> 'rejected'
+          )
         RETURNING id, order_id, method
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'payments', ins.id::text, 'payment_hash_added', {{params.actor}},
-               jsonb_build_object('order_id', ins.order_id, 'method', ins.method, 'tx_hash', TRIM({{params.tx_hash}}))
+               jsonb_build_object('order_id', ins.order_id, 'method', ins.method, 'tx_hash', (SELECT h FROM input))
         FROM ins
         RETURNING row_pk
       )

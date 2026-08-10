@@ -14,7 +14,9 @@ function importPayments() {
     datasourceName: 'SND GB DB',
     query: `
       WITH src AS (
-        SELECT x.kind, x.value, x.method
+        SELECT x.kind,
+               CASE WHEN x.value ~ '^0x[0-9a-fA-F]{64}$' THEN lower(x.value) ELSE x.value END AS value,
+               x.method
         FROM jsonb_to_recordset({{params.payments}}::jsonb) AS x(kind text, value text, method text)
       ), clear_pending_receipts AS (
         DELETE FROM payments
@@ -26,8 +28,12 @@ function importPayments() {
         SELECT DISTINCT ON (s.value) {{params.order_id}}::bigint, s.method::payment_method, s.value, 'pending'
         FROM src s
         WHERE s.kind = 'tx_hash'
-          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.tx_hash = s.value)
-        ON CONFLICT (tx_hash) WHERE tx_hash IS NOT NULL AND status <> 'rejected' DO NOTHING
+          AND NOT EXISTS (
+            SELECT 1 FROM payments p
+            WHERE (CASE WHEN p.tx_hash ~ '^0x[0-9a-fA-F]{64}$' THEN lower(p.tx_hash) ELSE p.tx_hash END) = s.value
+          )
+        ON CONFLICT ((CASE WHEN tx_hash ~ '^0x[0-9a-fA-F]{64}$' THEN lower(tx_hash) ELSE tx_hash END))
+          WHERE tx_hash IS NOT NULL AND status <> 'rejected' DO NOTHING
         RETURNING id
       ), ins_receipts AS (
         INSERT INTO payments (order_id, method, receipt_ref, status)
