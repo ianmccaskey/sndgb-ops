@@ -281,7 +281,7 @@ export function ReconPage() {
                       <span className="inline-flex items-center gap-1">
                         <StatusPill value={r.recon_status} />
                         {r.native_unpriced && (
-                          <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`Customer paid in native ${r.native_unpriced} — the coin amount is recorded but needs a USD value (override or manual pricing).`}>
+                          <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`Customer paid in native ${r.native_unpriced} — coin amount recorded, needs pricing. Open the order and set an override for the TOTAL received USD (override replaces the verified sum).`}>
                             native {r.native_unpriced}
                           </span>
                         )}

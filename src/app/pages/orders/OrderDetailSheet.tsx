@@ -323,7 +323,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                           )}
                         </div>
                         {p.native_symbol && p.status === 'mismatch' && o.override_usd == null && (
-                          <div className="text-xs text-amber-700">Customer paid in native {p.native_symbol} — set the USD value via an order override below, then this counts as received.</div>
+                          <div className="text-xs text-amber-700">Customer paid in native {p.native_symbol}. To count it, set an override below for the order's TOTAL received USD — all payments combined (the override replaces, not adds to, the verified sum).</div>
                         )}
                         {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
                         {p.receipt_ref && <div className="text-xs text-muted-foreground">receipt: {p.receipt_ref}</div>}
