@@ -7,14 +7,17 @@ function listOrderRecon() {
       SELECT r.order_id, r.order_number, r.customer_name, r.payment_rail, r.order_status,
              r.billed_usd, r.received_usd, r.override_usd, r.effective_received_usd,
              r.diff_usd, r.pending_payment_count, r.recon_status,
-             -- flags the UNRESOLVED condition: once an override prices the
-             -- order, the native payment is reconciled and the flag clears
+             -- flags the UNRESOLVED condition: any non-rejected payment
+             -- carrying native value with no USD pricing (covers mixed
+             -- stablecoin+native txs that verified on the stable leg); an
+             -- order-level override resolves it and clears the flag
              CASE WHEN r.override_usd IS NULL THEN
                (SELECT string_agg(DISTINCT p.native_symbol, ' + ')
                 FROM payments p
                 WHERE p.order_id = r.order_id
                   AND p.native_symbol IS NOT NULL
-                  AND p.status = 'mismatch')
+                  AND p.value_at_pay_usd IS NULL
+                  AND p.status <> 'rejected')
              END AS native_unpriced
       FROM v_order_reconciliation r
       WHERE group_buy_id = {{params.group_buy_id}}::bigint

@@ -44,7 +44,7 @@ type ItemRow = { id: number; qty: string; unit_price_usd: string; line_total_usd
 type PaymentRow = {
   id: number; method: string; tx_hash: string | null; receipt_ref: string | null;
   amount_usd: string; status: string; verify_source: string | null; verified_at: string | null; notes: string | null;
-  native_amount: string | null; native_symbol: string | null;
+  native_amount: string | null; native_symbol: string | null; value_at_pay_usd: string | null;
 };
 
 export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null; onClose: () => void }) {
@@ -322,8 +322,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             </span>
                           )}
                         </div>
-                        {p.native_symbol && p.status === 'mismatch' && o.override_usd == null && (
-                          <div className="text-xs text-amber-700">Customer paid in native {p.native_symbol}. To count it, set an override below for the order's TOTAL received USD — all payments combined (the override replaces, not adds to, the verified sum).</div>
+                        {p.native_symbol && p.value_at_pay_usd == null && p.status !== 'rejected' && o.override_usd == null && (
+                          <div className="text-xs text-amber-700">This payment includes native {p.native_symbol} with no USD value yet. To count it, set an override below for the order's TOTAL received USD — all payments combined (the override replaces, not adds to, the verified sum).</div>
                         )}
                         {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
                         {p.receipt_ref && <div className="text-xs text-muted-foreground">receipt: {p.receipt_ref}</div>}
