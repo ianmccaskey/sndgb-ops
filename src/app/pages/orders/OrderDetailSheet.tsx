@@ -8,6 +8,7 @@ import addOverride from '@/actions/payments/addOverride';
 import updatePaymentStatus from '@/actions/payments/updatePaymentStatus';
 import addPaymentHash from '@/actions/payments/addPaymentHash';
 import { B44_DEFAULT_APP_ID, updateB44Order } from '@/lib/base44';
+import { normalizeTxHash } from '@/lib/parseOrderImport';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
@@ -107,8 +108,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
 
   const addHash = async () => {
     if (!o) return;
-    const h = newHash.trim();
-    if (!h) { setPayMsg('Paste the transaction hash.'); return; }
+    const h = normalizeTxHash(newHashMethod, newHash);
+    if (!h) { setPayMsg(`That doesn't look like a valid ${newHashMethod.toUpperCase()} transaction hash (bare hash or explorer URL).`); return; }
     setSaving(true); setPayMsg('');
     try {
       const res = await doAddHash({ order_id: o.id, method: newHashMethod, tx_hash: h, actor: userName }) as { inserted: string }[] | { inserted: string };

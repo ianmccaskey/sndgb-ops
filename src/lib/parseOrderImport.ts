@@ -111,6 +111,22 @@ const EVM_HASH = /^0x[0-9a-fA-F]{64}$/;
 const SOL_SIG = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/; // base58 signature
 const EXPLORER = /(?:solscan\.io\/tx\/|etherscan\.io\/tx\/|basescan\.org\/tx\/)([0-9a-zA-Zx]+)/;
 
+/**
+ * Validate + normalize a single user-entered tx hash for a specific chain.
+ * Accepts a bare hash or an explorer URL (normalized to the hash). Returns
+ * null when the value isn't a plausible hash for that chain — the same
+ * formats the import parser enforces, so manual entries can't create
+ * payment rows the importer itself would have dropped as junk.
+ */
+export function normalizeTxHash(method: string, raw: string): string | null {
+  let p = (raw || '').trim();
+  const ex = p.match(EXPLORER);
+  if (ex) p = ex[1];
+  if ((method === 'eth' || method === 'base') && EVM_HASH.test(p)) return p;
+  if (method === 'sol' && SOL_SIG.test(p)) return p;
+  return null;
+}
+
 /** Pipe-delimited hash blob → typed payment references; junk is dropped with a note. */
 export function parseHashBlob(blob: string | null | undefined): { payments: ParsedPayment[]; junk: string[] } {
   const payments: ParsedPayment[] = [];
