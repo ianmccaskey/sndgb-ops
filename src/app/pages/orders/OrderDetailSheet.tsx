@@ -164,21 +164,41 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         return;
       }
       const merged = [...kept, ...added];
-      await updateB44Order(cfg, o.external_id, { transaction_hashtags: merged.join(' | ') });
-      // Every upstream mutation leaves a local trail: a summary in the admin
-      // notes (short hashes for readability) and the full lists in audit_log.
+      // Every upstream mutation leaves a local trail. The note is written
+      // BEFORE the PUT: a note for a push that then fails is visible and gets
+      // a follow-up failure line, whereas a push without a note would be an
+      // invisible upstream mutation — the exact thing the trail exists for.
+      const ts = () => `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
       const parts = [
         removed.length ? `removed ${removed.map(h => shortHash(h)).join(', ')}` : '',
         added.length ? `added ${added.map(h => shortHash(h)).join(', ')}` : '',
         `kept ${kept.length} upstream ref(s)`,
       ].filter(Boolean).join('; ');
-      const note = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC] ${userName} pushed tx refs to ordering app: ${parts}.`;
+      const note = `${ts()} ${userName} pushed tx refs to ordering app: ${parts}.`;
+      const syncNote = (line: string, dbNote: string | undefined) => {
+        // Pristine editor follows the DB; a dirty draft gets the trail line
+        // appended so a later manual save can't erase it.
+        setAdminNote(prev => {
+          const pristine = prev === (o.admin_note || '');
+          if (pristine && typeof dbNote === 'string') return dbNote;
+          return prev ? `${prev}\n${line}` : line;
+        });
+      };
       const noteRes = await doAppendNote({
         order_id: o.id, note, actor: userName,
         detail: JSON.stringify({ removed, added, kept_count: kept.length, pushed: merged }),
       }) as { admin_note: string }[] | { admin_note: string };
-      const newNote = Array.isArray(noteRes) ? noteRes[0]?.admin_note : noteRes?.admin_note;
-      if (typeof newNote === 'string') setAdminNote(newNote);
+      syncNote(note, Array.isArray(noteRes) ? noteRes[0]?.admin_note : noteRes?.admin_note);
+      try {
+        await updateB44Order(cfg, o.external_id, { transaction_hashtags: merged.join(' | ') });
+      } catch (pushErr: unknown) {
+        const failLine = `${ts()} push FAILED (${pushErr instanceof Error ? pushErr.message : 'unknown error'}) — upstream unchanged; the line above did not take effect.`;
+        try {
+          const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ failed: true }) }) as { admin_note: string }[] | { admin_note: string };
+          syncNote(failLine, Array.isArray(failRes) ? failRes[0]?.admin_note : failRes?.admin_note);
+        } catch { /* the visible error below still tells the operator */ }
+        throw pushErr;
+      }
       reloadOrder();
       setPushMsg(`Pushed ${merged.length} tx ref(s) (${removed.length} removed, ${added.length} added) — noted in admin notes.`);
     } catch (e: unknown) {
