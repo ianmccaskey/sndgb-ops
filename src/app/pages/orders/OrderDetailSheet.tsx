@@ -195,8 +195,15 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         throw new Error('Could not write the admin-note trail entry — upstream NOT pushed.');
       }
       syncNote(note, writtenNote);
+      // Mirror the correction note into the ordering app's own notes field,
+      // in the SAME PUT as the ref list (one atomic upstream write). Append
+      // to whatever is upstream already; skip if this exact line is present.
+      const upstreamNotes = String(remote.notes || '');
+      const mirroredNotes = upstreamNotes.includes(note)
+        ? upstreamNotes
+        : (upstreamNotes ? `${upstreamNotes}\n${note}` : note);
       try {
-        await updateB44Order(cfg, o.external_id, { transaction_hashtags: merged.join(' | ') });
+        await updateB44Order(cfg, o.external_id, { transaction_hashtags: merged.join(' | '), notes: mirroredNotes });
       } catch (pushErr: unknown) {
         // A thrown PUT is not proof the write didn't land (timeouts can follow
         // acceptance). Verify by re-reading upstream before asserting anything.
@@ -218,7 +225,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         throw pushErr;
       }
       reloadOrder();
-      setPushMsg(`Pushed ${merged.length} tx ref(s) (${removed.length} removed, ${added.length} added) — noted in admin notes.`);
+      setPushMsg(`Pushed ${merged.length} tx ref(s) (${removed.length} removed, ${added.length} added) — noted locally and in the ordering app's notes.`);
     } catch (e: unknown) {
       setPushMsg(e instanceof Error ? e.message : 'Push failed');
     } finally {
