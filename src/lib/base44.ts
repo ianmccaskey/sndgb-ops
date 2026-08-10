@@ -110,6 +110,35 @@ export type B44Order = {
   [key: string]: unknown;
 };
 
+/**
+ * Partial update of one ordering-app Order (only the provided fields change).
+ * Used to push corrections — e.g. a fixed transaction_hashtags list — back to
+ * the source so the two systems agree on the next pull.
+ */
+export async function updateB44Order(cfg: B44Config, orderId: string, fields: Record<string, unknown>): Promise<void> {
+  const appId = cfg.appId.trim() || B44_DEFAULT_APP_ID;
+  const token = cfg.token.trim();
+  let res: Response;
+  try {
+    res = await fetch(`https://base44.app/api/apps/${appId}/entities/Order/${encodeURIComponent(orderId)}`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        api_key: token,
+        'Content-Type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify(fields),
+    });
+  } catch {
+    throw new Error('Could not reach the ordering app API — check your network connection.');
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as { message?: string } | null;
+    throw new Error(body?.message || `Ordering app update failed (HTTP ${res.status}).`);
+  }
+}
+
 /** All orders for one group buy, filtered server-side and paginated. */
 export async function listB44Orders(cfg: B44Config, gbExternalId: string): Promise<B44Order[]> {
   const out: B44Order[] = [];

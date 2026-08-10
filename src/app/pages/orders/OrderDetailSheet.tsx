@@ -5,6 +5,9 @@ import getOrderItems from '@/actions/orders/getOrderItems';
 import listOrderPayments from '@/actions/payments/listOrderPayments';
 import updateOrderAdmin from '@/actions/orders/updateOrderAdmin';
 import addOverride from '@/actions/payments/addOverride';
+import updatePaymentStatus from '@/actions/payments/updatePaymentStatus';
+import addPaymentHash from '@/actions/payments/addPaymentHash';
+import { B44_DEFAULT_APP_ID, updateB44Order } from '@/lib/base44';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
@@ -40,17 +43,19 @@ type PaymentRow = {
 };
 
 export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null; onClose: () => void }) {
-  const { userName } = useApp();
+  const { userName, settings } = useApp();
   const open = orderId != null;
   const [rawOrder, , , reloadOrder] = useLoadAction(getOrder, [orderId], { order_id: orderId }, { enabled: open });
   const [rawItems] = useLoadAction(getOrderItems, [orderId], { order_id: orderId }, { enabled: open });
-  const [rawPayments] = useLoadAction(listOrderPayments, [orderId], { order_id: orderId }, { enabled: open });
+  const [rawPayments, , , reloadPayments] = useLoadAction(listOrderPayments, [orderId], { order_id: orderId }, { enabled: open });
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
   const payments = rows<PaymentRow>(rawPayments);
 
   const [doUpdate] = useMutateAction(updateOrderAdmin);
   const [doOverride] = useMutateAction(addOverride);
+  const [doPayStatus] = useMutateAction(updatePaymentStatus);
+  const [doAddHash] = useMutateAction(addPaymentHash);
 
   const [status, setStatus] = useState('imported');
   const [hold, setHold] = useState(false);
@@ -60,6 +65,15 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // payment corrections
+  const [rejectingId, setRejectingId] = useState<number | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [newHash, setNewHash] = useState('');
+  const [newHashMethod, setNewHashMethod] = useState('eth');
+  const [payMsg, setPayMsg] = useState('');
+  const [pushMsg, setPushMsg] = useState('');
+  const [pushing, setPushing] = useState(false);
+
   useEffect(() => {
     if (o) {
       setStatus(o.status);
@@ -68,8 +82,64 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       setOverrideAmt('');
       setOverrideReason('');
       setError('');
+      setRejectingId(null); setRejectReason('');
+      setNewHash(''); setPayMsg(''); setPushMsg('');
+      setNewHashMethod(o.payment_rail === 'sol' || o.payment_rail === 'base' ? o.payment_rail : 'eth');
     }
   }, [o?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const rejectPayment = async (p: PaymentRow) => {
+    if (!rejectReason.trim()) { setPayMsg('A reason is required — rejections are audited.'); return; }
+    setSaving(true); setPayMsg('');
+    try {
+      await doPayStatus({
+        payment_id: p.id, status: 'rejected', amount_usd: 0,
+        notes: rejectReason.trim(), actor: userName,
+      });
+      setRejectingId(null); setRejectReason('');
+      reloadPayments(); reloadOrder();
+    } catch (e: unknown) {
+      setPayMsg(e instanceof Error ? e.message : 'Failed to reject payment');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addHash = async () => {
+    if (!o) return;
+    const h = newHash.trim();
+    if (!h) { setPayMsg('Paste the transaction hash.'); return; }
+    setSaving(true); setPayMsg('');
+    try {
+      const res = await doAddHash({ order_id: o.id, method: newHashMethod, tx_hash: h, actor: userName }) as { inserted: string }[] | { inserted: string };
+      const inserted = Number(Array.isArray(res) ? res[0]?.inserted : res?.inserted);
+      if (!inserted) { setPayMsg('That hash is already recorded (on this or another order).'); }
+      else { setPayMsg('Added as pending — run Verify on the Reconciliation page to confirm it on-chain.'); setNewHash(''); }
+      reloadPayments();
+    } catch (e: unknown) {
+      setPayMsg(e instanceof Error ? e.message : 'Failed to add hash');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const pushTxRefs = async () => {
+    if (!o?.external_id) return;
+    const hashes = payments.filter(p => p.tx_hash && p.status !== 'rejected').map(p => p.tx_hash as string);
+    setPushing(true); setPushMsg('');
+    try {
+      await updateB44Order(
+        { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' },
+        o.external_id,
+        { transaction_hashtags: hashes.join(' | ') },
+      );
+      setPushMsg(`Pushed ${hashes.length} tx ref(s) to the ordering app.`);
+    } catch (e: unknown) {
+      setPushMsg(e instanceof Error ? e.message : 'Push failed');
+    } finally {
+      setPushing(false);
+    }
+  };
 
   const save = async () => {
     if (!o) return;
@@ -155,18 +225,59 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 <h3 className="font-semibold mb-1">Payments</h3>
                 {payments.length === 0 && <p className="text-muted-foreground">No payment records.</p>}
                 {payments.map(p => (
-                  <div key={p.id} className="flex items-center justify-between gap-2 py-1 border-b last:border-0">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <StatusPill value={p.status} />
-                        <span className="text-xs uppercase text-muted-foreground">{p.method}</span>
+                  <div key={p.id} className={`py-1 border-b last:border-0 ${p.status === 'rejected' ? 'opacity-50' : ''}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <StatusPill value={p.status} />
+                          <span className="text-xs uppercase text-muted-foreground">{p.method}</span>
+                        </div>
+                        {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
+                        {p.receipt_ref && <div className="text-xs text-muted-foreground">receipt: {p.receipt_ref}</div>}
+                        {p.status === 'rejected' && p.notes && <div className="text-xs text-muted-foreground">rejected: {p.notes}</div>}
                       </div>
-                      {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
-                      {p.receipt_ref && <div className="text-xs text-muted-foreground">receipt: {p.receipt_ref}</div>}
+                      <div className="flex items-center gap-2">
+                        <span className="text-right whitespace-nowrap">{Number(p.amount_usd) > 0 ? fmtUSD(p.amount_usd) : '—'}</span>
+                        {p.status !== 'rejected' && rejectingId !== p.id && (
+                          <Button size="sm" variant="ghost" className="h-6 text-xs text-red-600" onClick={() => { setRejectingId(p.id); setRejectReason(''); setPayMsg(''); }}>
+                            Reject
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <div className="text-right whitespace-nowrap">{Number(p.amount_usd) > 0 ? fmtUSD(p.amount_usd) : '—'}</div>
+                    {rejectingId === p.id && (
+                      <div className="flex gap-2 mt-1">
+                        <Input placeholder="Why is this payment wrong? (audited)" value={rejectReason} onChange={e => setRejectReason(e.target.value)} className="h-8 flex-1 text-xs" />
+                        <Button size="sm" variant="destructive" className="h-8 text-xs" disabled={saving} onClick={() => rejectPayment(p)}>Confirm</Button>
+                        <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setRejectingId(null)}>Cancel</Button>
+                      </div>
+                    )}
                   </div>
                 ))}
+
+                <div className="flex gap-2 mt-2">
+                  <Input placeholder="Add correct tx hash…" value={newHash} onChange={e => setNewHash(e.target.value)} className="h-8 flex-1 font-mono text-xs" />
+                  <Select value={newHashMethod} onValueChange={setNewHashMethod}>
+                    <SelectTrigger className="h-8 w-20"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {['eth', 'sol', 'base'].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Button size="sm" className="h-8 text-xs" disabled={saving} onClick={addHash}>Add</Button>
+                </div>
+                {payMsg && <p className="text-xs mt-1 text-muted-foreground">{payMsg}</p>}
+
+                {o.external_id && (settings.base44_token || '') !== '' && (
+                  <div className="mt-2 pt-2 border-t">
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" className="h-8 text-xs" disabled={pushing} onClick={pushTxRefs}>
+                        {pushing ? 'Pushing…' : 'Push tx refs to ordering app'}
+                      </Button>
+                      <span className="text-xs text-muted-foreground">replaces the order's hash list upstream with the non-rejected set</span>
+                    </div>
+                    {pushMsg && <p className="text-xs mt-1 text-muted-foreground">{pushMsg}</p>}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">
