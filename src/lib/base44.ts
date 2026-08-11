@@ -110,6 +110,39 @@ export type B44Order = {
   [key: string]: unknown;
 };
 
+/**
+ * Does an ordering-app Order still exist? Used as a click-time re-check
+ * before cancelling a local order as "deleted upstream" — the pulled snapshot
+ * that flagged it may be minutes old and the order could have been restored.
+ * Only a definitive not-found answers false; auth/network/server errors THROW
+ * so the caller aborts rather than cancelling on bad evidence.
+ */
+export async function b44OrderExists(cfg: B44Config, orderId: string): Promise<boolean> {
+  const appId = cfg.appId.trim() || B44_DEFAULT_APP_ID;
+  const token = cfg.token.trim();
+  let res: Response;
+  try {
+    res = await fetch(`https://base44.app/api/apps/${appId}/entities/Order/${encodeURIComponent(orderId)}`, {
+      headers: { Authorization: `Bearer ${token}`, api_key: token, accept: 'application/json' },
+    });
+  } catch {
+    throw new Error('Could not reach the ordering app API — check your network connection.');
+  }
+  if (res.status === 404) return false;
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as { message?: string } | null;
+    throw new Error(body?.message || `Ordering app existence check failed (HTTP ${res.status}).`);
+  }
+  // A 2xx that isn't a well-formed order for THIS id is ambiguity (proxy
+  // page, API shape change), not proof of deletion — it must throw, never
+  // count as "deleted". Only the definitive 404 above returns false.
+  const data = await res.json().catch(() => null) as { id?: string } | null;
+  if (!data || typeof data !== 'object' || data.id !== orderId) {
+    throw new Error('Ordering app existence check returned an unexpected response — not treating the order as deleted.');
+  }
+  return true;
+}
+
 /** Fetch one ordering-app Order by its base44 id. */
 export async function getB44Order(cfg: B44Config, orderId: string): Promise<B44Order> {
   const data = await b44Get(cfg, `/entities/Order/${encodeURIComponent(orderId)}`);

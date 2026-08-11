@@ -7,11 +7,13 @@ import upsertOrderItem from '@/actions/orders/upsertOrderItem';
 import deleteOrderItemsNotIn from '@/actions/orders/deleteOrderItemsNotIn';
 import importPayments from '@/actions/orders/importPayments';
 import syncOrderStatus from '@/actions/orders/syncOrderStatus';
+import listActiveExternalOrders from '@/actions/orders/listActiveExternalOrders';
+import cancelDeletedUpstream from '@/actions/orders/cancelDeletedUpstream';
 import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { fmtUSD } from '@/lib/fmt';
 import { parseOrderPaste, ParsedOrder, ParseResult } from '@/lib/parseOrderImport';
-import { B44_DEFAULT_APP_ID, B44Order, listB44Orders } from '@/lib/base44';
+import { B44_DEFAULT_APP_ID, B44Order, b44OrderExists, listB44Orders } from '@/lib/base44';
 import { mapB44Orders, MappedOrders } from '@/lib/mapB44Order';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -21,13 +23,14 @@ import { ClipboardPaste, CloudDownload, CheckCircle2, XCircle } from 'lucide-rea
 
 type CampaignProduct = { sku_code: string };
 type CatalogProduct = { external_id: string | null; sku_code: string };
+type LocalExtOrder = { id: number; order_number: string; external_id: string; contact_name: string | null; total_usd: string };
 
 type RowState = { orderNumber: string; ok: boolean; message: string };
 
 const EMPTY_RESULT: ParseResult = { orders: [], errors: [] };
 
 export function ImportPage() {
-  const { groupBuyId, groupBuy, settings } = useApp();
+  const { groupBuyId, groupBuy, settings, userName } = useApp();
   const [text, setText] = useState('');
   const [importing, setImporting] = useState(false);
   const [results, setResults] = useState<RowState[]>([]);
@@ -52,6 +55,13 @@ export function ImportPage() {
   const [doPruneItems] = useMutateAction(deleteOrderItemsNotIn);
   const [doPayments] = useMutateAction(importPayments);
   const [doSyncStatus] = useMutateAction(syncOrderStatus);
+  const [doCancelDeleted] = useMutateAction(cancelDeletedUpstream);
+  const [rawLocalExt, , , reloadLocalExt] = useLoadAction(
+    listActiveExternalOrders,
+    [groupBuyId, groupBuy?.external_id],
+    { group_buy_id: groupBuyId, gb_external_id: groupBuy?.external_id || '' },
+    { enabled: enabled && !!groupBuy?.external_id },
+  );
 
   // Ordering-app pull — same preview/import flow as paste, different source.
   const cfg = useMemo(() => ({
@@ -59,20 +69,22 @@ export function ImportPage() {
     token: settings.base44_token || '',
   }), [settings.base44_app_id, settings.base44_token]);
   const canPull = !!cfg.token && !!groupBuy?.external_id;
-  // Raw pulled orders stay bound to the campaign they were pulled for; the
-  // ParsedOrder mapping is derived below so it re-runs when the catalog loads
-  // and goes inert the moment the campaign selector changes.
-  const [pulled, setPulled] = useState<{ forGroupBuyId: number; orders: B44Order[] } | null>(null);
+  // Raw pulled orders stay bound to their FULL source identity — the local
+  // campaign AND the ordering-app source that produced them (app id, external
+  // campaign id, token). The snapshot goes inert the moment any of those
+  // change (campaign relinked, settings edited), so a stale set can never
+  // drive the deleted-upstream diff against a different source.
+  const [pulled, setPulled] = useState<{ forGroupBuyId: number; appId: string; gbExternalId: string; token: string; orders: B44Order[] } | null>(null);
   const [pulling, setPulling] = useState(false);
   const [pullError, setPullError] = useState('');
 
   const pull = async () => {
     if (!canPull || !groupBuy?.external_id || groupBuyId == null) return;
-    const forGroupBuyId = groupBuyId;
+    const source = { forGroupBuyId: groupBuyId, appId: cfg.appId, gbExternalId: groupBuy.external_id, token: cfg.token };
     setPulling(true); setPullError(''); setResults([]);
     try {
-      const orders = await listB44Orders(cfg, groupBuy.external_id);
-      setPulled({ forGroupBuyId, orders });
+      const orders = await listB44Orders(cfg, source.gbExternalId);
+      setPulled({ ...source, orders });
       setText('');
     } catch (e: unknown) {
       setPullError(e instanceof Error ? e.message : 'Failed to pull orders');
@@ -81,21 +93,36 @@ export function ImportPage() {
     }
   };
 
+  // Snapshot is only usable while its source identity still matches the
+  // current one — everything below consumes pulledFresh, never pulled.
+  const pulledFresh = useMemo(
+    () => (pulled
+      && pulled.forGroupBuyId === groupBuyId
+      && pulled.appId === cfg.appId
+      && pulled.gbExternalId === (groupBuy?.external_id || '')
+      && pulled.token === cfg.token
+      ? pulled : null),
+    [pulled, groupBuyId, cfg.appId, cfg.token, groupBuy?.external_id],
+  );
+
   // Pull automatically once per campaign, only after the catalog has loaded —
   // the identity mapping is meaningless against an unloaded catalog.
   const autoPulledFor = useRef<number | null>(null);
+  // A source change (relinked campaign, edited settings) invalidates the
+  // snapshot above — also re-arm the auto-pull so a fresh one replaces it.
+  useEffect(() => { autoPulledFor.current = null; }, [cfg.appId, cfg.token, groupBuy?.external_id]);
   useEffect(() => {
     if (canPull && !catalogLoading && groupBuyId != null && autoPulledFor.current !== groupBuyId) {
       autoPulledFor.current = groupBuyId;
       pull();
     }
-  }, [canPull, catalogLoading, groupBuyId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canPull, catalogLoading, groupBuyId, cfg, groupBuy?.external_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setResults([]); }, [groupBuyId]);
 
   const pulledMapped = useMemo<MappedOrders | null>(
-    () => (pulled && pulled.forGroupBuyId === groupBuyId ? mapB44Orders(pulled.orders, skuByExternalId) : null),
-    [pulled, groupBuyId, skuByExternalId],
+    () => (pulledFresh ? mapB44Orders(pulledFresh.orders, skuByExternalId) : null),
+    [pulledFresh, skuByExternalId],
   );
 
   const parsed = useMemo(
@@ -119,6 +146,57 @@ export function ImportPage() {
 
   // Upstream cancellations only apply when the pulled set is the active source.
   const cancellations = text.trim() === '' && pulledMapped ? pulledMapped.cancellations : [];
+
+  // Orders DELETED upstream never appear in the pull at all (deletion has no
+  // status), so they'd linger locally in demand/revenue forever. Diff the
+  // pulled ids against active local orders that came from the ordering app.
+  // Guards against false positives: only for a completed pull (listB44Orders
+  // throws on any page error, so a returned set is fully paginated), only for
+  // the campaign it was pulled for, only while the pull is the active source,
+  // and never when the pull came back empty — an empty set alongside existing
+  // local orders means a broken filter/token, not a mass deletion.
+  const [deletedResults, setDeletedResults] = useState<Map<number, { busy?: boolean; ok?: boolean; message?: string }>>(new Map());
+  useEffect(() => { setDeletedResults(new Map()); }, [groupBuyId, pulled]);
+  const missingUpstream = useMemo<LocalExtOrder[]>(() => {
+    if (text.trim() !== '' || !pulledFresh || pulledFresh.orders.length === 0) return [];
+    const pulledIds = new Set(pulledFresh.orders.map(o => o.id));
+    return rows<LocalExtOrder>(rawLocalExt).filter(o => !pulledIds.has(o.external_id));
+  }, [text, pulledFresh, rawLocalExt]);
+
+  // Cancelling is a human call (per-order click): a vanished id USUALLY means
+  // deleted upstream, but the operator confirms. Cancelled orders drop out of
+  // demand, recon, and P&L (views exclude them); the note records why.
+  const markDeletedUpstream = async (m: LocalExtOrder) => {
+    // Inert snapshot (source changed since the flag was computed) — refuse.
+    if (!pulledFresh) return;
+    setDeletedResults(prev => new Map(prev).set(m.id, { busy: true }));
+    try {
+      // The pulled snapshot that flagged this row may be stale — re-check the
+      // specific order at click time. Only a definitive not-found proceeds;
+      // auth/network errors throw and abort the cancel.
+      if (await b44OrderExists(cfg, m.external_id)) {
+        setDeletedResults(prev => new Map(prev).set(m.id, { ok: false, message: 'Still exists in the ordering app — pull again to refresh this list.' }));
+        return;
+      }
+      const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
+      // One atomic action: status + note + audit land together or not at all,
+      // and a retry against an already-cancelled order writes nothing twice.
+      const res = await doCancelDeleted({
+        order_id: m.id,
+        group_buy_id: groupBuyId,
+        gb_external_id: pulledFresh.gbExternalId,
+        note: `${ts} marked cancelled: order no longer exists in the ordering app (deleted upstream).`,
+        actor: userName,
+        external_id: m.external_id,
+      }) as { id: number }[] | { id: number } | null;
+      const touched = Array.isArray(res) ? res.length > 0 : !!res;
+      setDeletedResults(prev => new Map(prev).set(m.id, { ok: true, message: touched ? 'marked cancelled' : 'already cancelled' }));
+      reloadLocalExt();
+    } catch (e: unknown) {
+      setDeletedResults(prev => new Map(prev).set(m.id, { ok: false, message: e instanceof Error ? e.message : 'Failed to cancel' }));
+    }
+  };
+
   const statusCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const o of parsed.orders) {
@@ -315,6 +393,28 @@ export function ImportPage() {
                     <div key={c.orderNumber}>
                       <span className="font-mono">{c.orderNumber}</span> → {c.status} <span className="text-xs">({c.sourceStatus})</span>
                       {res && <span className={`text-xs ml-2 ${res.ok ? 'text-green-700' : 'text-red-600'}`}>{res.message}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {missingUpstream.length > 0 && (
+              <div className="rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-900 space-y-1">
+                <p className="font-semibold">
+                  Deleted upstream? — {missingUpstream.length} active local order(s) no longer exist in the ordering app.
+                  Review each and mark cancelled if the deletion was intentional (drops it from demand, reconciliation, and P&L):
+                </p>
+                {missingUpstream.map(m => {
+                  const r = deletedResults.get(m.id);
+                  return (
+                    <div key={m.id} className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono">{m.order_number}</span>
+                      <span>{m.contact_name}</span>
+                      <span className="text-xs">{fmtUSD(Number(m.total_usd))}</span>
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-xs" disabled={r?.busy || r?.ok} onClick={() => markDeletedUpstream(m)}>
+                        {r?.busy ? 'Cancelling…' : 'Mark cancelled'}
+                      </Button>
+                      {r?.message && <span className={`text-xs ${r.ok ? 'text-green-700' : 'text-red-600'}`}>{r.message}</span>}
                     </div>
                   );
                 })}
