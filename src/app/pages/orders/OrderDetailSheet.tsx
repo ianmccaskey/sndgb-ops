@@ -11,6 +11,7 @@ import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
 import addManualPaymentByNumber from '@/actions/payments/addManualPaymentByNumber';
 import reopenPaymentOnNetwork from '@/actions/payments/reopenPaymentOnNetwork';
 import setOrderItemComp from '@/actions/orders/setOrderItemComp';
+import updateOrderRail from '@/actions/orders/updateOrderRail';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { shortHash } from '@/lib/explorer';
 import { B44_DEFAULT_APP_ID, getB44Order, updateB44Order } from '@/lib/base44';
@@ -74,6 +75,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doCashPay] = useMutateAction(addManualPaymentByNumber);
   const [doReopenNetwork] = useMutateAction(reopenPaymentOnNetwork);
   const [doSetComp] = useMutateAction(setOrderItemComp);
+  const [doUpdateRail] = useMutateAction(updateOrderRail);
 
   const [status, setStatus] = useState('imported');
   const [hold, setHold] = useState(false);
@@ -88,6 +90,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [cashMethod, setCashMethod] = useState('zelle');
   const [cashRef, setCashRef] = useState('');
   const [cashMsg, setCashMsg] = useState('');
+
+  // rail correction (order says ETH, money verified on SOL)
+  const [railMsg, setRailMsg] = useState('');
 
   // comped (free) items
   const [compingId, setCompingId] = useState<number | null>(null);
@@ -118,6 +123,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       setCashAmt(''); setCashRef(''); setCashMsg('');
       setCashMethod(o.payment_rail === 'cash' ? 'zelle' : 'other');
       setCompingId(null); setCompQty(''); setCompReason(''); setCompMsg('');
+      setRailMsg('');
     }
   }, [o?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -154,6 +160,147 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       reloadPayments(); reloadOrder();
     } catch (e: unknown) {
       setPayMsg(e instanceof Error ? e.message : 'Failed to re-open payment');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Rail correction: pushTxRefs only syncs the HASH LIST, so when a payment
+  // is re-opened on the right network the push correctly reports "already
+  // matches" — what's wrong upstream is the order's payment_method field.
+  // These are the exact strings the ordering app uses today (observed across
+  // all imported orders); BASE has no known upstream value, so a base
+  // correction applies locally only.
+  const UPSTREAM_METHOD: Record<string, string> = { sol: 'usdc_sol', eth: 'paige-usdc-eth' };
+
+  // Offered only when the evidence is unambiguous: every VERIFIED tx-hash
+  // payment sits on one single network and it isn't the order's rail.
+  const verifiedTxMethods = [...new Set(payments.filter(p => p.status === 'verified' && p.tx_hash).map(p => p.method))];
+  const railMismatch = o && ['eth', 'sol', 'base'].includes(o.payment_rail || '')
+    && verifiedTxMethods.length === 1 && verifiedTxMethods[0] !== o.payment_rail
+    ? verifiedTxMethods[0] : null;
+
+  const correctRail = async (newRail: string) => {
+    if (!o) return;
+    setSaving(true); setRailMsg('');
+    try {
+      const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
+      const upstreamValue = UPSTREAM_METHOD[newRail];
+      // No known upstream representation (BASE today): a local-only change
+      // would be silently reverted by the next import, so refuse instead of
+      // pretending. The UI never offers the button in this case; this is the
+      // backstop.
+      if (!o.external_id || !upstreamValue) {
+        setRailMsg('This correction cannot be pushed to the ordering app (no upstream value for that network) — a local-only change would be reverted by the next import.');
+        return;
+      }
+      // LOCAL FIRST: updateOrderRail re-proves the evidence against fresh
+      // database state (expected rail + exactly-one verified network =
+      // target) inside its transaction. Nothing touches the ordering app on
+      // stale render-time evidence — a no-row refusal is a hard stop with
+      // zero changes anywhere.
+      // Every local note write below must also patch the admin-note editor
+      // state — the editor only rehydrates on order change, and a later
+      // Admin Save with stale text would overwrite the appended trail.
+      const syncNote = (line: string, written?: string | null) => {
+        setAdminNote(prev => written ?? (prev ? `${prev}\n${line}` : line));
+      };
+
+      const localLine = `${ts} payment rail corrected ${o.payment_rail} → ${newRail}: payment verified on ${newRail.toUpperCase()}.`;
+      const res = await doUpdateRail({
+        order_id: o.id, rail: newRail, expected_rail: o.payment_rail, actor: userName,
+        note: localLine,
+      }) as { admin_note: string | null }[] | { admin_note: string | null } | null;
+      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+      if (wrote) {
+        const writtenNote = Array.isArray(res) ? res[0]?.admin_note : res?.admin_note;
+        syncNote(localLine, writtenNote);
+      }
+      if (!wrote) {
+        setRailMsg('Nothing changed — the order or its payments were modified since you opened it. Re-open the order and check.');
+        reloadOrder();
+        return;
+      }
+
+      // Then push upstream. If this fails, local and upstream disagree — but
+      // that state self-heals: the next import copies the (still wrong)
+      // upstream payment_method back over the local rail, the mismatch box
+      // reappears, and the operator retries the whole correction.
+      const cfg = { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' };
+      // Read-check-write: a retry must not push (or note) the same
+      // correction twice if upstream already matches. The read itself can
+      // fail (expired token, network) with the local rail already committed —
+      // that must leave a trail line too, not just a thrown error, so the
+      // whole upstream phase reports through the same failure path.
+      let b44;
+      try {
+        b44 = await getB44Order(cfg, o.external_id);
+      } catch (readErr: unknown) {
+        const skipLine = `${ts} upstream payment_method push SKIPPED — could not read the ordering app (${readErr instanceof Error ? readErr.message : 'unknown error'}); nothing was changed upstream. Local rail is corrected; the next import will revert it and re-offer this correction.`;
+        let skipNoted = false;
+        try {
+          const skipRes = await doAppendNote({ order_id: o.id, note: skipLine, actor: userName, detail: JSON.stringify({ rail_push_skipped: true }) }) as { admin_note: string }[] | { admin_note: string };
+          syncNote(skipLine, Array.isArray(skipRes) ? skipRes[0]?.admin_note : skipRes?.admin_note);
+          skipNoted = true;
+        } catch { /* surfaced in the message below */ }
+        setRailMsg(skipNoted
+          ? 'Local rail corrected, but the ordering app could not be reached — nothing was pushed. The next import will revert the local rail and re-offer this correction; retry then.'
+          : 'Local rail corrected, but the ordering app could not be reached AND the audit note failed to write — record this manually in the admin notes. The next import will revert the local rail and re-offer this correction; retry then.');
+        reloadOrder();
+        return;
+      }
+      if (String(b44.payment_method || '') !== upstreamValue) {
+        // Local trail BEFORE the upstream mutation — standing rule for
+        // anything that changes the ordering app.
+        const pushingLine = `${ts} pushing payment_method correction to the ordering app: ${upstreamValue} (${newRail.toUpperCase()}).`;
+        const pushingRes = await doAppendNote({
+          order_id: o.id,
+          note: pushingLine,
+          actor: userName,
+          detail: JSON.stringify({ rail_push: true, from: b44.payment_method || null, to: upstreamValue }),
+        }) as { admin_note: string }[] | { admin_note: string };
+        syncNote(pushingLine, Array.isArray(pushingRes) ? pushingRes[0]?.admin_note : pushingRes?.admin_note);
+        const line = `${ts} payment method corrected to ${upstreamValue} (${newRail.toUpperCase()}) by SND GB Ops — customer paid on ${newRail.toUpperCase()}.`;
+        try {
+          await updateB44Order(cfg, o.external_id, {
+            payment_method: upstreamValue,
+            notes: b44.notes ? `${b44.notes}\n${line}` : line,
+          });
+        } catch (pushErr: unknown) {
+          // The trail must state the ACTUAL outcome of the attempt, not
+          // just that one started — verify the FULL intended postcondition
+          // (method AND the mirrored note). A matching method alone could
+          // be a partial apply or someone else's concurrent fix; treating
+          // that as landed would over-claim in both audit trails.
+          let landed = false;
+          let outcome = 'outcome UNKNOWN — check the ordering app before retrying';
+          try {
+            const after = await getB44Order(cfg, o.external_id);
+            const methodOk = String(after.payment_method || '') === upstreamValue;
+            const noteOk = String(after.notes || '').includes(line);
+            landed = methodOk && noteOk;
+            outcome = landed ? 'it LANDED upstream (method + note) despite the error'
+              : methodOk ? 'PARTIAL: upstream payment_method matches but the correction note is missing — verify who changed it and add the note upstream manually'
+              : 'upstream is unchanged';
+          } catch { /* keep UNKNOWN */ }
+          const failLine = `${ts} payment_method push error (${pushErr instanceof Error ? pushErr.message : 'unknown error'}) — ${outcome}.`;
+          let failNoted = false;
+          try {
+            const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ rail_push_error: true, landed }) }) as { admin_note: string }[] | { admin_note: string };
+            syncNote(failLine, Array.isArray(failRes) ? failRes[0]?.admin_note : failRes?.admin_note);
+            failNoted = true;
+          } catch { /* surfaced in the message below */ }
+          if (!landed) {
+            setRailMsg(`Local rail corrected, but the ordering app push failed (${outcome}).${failNoted ? '' : ' The audit note ALSO failed to write — record this manually in the admin notes.'} The next import will revert the local rail and re-offer this correction — retry then.`);
+            reloadOrder();
+            return;
+          }
+        }
+      }
+      setRailMsg(`Rail corrected to ${newRail.toUpperCase()} and pushed to the ordering app.`);
+      reloadOrder();
+    } catch (e: unknown) {
+      setRailMsg(e instanceof Error ? e.message : 'Failed to correct rail');
     } finally {
       setSaving(false);
     }
@@ -516,6 +663,26 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     )}
                   </div>
                 ))}
+
+                {railMismatch && (
+                  <div className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-amber-900">
+                    <p className="text-xs">
+                      This order's rail is <span className="font-semibold uppercase">{o.payment_rail}</span> but its verified payment is on{' '}
+                      <span className="font-semibold uppercase">{railMismatch}</span> — the ordering app still attributes it to the wrong network
+                      (the hash-list push can't fix this; it only syncs hashes).
+                    </p>
+                    {o.external_id && UPSTREAM_METHOD[railMismatch] ? (
+                      <Button size="sm" variant="outline" className="h-7 text-xs mt-1.5" disabled={saving} onClick={() => correctRail(railMismatch)}>
+                        Correct rail to {railMismatch.toUpperCase()} + push to ordering app
+                      </Button>
+                    ) : (
+                      <p className="text-xs mt-1 font-medium">
+                        No known ordering-app value for {railMismatch.toUpperCase()} — can't correct safely (a local-only change would be reverted by the next import).
+                      </p>
+                    )}
+                  </div>
+                )}
+                {railMsg && <p className="text-xs mt-1 text-muted-foreground">{railMsg}</p>}
 
                 <div className={`mt-2 rounded p-2 ${o.payment_rail === 'cash' ? 'border border-green-200 bg-green-50/50' : ''}`}>
                   {o.payment_rail === 'cash' && (
