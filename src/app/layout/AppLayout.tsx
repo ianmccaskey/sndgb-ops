@@ -118,7 +118,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground hidden sm:inline">Campaign</span>
               <Select
-                value={groupBuyId != null ? String(groupBuyId) : undefined}
+                value={groupBuyId != null ? String(groupBuyId) : ''}
                 onValueChange={(v) => setGroupBuyId(Number(v))}
               >
                 <SelectTrigger className="h-8 w-[150px] sm:w-[220px] text-sm">

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useUser, useLoadAction } from '@uibakery/data';
 import listGroupBuys from '@/actions/groupBuys/listGroupBuys';
 import getSettings from '@/actions/settings/getSettings';
@@ -39,7 +39,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const user = useUser();
   const [rawBuys, buysLoading, , reloadGroupBuys] = useLoadAction(listGroupBuys, [], {});
   const [rawSettings, , , reloadSettings] = useLoadAction(getSettings, [], {});
-  const groupBuys = rows<GroupBuyRow>(rawBuys);
+  // Memoized: rows() builds a fresh array, and this feeds the context-value
+  // memo below. An unstable identity here re-created the context value on
+  // EVERY provider render, cascading a re-render through every page — the
+  // builder re-renders the root constantly, so the whole app churned with it.
+  const groupBuys = useMemo(() => rows<GroupBuyRow>(rawBuys), [rawBuys]);
 
   const [groupBuyId, setGroupBuyIdState] = useState<number | null>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -54,10 +58,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [groupBuys, groupBuyId]);
 
-  const setGroupBuyId = (id: number) => {
+  const setGroupBuyId = useCallback((id: number) => {
     localStorage.setItem(STORAGE_KEY, String(id));
     setGroupBuyIdState(id);
-  };
+  }, []);
 
   const settings = useMemo(() => {
     const map: Record<string, string> = {};
@@ -77,7 +81,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     reloadGroupBuys,
     settings,
     reloadSettings,
-  }), [user.name, user.email, groupBuys, groupBuyId, settings, reloadGroupBuys, reloadSettings]);
+  }), [user.name, user.email, groupBuys, groupBuyId, setGroupBuyId, settings, reloadGroupBuys, reloadSettings]);
 
   if (buysLoading && groupBuys.length === 0) {
     return (
