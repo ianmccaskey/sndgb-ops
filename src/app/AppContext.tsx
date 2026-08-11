@@ -3,6 +3,7 @@ import { useUser, useLoadAction } from '@uibakery/data';
 import listGroupBuys from '@/actions/groupBuys/listGroupBuys';
 import getSettings from '@/actions/settings/getSettings';
 import { rows } from '@/lib/rows';
+import { useStableValue, useStableCallback } from '@/lib/useStable';
 
 export type GroupBuyRow = {
   id: number;
@@ -37,13 +38,17 @@ const STORAGE_KEY = 'sndgb.selectedGroupBuyId';
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const user = useUser();
-  const [rawBuys, buysLoading, , reloadGroupBuys] = useLoadAction(listGroupBuys, [], {});
-  const [rawSettings, , , reloadSettings] = useLoadAction(getSettings, [], {});
-  // Memoized: rows() builds a fresh array, and this feeds the context-value
-  // memo below. An unstable identity here re-created the context value on
-  // EVERY provider render, cascading a re-render through every page — the
-  // builder re-renders the root constantly, so the whole app churned with it.
-  const groupBuys = useMemo(() => rows<GroupBuyRow>(rawBuys), [rawBuys]);
+  const [rawBuys, buysLoading, , reloadGroupBuysRaw] = useLoadAction(listGroupBuys, [], {});
+  const [rawSettings, , , reloadSettingsRaw] = useLoadAction(getSettings, [], {});
+  // Stabilized BY CONTENT, not by reference: the runtime's hooks may hand
+  // back a fresh results array and fresh reload functions on every render.
+  // Anything derived from those feeds the context-value memo below, and an
+  // unstable context value re-renders every page on EVERY provider render —
+  // the builder re-renders the root constantly, so the whole app churned
+  // with it ("Detected constant re-rendering").
+  const groupBuys = useStableValue(useMemo(() => rows<GroupBuyRow>(rawBuys), [rawBuys]));
+  const reloadGroupBuys = useStableCallback(reloadGroupBuysRaw);
+  const reloadSettings = useStableCallback(reloadSettingsRaw);
 
   const [groupBuyId, setGroupBuyIdState] = useState<number | null>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -63,13 +68,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setGroupBuyIdState(id);
   }, []);
 
-  const settings = useMemo(() => {
+  const settings = useStableValue(useMemo(() => {
     const map: Record<string, string> = {};
     for (const r of rows<{ key: string; value: string | null }>(rawSettings)) {
       map[r.key] = r.value || '';
     }
     return map;
-  }, [rawSettings]);
+  }, [rawSettings]));
 
   const value = useMemo<AppState>(() => ({
     userName: user.name || user.email || 'Admin',
