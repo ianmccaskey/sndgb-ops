@@ -9,6 +9,7 @@ import updatePaymentStatus from '@/actions/payments/updatePaymentStatus';
 import addPaymentHash from '@/actions/payments/addPaymentHash';
 import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
 import addManualPaymentByNumber from '@/actions/payments/addManualPaymentByNumber';
+import reopenPaymentOnNetwork from '@/actions/payments/reopenPaymentOnNetwork';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { shortHash } from '@/lib/explorer';
 import { B44_DEFAULT_APP_ID, getB44Order, updateB44Order } from '@/lib/base44';
@@ -65,6 +66,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doGetTxRefs] = useMutateAction(getOrderTxRefs);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doCashPay] = useMutateAction(addManualPaymentByNumber);
+  const [doReopenNetwork] = useMutateAction(reopenPaymentOnNetwork);
 
   const [status, setStatus] = useState('imported');
   const [hold, setHold] = useState(false);
@@ -104,6 +106,44 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       setCashMethod(o.payment_rail === 'cash' ? 'zelle' : 'other');
     }
   }, [o?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "Right hash, wrong network": a rejected tx-hash payment can be re-opened
+  // as pending on the network its hash format actually belongs to. addHash
+  // deliberately refuses re-adding a same-order rejected hash, so this
+  // explicit path is the correction route. Targets are derived from the hash
+  // format — an 0x hash can only re-open on eth/base, base58 only on sol —
+  // minus the network it was already rejected under.
+  const reopenTargets = (p: PaymentRow): string[] => {
+    const h = (p.tx_hash || '').trim();
+    if (!h) return [];
+    const plausible = /^0x[0-9a-fA-F]{64}$/.test(h) ? ['eth', 'base']
+      : /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(h) ? ['sol'] : [];
+    return plausible.filter(m => m !== p.method);
+  };
+
+  const reopenOnNetwork = async (p: PaymentRow, method: string) => {
+    if (!o) return;
+    setSaving(true); setPayMsg('');
+    try {
+      const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
+      const res = await doReopenNetwork({
+        payment_id: p.id, order_id: o.id, method,
+        note: `${ts} re-opened as pending on ${method.toUpperCase()}: hash was recorded under the wrong network (${p.method}).`,
+        actor: userName,
+      }) as { reopened: string }[] | { reopened: string };
+      const reopened = Number(Array.isArray(res) ? res[0]?.reopened : res?.reopened);
+      if (!reopened) {
+        setPayMsg('Could not re-open — the hash may already live on another non-rejected payment, or its format does not match that network.');
+      } else {
+        setPayMsg(`Re-opened as pending on ${method.toUpperCase()} — run Verify on the Reconciliation page to confirm it on-chain.`);
+      }
+      reloadPayments(); reloadOrder();
+    } catch (e: unknown) {
+      setPayMsg(e instanceof Error ? e.message : 'Failed to re-open payment');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const recordCashPayment = async () => {
     if (!o) return;
@@ -368,6 +408,16 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
                         {p.receipt_ref && <div className="text-xs text-muted-foreground">receipt: {p.receipt_ref}</div>}
                         {p.status === 'rejected' && p.notes && <div className="text-xs text-muted-foreground">rejected: {p.notes}</div>}
+                        {p.status === 'rejected' && reopenTargets(p).length > 0 && (
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            {reopenTargets(p).map(m => (
+                              <Button key={m} size="sm" variant="outline" className="h-6 px-2 text-xs" disabled={saving} onClick={() => reopenOnNetwork(p, m)}>
+                                Re-open as {m.toUpperCase()}
+                              </Button>
+                            ))}
+                            <span className="text-[10px] text-muted-foreground">wrong-network fix — goes back to pending</span>
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-right whitespace-nowrap">{Number(p.amount_usd) > 0 ? fmtUSD(p.amount_usd) : '—'}</span>
