@@ -11,6 +11,12 @@ function getDashboardStats() {
            AND o.status NOT IN ('cancelled','refunded')) AS billed_usd,
         (SELECT COALESCE(SUM(effective_received_usd),0) FROM v_order_reconciliation r
            WHERE r.group_buy_id = {{params.group_buy_id}}::bigint) AS received_usd,
+        -- due = billed minus comped (free) items; collection health must use
+        -- this denominator or fully-settled comped campaigns look short
+        (SELECT COALESCE(SUM(due_usd),0) FROM v_order_reconciliation r
+           WHERE r.group_buy_id = {{params.group_buy_id}}::bigint) AS due_usd,
+        (SELECT COALESCE(SUM(comp_usd),0) FROM v_order_reconciliation r
+           WHERE r.group_buy_id = {{params.group_buy_id}}::bigint) AS comp_usd,
         (SELECT COUNT(*) FROM v_order_reconciliation r
            WHERE r.group_buy_id = {{params.group_buy_id}}::bigint AND r.recon_status = 'short') AS short_count,
         (SELECT COUNT(*) FROM v_order_reconciliation r

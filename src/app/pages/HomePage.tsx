@@ -18,7 +18,7 @@ import {
 } from '@/app/pages/DashboardCharts';
 
 type Stats = {
-  order_count: string; billed_usd: string; received_usd: string;
+  order_count: string; billed_usd: string; received_usd: string; due_usd: string; comp_usd: string;
   short_count: string; awaiting_count: string; over_count: string; held_count: string;
   owed_to_vendors_usd: string; overpaid_vendor_count: string; net_profit_usd: string;
   pending_crypto_count: string;
@@ -30,12 +30,13 @@ type MoqRow = {
   final_count: string; moq_met: boolean; gb_price_usd: string; vendor_order_value_usd: string;
 };
 
-function StatTile({ label, value, tone }: { label: string; value: string; tone?: 'bad' | 'warn' | 'good' }) {
+function StatTile({ label, value, tone, sub }: { label: string; value: string; tone?: 'bad' | 'warn' | 'good'; sub?: string }) {
   const color = tone === 'bad' ? 'text-red-600' : tone === 'warn' ? 'text-amber-600' : tone === 'good' ? 'text-green-700' : 'text-foreground';
   return (
     <div className="flex flex-col px-4 py-3 bg-background">
       <span className="text-xs text-muted-foreground truncate">{label}</span>
       <span className={`text-lg font-semibold mt-0.5 ${color}`}>{value}</span>
+      {sub && <span className="text-[10px] text-muted-foreground truncate" title={sub}>{sub}</span>}
     </div>
   );
 }
@@ -58,7 +59,11 @@ export function HomePage() {
 
   const billed = parseFloat(s?.billed_usd || '0');
   const received = parseFloat(s?.received_usd || '0');
-  const gap = billed - received;
+  // Collection health measures against DUE (billed minus comped items) —
+  // gross billed stays displayed, but a fully-paid comped order is not a gap.
+  const comp = parseFloat(s?.comp_usd || '0');
+  const due = parseFloat(s?.due_usd || String(billed));
+  const gap = due - received;
   const attention: { label: string; count: number; href: string }[] = [
     { label: 'orders short on payment', count: Number(s?.short_count || 0), href: '/recon' },
     { label: 'orders awaiting payment verification', count: Number(s?.awaiting_count || 0), href: '/recon' },
@@ -77,7 +82,7 @@ export function HomePage() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-border/60 border border-border/60 rounded-lg overflow-hidden">
         <StatTile label="Orders" value={fmtNum(s?.order_count)} />
-        <StatTile label="Billed" value={fmtUSD(s?.billed_usd, { cents: false })} />
+        <StatTile label={comp > 0 ? 'Due (after comps)' : 'Billed'} value={fmtUSD(comp > 0 ? due : billed, { cents: false })} sub={comp > 0 ? `${fmtUSD(billed, { cents: false })} billed − ${fmtUSD(comp, { cents: false })} comped` : undefined} />
         <StatTile label="Received (verified)" value={fmtUSD(s?.received_usd, { cents: false })} tone="good" />
         <StatTile label="Collection Gap" value={fmtUSD(gap, { cents: false })} tone={gap > 1 ? 'bad' : 'good'} />
         <StatTile label="Owed to Vendors" value={fmtUSD(s?.owed_to_vendors_usd, { cents: false })} tone="warn" />
@@ -110,7 +115,7 @@ export function HomePage() {
             short={Number(s.short_count)}
             over={Number(s.over_count)}
             awaiting={Number(s.awaiting_count)}
-            billed={billed}
+            billed={due}
             received={received}
           />
         )}

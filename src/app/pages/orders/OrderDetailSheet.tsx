@@ -10,6 +10,7 @@ import addPaymentHash from '@/actions/payments/addPaymentHash';
 import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
 import addManualPaymentByNumber from '@/actions/payments/addManualPaymentByNumber';
 import reopenPaymentOnNetwork from '@/actions/payments/reopenPaymentOnNetwork';
+import setOrderItemComp from '@/actions/orders/setOrderItemComp';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { shortHash } from '@/lib/explorer';
 import { B44_DEFAULT_APP_ID, getB44Order, updateB44Order } from '@/lib/base44';
@@ -40,9 +41,14 @@ type OrderRow = {
   customer_name: string; customer_email: string | null;
   recon_status: string | null; received_usd: string | null; override_usd: string | null;
   effective_received_usd: string | null; diff_usd: string | null;
+  comp_usd: string | null; due_usd: string | null;
 };
 
-type ItemRow = { id: number; qty: string; unit_price_usd: string; line_total_usd: string; sku_code: string; product_name: string };
+type ItemRow = {
+  id: number; qty: string; unit_price_usd: string; line_total_usd: string;
+  comp_qty: string; comp_reason: string | null; comp_value_usd: string;
+  sku_code: string; product_name: string;
+};
 type PaymentRow = {
   id: number; method: string; tx_hash: string | null; receipt_ref: string | null;
   amount_usd: string; status: string; verify_source: string | null; verified_at: string | null; notes: string | null;
@@ -53,7 +59,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const { userName, settings } = useApp();
   const open = orderId != null;
   const [rawOrder, , , reloadOrder] = useLoadAction(getOrder, [orderId], { order_id: orderId }, { enabled: open });
-  const [rawItems] = useLoadAction(getOrderItems, [orderId], { order_id: orderId }, { enabled: open });
+  const [rawItems, , , reloadItems] = useLoadAction(getOrderItems, [orderId], { order_id: orderId }, { enabled: open });
   const [rawPayments, , , reloadPayments] = useLoadAction(listOrderPayments, [orderId], { order_id: orderId }, { enabled: open });
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
@@ -67,6 +73,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doCashPay] = useMutateAction(addManualPaymentByNumber);
   const [doReopenNetwork] = useMutateAction(reopenPaymentOnNetwork);
+  const [doSetComp] = useMutateAction(setOrderItemComp);
 
   const [status, setStatus] = useState('imported');
   const [hold, setHold] = useState(false);
@@ -81,6 +88,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [cashMethod, setCashMethod] = useState('zelle');
   const [cashRef, setCashRef] = useState('');
   const [cashMsg, setCashMsg] = useState('');
+
+  // comped (free) items
+  const [compingId, setCompingId] = useState<number | null>(null);
+  const [compQty, setCompQty] = useState('');
+  const [compReason, setCompReason] = useState('');
+  const [compMsg, setCompMsg] = useState('');
 
   // payment corrections
   const [rejectingId, setRejectingId] = useState<number | null>(null);
@@ -104,6 +117,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       setNewHashMethod(o.payment_rail === 'sol' || o.payment_rail === 'base' ? o.payment_rail : 'eth');
       setCashAmt(''); setCashRef(''); setCashMsg('');
       setCashMethod(o.payment_rail === 'cash' ? 'zelle' : 'other');
+      setCompingId(null); setCompQty(''); setCompReason(''); setCompMsg('');
     }
   }, [o?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -140,6 +154,31 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       reloadPayments(); reloadOrder();
     } catch (e: unknown) {
       setPayMsg(e instanceof Error ? e.message : 'Failed to re-open payment');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Comp (free product) on one line: recon then owes billed − comp value,
+  // and P&L books the give-away. Validation mirrors the SQL guards so the
+  // refusal message is immediate instead of a silent no-row result.
+  const saveComp = async (it: ItemRow, qtyStr: string, reason: string) => {
+    if (!o) return;
+    const clearing = Number(qtyStr) === 0;
+    if (!/^\d+(?:\.\d{1,2})?$/.test(qtyStr.trim())) { setCompMsg('Comp qty must be a number with at most 2 decimals.'); return; }
+    if (Number(qtyStr) > Number(it.qty)) { setCompMsg(`Can't comp more than the ${it.qty} ordered.`); return; }
+    if (!clearing && !reason.trim()) { setCompMsg('A reason is required — comps are audited money.'); return; }
+    setSaving(true); setCompMsg('');
+    try {
+      const res = await doSetComp({
+        item_id: it.id, order_id: o.id, comp_qty: qtyStr.trim(), reason: reason.trim(), actor: userName,
+      }) as unknown[] | null;
+      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!wrote) { setCompMsg('Comp refused — check the quantity and reason.'); }
+      else { setCompingId(null); setCompQty(''); setCompReason(''); }
+      reloadItems(); reloadOrder();
+    } catch (e: unknown) {
+      setCompMsg(e instanceof Error ? e.message : 'Failed to save comp');
     } finally {
       setSaving(false);
     }
@@ -368,11 +407,45 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
               <div>
                 <h3 className="font-semibold mb-1">Items</h3>
                 {items.map(it => (
-                  <div key={it.id} className="flex justify-between py-0.5">
-                    <span>{it.sku_code} × {it.qty}</span>
-                    <span>{fmtUSD(it.line_total_usd)}</span>
+                  <div key={it.id} className="py-0.5">
+                    <div className="flex justify-between items-center gap-2">
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span className="truncate">{it.sku_code} × {it.qty}</span>
+                        {Number(it.comp_qty) > 0 && (
+                          <span
+                            className="rounded bg-green-100 text-green-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                            title={it.comp_reason || ''}
+                          >
+                            comp {Number(it.comp_qty)} · −{fmtUSD(it.comp_value_usd)}
+                          </span>
+                        )}
+                      </span>
+                      <span className="flex items-center gap-2 shrink-0">
+                        <span>{fmtUSD(it.line_total_usd)}</span>
+                        {compingId !== it.id && (
+                          <Button
+                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
+                            onClick={() => { setCompingId(it.id); setCompQty(String(Number(it.comp_qty) || '')); setCompReason(it.comp_reason || ''); setCompMsg(''); }}
+                          >
+                            {Number(it.comp_qty) > 0 ? 'Edit comp' : 'Comp'}
+                          </Button>
+                        )}
+                      </span>
+                    </div>
+                    {compingId === it.id && (
+                      <div className="flex flex-wrap gap-2 mt-1 items-center">
+                        <Input placeholder={`Free units (max ${it.qty})`} value={compQty} onChange={e => setCompQty(e.target.value)} className="h-7 w-32 text-xs" />
+                        <Input placeholder="Why is this free? (audited)" value={compReason} onChange={e => setCompReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
+                        <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveComp(it, compQty || '0', compReason)}>Save</Button>
+                        {Number(it.comp_qty) > 0 && (
+                          <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" disabled={saving} onClick={() => saveComp(it, '0', '')}>Remove comp</Button>
+                        )}
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setCompingId(null); setCompMsg(''); }}>Cancel</Button>
+                      </div>
+                    )}
                   </div>
                 ))}
+                {compMsg && <p className="text-xs text-red-600 mt-1">{compMsg}</p>}
                 <Separator className="my-2" />
                 <div className="space-y-0.5 text-muted-foreground">
                   <div className="flex justify-between"><span>Subtotal</span><span>{fmtUSD(o.subtotal_usd)}</span></div>
@@ -381,6 +454,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   <div className="flex justify-between"><span>Shipping fee</span><span>{fmtUSD(o.shipping_fee_usd)}</span></div>
                   {Number(o.processor_fee_usd) > 0 && <div className="flex justify-between"><span>Processor fee</span><span>{fmtUSD(o.processor_fee_usd)}</span></div>}
                   <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{fmtUSD(o.total_usd)}</span></div>
+                  {Number(o.comp_usd) > 0 && (
+                    <>
+                      <div className="flex justify-between text-green-700"><span>Comped items</span><span>−{fmtUSD(o.comp_usd)}</span></div>
+                      <div className="flex justify-between font-semibold text-foreground"><span>Due</span><span>{fmtUSD(o.due_usd)}</span></div>
+                    </>
+                  )}
                   <div className="flex justify-between"><span>Received (effective)</span><span>{fmtUSD(o.effective_received_usd)}</span></div>
                   {o.override_usd != null && <div className="flex justify-between text-violet-700"><span>Manual override active</span><span>{fmtUSD(o.override_usd)}</span></div>}
                 </div>

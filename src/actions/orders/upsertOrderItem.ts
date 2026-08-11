@@ -11,23 +11,52 @@ import { action } from '@uibakery/data';
  * NUMERIC(10,2) and Postgres would silently round finer fractions on insert,
  * so this last write boundary refuses (returns no rows) any qty that isn't
  * a positive value with at most two decimals.
+ *
+ * comp_qty (comped/free units, set by setOrderItemComp) is PERSISTENTLY
+ * clamped to the incoming qty on update, with an audit row when that
+ * changes it. Clamping only in the views would let an old larger comp
+ * silently re-expand if upstream later raises the qty again — a revenue
+ * write-off must never grow without a fresh operator decision.
  */
 function upsertOrderItem() {
   return action('upsertOrderItem', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      INSERT INTO order_items (order_id, group_buy_product_id, qty, unit_price_usd)
-      SELECT {{params.order_id}}::bigint, gbp.id, {{params.qty}}::numeric, gbp.gb_price_usd
-      FROM products p
-      JOIN group_buy_products gbp ON gbp.product_id = p.id
-        AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
-      WHERE p.sku_code = {{params.sku}}
-        AND ({{params.qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
-        AND ({{params.qty}})::numeric > 0
-      ON CONFLICT (order_id, group_buy_product_id) DO UPDATE SET
-        qty = EXCLUDED.qty,
-        unit_price_usd = EXCLUDED.unit_price_usd
-      RETURNING id
+      WITH prev AS (
+        -- FOR UPDATE: locks the existing row so a concurrent comp edit can't
+        -- land between this snapshot and the conflict-update below — the
+        -- clamp and its audit comparison must see the same old value.
+        SELECT oi.id, oi.comp_qty
+        FROM order_items oi
+        JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
+          AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
+        JOIN products p ON p.id = gbp.product_id AND p.sku_code = {{params.sku}}
+        WHERE oi.order_id = {{params.order_id}}::bigint
+        FOR UPDATE OF oi
+      ), ins AS (
+        INSERT INTO order_items (order_id, group_buy_product_id, qty, unit_price_usd)
+        SELECT {{params.order_id}}::bigint, gbp.id, {{params.qty}}::numeric, gbp.gb_price_usd
+        FROM products p
+        JOIN group_buy_products gbp ON gbp.product_id = p.id
+          AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
+        WHERE p.sku_code = {{params.sku}}
+          AND ({{params.qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
+          AND ({{params.qty}})::numeric > 0
+        ON CONFLICT (order_id, group_buy_product_id) DO UPDATE SET
+          qty = EXCLUDED.qty,
+          unit_price_usd = EXCLUDED.unit_price_usd,
+          comp_qty = LEAST(order_items.comp_qty, EXCLUDED.qty)
+        RETURNING id, comp_qty
+      ), audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', ins.id::text, 'comp_clamped_on_import', {{params.actor}},
+               jsonb_build_object('old_comp_qty', prev.comp_qty, 'new_comp_qty', ins.comp_qty, 'imported_qty', ({{params.qty}})::numeric)
+        FROM ins
+        JOIN prev ON prev.id = ins.id
+        WHERE ins.comp_qty < prev.comp_qty
+        RETURNING row_pk
+      )
+      SELECT id FROM ins
     `,
   });
 }

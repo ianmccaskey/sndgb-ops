@@ -292,7 +292,7 @@ export function ImportPage() {
     // destructively pruned partial state.
     let itemsWritten = 0;
     for (const it of mergedItems) {
-      const res = await doUpsertItem({ order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty }) as unknown[] | null;
+      const res = await doUpsertItem({ order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty, actor: userName }) as unknown[] | null;
       if (Array.isArray(res) ? res.length > 0 : !!res) itemsWritten++;
     }
     if (itemsWritten !== mergedItems.length) {

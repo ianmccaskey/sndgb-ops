@@ -168,7 +168,7 @@ export function RailBars({ rails }: { rails: RailRow[] }) {
 export type PnlData = {
   product_revenue_usd: string; admin_fee_revenue_usd: string; shipping_fee_revenue_usd: string;
   tip_revenue_usd: string; total_revenue_usd: string; expenses_usd: string; label_costs_usd: string;
-  net_profit_usd: string; splits: { party: string; pct: string }[] | null;
+  comps_usd: string; net_profit_usd: string; splits: { party: string; pct: string }[] | null;
 };
 
 /** Revenue composition + deductions + net + profit split. */
@@ -180,6 +180,9 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
     { name: 'Tips', value: Number(pnl.tip_revenue_usd), color: 'var(--chart-1)' },
   ].filter(p => p.value > 0);
   const total = Number(pnl.total_revenue_usd);
+  // Bar widths scale against the GROSS parts sum — total revenue is net of
+  // comps, so sizing against it would overflow the row when comps exist.
+  const partsSum = parts.reduce((s, p) => s + p.value, 0);
   const deductions = Number(pnl.expenses_usd) + Number(pnl.label_costs_usd);
   const net = Number(pnl.net_profit_usd);
   const splits = pnl.splits || [];
@@ -198,7 +201,7 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
               <div
                 key={p.name}
                 title={`${p.name}: ${fmtUSD(p.value)}`}
-                style={{ width: `${total > 0 ? (p.value / total) * 100 : 0}%`, background: p.color, minWidth: 3 }}
+                style={{ width: `${partsSum > 0 ? (p.value / partsSum) * 100 : 0}%`, background: p.color, minWidth: 3 }}
               />
             ))}
           </div>
@@ -213,6 +216,9 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
         </div>
         <div className="text-sm space-y-1 border-t pt-2">
           <div className="flex justify-between"><span className="text-muted-foreground">Expenses + labels</span><span className="text-red-600">−{fmtUSD(deductions, { cents: false })}</span></div>
+          {Number(pnl.comps_usd) > 0 && (
+            <div className="flex justify-between"><span className="text-muted-foreground">Comped product</span><span className="text-red-600">−{fmtUSD(pnl.comps_usd, { cents: false })}</span></div>
+          )}
           <div className="flex justify-between font-semibold"><span>Net profit</span><span className="text-green-700">{fmtUSD(net, { cents: false })}</span></div>
         </div>
         {splits.length > 0 && (

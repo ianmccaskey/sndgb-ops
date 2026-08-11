@@ -23,7 +23,7 @@ import { Scale, Zap } from 'lucide-react';
 
 type ReconRow = {
   order_id: number; order_number: string; customer_name: string; payment_rail: string | null;
-  order_status: string; billed_usd: string; received_usd: string; override_usd: string | null;
+  order_status: string; billed_usd: string; comp_usd: string; due_usd: string; received_usd: string; override_usd: string | null;
   effective_received_usd: string; diff_usd: string; pending_payment_count: string; recon_status: string;
   native_unpriced: string | null;
 };
@@ -286,6 +286,11 @@ export function ReconPage() {
                       )}
                       <span className="text-xs uppercase text-muted-foreground">{r.payment_rail || '—'}</span>
                       <StatusPill value={r.recon_status} />
+                      {Number(r.comp_usd) > 0 && (
+                        <span className="rounded bg-green-100 text-green-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
+                          comp −{fmtUSD(r.comp_usd)}
+                        </span>
+                      )}
                       {r.native_unpriced && (
                         <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
                           native {r.native_unpriced}
@@ -318,7 +323,14 @@ export function ReconPage() {
                     <TableCell className="font-medium">{r.order_number}</TableCell>
                     <TableCell>{r.customer_name}</TableCell>
                     <TableCell>{r.payment_rail}</TableCell>
-                    <TableCell className="text-right">{fmtUSD(r.billed_usd)}</TableCell>
+                    <TableCell className="text-right">
+                      {fmtUSD(r.billed_usd)}
+                      {Number(r.comp_usd) > 0 && (
+                        <span className="block text-[11px] text-green-700" title="Comped (free) items — the customer owes billed minus this">
+                          −{fmtUSD(r.comp_usd)} comp → {fmtUSD(r.due_usd)} due
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">
                       {fmtUSD(r.effective_received_usd)}
                       {r.override_usd != null && <span className="text-violet-600 text-xs ml-1">(override)</span>}
