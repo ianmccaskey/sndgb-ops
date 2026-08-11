@@ -2,17 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import listProducts from '@/actions/products/listProducts';
-import importUpsertOrder from '@/actions/orders/importUpsertOrder';
-import upsertOrderItem from '@/actions/orders/upsertOrderItem';
-import deleteOrderItemsNotIn from '@/actions/orders/deleteOrderItemsNotIn';
-import importPayments from '@/actions/orders/importPayments';
-import syncOrderStatus from '@/actions/orders/syncOrderStatus';
 import listActiveExternalOrders from '@/actions/orders/listActiveExternalOrders';
 import cancelDeletedUpstream from '@/actions/orders/cancelDeletedUpstream';
 import { useApp } from '@/app/AppContext';
+import { useImportRunner, importSourceKey } from '@/app/ImportRunner';
 import { rows } from '@/lib/rows';
 import { fmtUSD } from '@/lib/fmt';
-import { parseOrderPaste, ParsedOrder, ParseResult } from '@/lib/parseOrderImport';
+import { parseOrderPaste, ParseResult } from '@/lib/parseOrderImport';
 import { B44_DEFAULT_APP_ID, B44Order, b44OrderExists, listB44Orders } from '@/lib/base44';
 import { mapB44Orders, MappedOrders } from '@/lib/mapB44Order';
 import { Button } from '@/components/ui/button';
@@ -25,15 +21,19 @@ type CampaignProduct = { sku_code: string };
 type CatalogProduct = { external_id: string | null; sku_code: string };
 type LocalExtOrder = { id: number; order_number: string; external_id: string; contact_name: string | null; total_usd: string };
 
-type RowState = { orderNumber: string; ok: boolean; message: string };
-
 const EMPTY_RESULT: ParseResult = { orders: [], errors: [] };
 
 export function ImportPage() {
   const { groupBuyId, groupBuy, settings, userName } = useApp();
   const [text, setText] = useState('');
-  const [importing, setImporting] = useState(false);
-  const [results, setResults] = useState<RowState[]>([]);
+  // The import itself runs in the app-level ImportRunner so it survives
+  // navigation; this page just starts it and renders its progress. Results
+  // render only while the CURRENT parsed input matches the job's content
+  // snapshot — editing the paste or re-pulling different data must not show
+  // stale green rows under the same order numbers (computed below, after
+  // the input is parsed).
+  const { job, startImport } = useImportRunner();
+  const importing = job.running;
 
   const enabled = groupBuyId != null;
   const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
@@ -50,11 +50,6 @@ export function ImportPage() {
     return m;
   }, [rawCatalog]);
 
-  const [doUpsert] = useMutateAction(importUpsertOrder);
-  const [doUpsertItem] = useMutateAction(upsertOrderItem);
-  const [doPruneItems] = useMutateAction(deleteOrderItemsNotIn);
-  const [doPayments] = useMutateAction(importPayments);
-  const [doSyncStatus] = useMutateAction(syncOrderStatus);
   const [doCancelDeleted] = useMutateAction(cancelDeletedUpstream);
   const [rawLocalExt, , , reloadLocalExt] = useLoadAction(
     listActiveExternalOrders,
@@ -81,7 +76,7 @@ export function ImportPage() {
   const pull = async () => {
     if (!canPull || !groupBuy?.external_id || groupBuyId == null) return;
     const source = { forGroupBuyId: groupBuyId, appId: cfg.appId, gbExternalId: groupBuy.external_id, token: cfg.token };
-    setPulling(true); setPullError(''); setResults([]);
+    setPulling(true); setPullError('');
     try {
       const orders = await listB44Orders(cfg, source.gbExternalId);
       setPulled({ ...source, orders });
@@ -117,8 +112,6 @@ export function ImportPage() {
       pull();
     }
   }, [canPull, catalogLoading, groupBuyId, cfg, groupBuy?.external_id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => { setResults([]); }, [groupBuyId]);
 
   const pulledMapped = useMemo<MappedOrders | null>(
     () => (pulledFresh ? mapB44Orders(pulledFresh.orders, skuByExternalId) : null),
@@ -206,117 +199,19 @@ export function ImportPage() {
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   }, [parsed]);
 
+  const sourceKey = useMemo(
+    () => (groupBuyId == null ? null : importSourceKey({ groupBuyId, orders: parsed.orders, cancellations })),
+    [groupBuyId, parsed.orders, cancellations],
+  );
+  const results = sourceKey != null && job.sourceKey === sourceKey ? job.results : [];
+
   const canImport = enabled && (parsed.orders.length > 0 || cancellations.length > 0) && skuProblems.size === 0 && !importing;
 
-  const runImport = async () => {
+  const runImport = () => {
     if (!canImport || groupBuyId == null) return;
-    setImporting(true);
-    const out: RowState[] = [];
-    for (const o of parsed.orders) {
-      try {
-        out.push(await importOne(o, groupBuyId));
-      } catch (e: unknown) {
-        out.push({ orderNumber: o.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Import failed' });
-      }
-      setResults([...out]);
-    }
-    for (const c of cancellations) {
-      try {
-        const res = await doSyncStatus({ order_number: c.orderNumber, group_buy_id: groupBuyId, status: c.status }) as { id: number }[] | { id: number } | null;
-        const touched = Array.isArray(res) ? res.length > 0 : !!res;
-        out.push({
-          orderNumber: c.orderNumber,
-          ok: true,
-          message: touched ? `marked ${c.status} (source: ${c.sourceStatus})` : `${c.sourceStatus} upstream — not present locally, nothing to do`,
-        });
-      } catch (e: unknown) {
-        out.push({ orderNumber: c.orderNumber, ok: false, message: e instanceof Error ? e.message : `Failed to mark ${c.status}` });
-      }
-      setResults([...out]);
-    }
-    setImporting(false);
-  };
-
-  const importOne = async (o: ParsedOrder, gbId: number): Promise<RowState> => {
-    // replaceOrderItems deletes before inserting, so an empty item set would
-    // silently erase a previously imported order's items. Refuse it here for
-    // every source (pull and paste).
-    if (o.items.length === 0) {
-      throw new Error('Order has no line items — refusing to import (would erase existing items)');
-    }
-    // Cash-rail totals include the payment-processor gross-up; make the fee explicit.
-    const base = o.subtotal + o.tip + o.adminFee + o.shippingFee;
-    const processorFee = o.paymentRail === 'cash' && o.total > base ? +(o.total - base).toFixed(2) : 0;
-
-    const upserted = await doUpsert({
-      group_buy_id: gbId,
-      order_number: o.orderNumber,
-      external_id: o.externalId || '',
-      customer_name: o.customerName,
-      email: o.email || '',
-      phone: o.phone || '',
-      discord: o.discord || '',
-      payment_rail: o.paymentRail,
-      address_line1: o.addressLine1 || '',
-      address_line2: o.addressLine2 || '',
-      city: o.city || '',
-      state_code: o.stateCode || '',
-      postal_code: o.postalCode || '',
-      subtotal_usd: o.subtotal,
-      tip_usd: o.tip,
-      admin_fee_usd: o.adminFee,
-      shipping_fee_usd: o.shippingFee,
-      processor_fee_usd: processorFee,
-      total_usd: o.total,
-      placed_at: o.placedAt || '',
-      customer_note: o.customerNote || '',
-      raw_import: JSON.stringify(o.raw),
-    }) as { id: number }[] | { id: number };
-    const orderId = Array.isArray(upserted) ? upserted[0]?.id : upserted?.id;
-    if (!orderId) throw new Error('Refused: this order number already exists under a different campaign');
-
-    // Items are written one row per product: UI Bakery's action layer rejects
-    // multi-row inserts with repeated key columns, which is what silently
-    // broke the old replaceOrderItems (and blocked payment sync behind it).
-    // Duplicate SKU lines from the source are summed into one row first.
-    // Summed in integer hundredths: quantities are 2-decimal values and the
-    // write boundary rejects finer precision, so float addition (0.1 + 0.2 =
-    // 0.30000000000000004) must never reach the qty param.
-    const qtyBySku = new Map<string, number>();
-    for (const it of o.items) qtyBySku.set(it.sku, (qtyBySku.get(it.sku) || 0) + Math.round(it.qty * 100));
-    const mergedItems = [...qtyBySku.entries()].map(([sku, cents]) => ({ sku, qty: cents / 100 }));
-
-    // Upsert every row FIRST and prove the whole replacement set is writable;
-    // only then prune items removed upstream. A mid-loop failure leaves stale
-    // extra items (a harmless superset, healed on re-run) — never a
-    // destructively pruned partial state.
-    let itemsWritten = 0;
-    for (const it of mergedItems) {
-      const res = await doUpsertItem({ order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty, actor: userName }) as unknown[] | null;
-      if (Array.isArray(res) ? res.length > 0 : !!res) itemsWritten++;
-    }
-    if (itemsWritten !== mergedItems.length) {
-      throw new Error(`Only ${itemsWritten}/${mergedItems.length} items matched campaign products`);
-    }
-    await doPruneItems({ order_id: orderId, group_buy_id: gbId, items: JSON.stringify(mergedItems) });
-
-    if (o.payments.length > 0) {
-      const method = o.paymentRail === 'cash' ? 'other' : o.paymentRail;
-      // Hashes go one per call (multi-row inserts trip the same platform
-      // validation); receipts go together in one call because the action
-      // clears pending receipts per invocation — per-receipt calls would
-      // each wipe the previous one.
-      const hashes = o.payments.filter(p => p.kind === 'tx_hash');
-      const receipts = o.payments.filter(p => p.kind === 'receipt');
-      for (const p of hashes) {
-        await doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method }]) });
-      }
-      if (receipts.length > 0) {
-        await doPayments({ order_id: orderId, payments: JSON.stringify(receipts.map(p => ({ kind: p.kind, value: p.value, method: 'other' }))) });
-      }
-    }
-
-    return { orderNumber: o.orderNumber, ok: true, message: `${mergedItems.length} items, ${o.payments.length} payment refs` };
+    // Hands the validated set to the app-level runner and returns
+    // immediately — progress renders below and in the floating widget.
+    startImport({ groupBuyId, orders: parsed.orders, cancellations });
   };
 
   return (
@@ -363,7 +258,7 @@ export function ImportPage() {
       <Textarea
         placeholder="Or paste order rows here (overrides the pulled set while non-empty)…"
         value={text}
-        onChange={e => { setText(e.target.value); setResults([]); }}
+        onChange={e => setText(e.target.value)}
         rows={6}
         className="font-mono text-xs"
       />

@@ -4,6 +4,7 @@ import '@/index.css';
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AppProvider } from '@/app/AppContext';
+import { ImportRunnerProvider, ImportProgressWidget } from '@/app/ImportRunner';
 import { AppLayout } from '@/app/layout/AppLayout';
 import { HomePage } from '@/app/pages/HomePage';
 import { OrdersPage } from '@/app/pages/orders/OrdersPage';
@@ -19,6 +20,7 @@ function App() {
   return (
     <BrowserRouter>
       <AppProvider>
+        <ImportRunnerProvider>
         <AppLayout>
           <Routes>
             <Route path="/" element={<HomePage />} />
@@ -31,7 +33,9 @@ function App() {
             <Route path="/financials" element={<FinancialsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
+          <ImportProgressWidget />
         </AppLayout>
+        </ImportRunnerProvider>
       </AppProvider>
     </BrowserRouter>
   );
