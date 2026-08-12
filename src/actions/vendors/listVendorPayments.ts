@@ -4,7 +4,7 @@ function listVendorPayments() {
   return action('listVendorPayments', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT vp.id, vp.paid_on, vp.amount_usd, vp.method, vp.receipt_ref, vp.note,
+      SELECT vp.id, vp.paid_on, vp.amount_usd, vp.kits_qty, vp.freight_usd, vp.method, vp.receipt_ref, vp.note,
              v.code AS vendor_code, w.name AS wallet_name
       FROM vendor_payments vp
       JOIN vendors v ON v.id = vp.vendor_id

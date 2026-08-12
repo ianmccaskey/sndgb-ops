@@ -8,7 +8,7 @@ import saveVendor from '@/actions/vendors/saveVendor';
 import listWallets from '@/actions/financials/listWallets';
 import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
-import { fmtUSD, fmtDate } from '@/lib/fmt';
+import { fmtUSD, fmtDate, fmtNum } from '@/lib/fmt';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -21,10 +21,13 @@ type Vendor = { id: number; code: string; name: string; active: boolean };
 type Balance = {
   vendor_id: number; vendor_code: string; owed_usd: string; paid_usd: string;
   balance_usd: string; pay_status: string;
+  product_owed_usd: string; freight_demand_usd: string; kits_demand: string;
+  kits_paid: string; freight_paid_usd: string;
 };
 type Payment = {
   id: number; paid_on: string; amount_usd: string; method: string | null;
   receipt_ref: string | null; note: string | null; vendor_code: string; wallet_name: string | null;
+  kits_qty: string | null; freight_usd: string | null;
 };
 type Wallet = { id: number; name: string };
 
@@ -51,6 +54,8 @@ export function VendorsPage() {
   const [pMethod, setPMethod] = useState('USDC');
   const [pRef, setPRef] = useState('');
   const [pNote, setPNote] = useState('');
+  const [pKits, setPKits] = useState('');
+  const [pFreight, setPFreight] = useState('');
   const [pError, setPError] = useState('');
   const [pSaving, setPSaving] = useState(false);
 
@@ -65,14 +70,26 @@ export function VendorsPage() {
       setPError('Vendor, date, and a positive amount are required.');
       return;
     }
+    if (pKits.trim() !== '' && !/^\d+(?:\.\d{1,2})?$/.test(pKits.trim())) { setPError('Kits must be a number with at most 2 decimals.'); return; }
+    if (pFreight.trim() !== '' && !/^\d+(?:\.\d{1,2})?$/.test(pFreight.trim())) { setPError('Freight must be a dollar amount with at most 2 decimals.'); return; }
+    if (pFreight.trim() !== '' && Number(pFreight) > amt) { setPError('Freight is the portion of THIS payment — it cannot exceed the payment amount.'); return; }
     setPSaving(true); setPError('');
     try {
-      await doPay({
+      const res = await doPay({
         vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate,
         amount_usd: amt, wallet_id: pWallet, method: pMethod, receipt_ref: pRef, note: pNote,
+        kits_qty: pKits.trim(), freight_usd: pFreight.trim(),
         actor: userName,
-      });
-      setPAmount(''); setPRef(''); setPNote('');
+      }) as unknown[] | null;
+      // The action's guards refuse by returning no rows — a silent zero-row
+      // result must NOT look like a recorded payment.
+      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!wrote) {
+        setPError('Payment NOT recorded — check the kits/freight values (freight cannot exceed the payment amount).');
+        setPSaving(false);
+        return;
+      }
+      setPAmount(''); setPRef(''); setPNote(''); setPKits(''); setPFreight('');
       reloadBalances(); reloadPayments();
     } catch (e: unknown) {
       setPError(e instanceof Error ? e.message : 'Failed to record payment');
@@ -118,6 +135,8 @@ export function VendorsPage() {
               <TableHead className="text-right">Owed</TableHead>
               <TableHead className="text-right">Paid</TableHead>
               <TableHead className="text-right">Balance</TableHead>
+              <TableHead className="text-right">Kits left</TableHead>
+              <TableHead className="text-right">Freight left</TableHead>
               <TableHead>Status</TableHead>
             </TableRow>
           </TableHeader>
@@ -128,11 +147,33 @@ export function VendorsPage() {
                 <TableCell className="text-right">{fmtUSD(b.owed_usd)}</TableCell>
                 <TableCell className="text-right">{fmtUSD(b.paid_usd)}</TableCell>
                 <TableCell className={`text-right font-medium ${parseFloat(b.balance_usd) < 0 ? 'text-red-600' : ''}`}>{fmtUSD(b.balance_usd)}</TableCell>
+                <TableCell className="text-right">
+                  {(() => {
+                    const left = Number(b.kits_demand) - Number(b.kits_paid);
+                    return (
+                      <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
+                        {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
+                        <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(b.kits_paid)}/{fmtNum(b.kits_demand)} paid</span>
+                      </span>
+                    );
+                  })()}
+                </TableCell>
+                <TableCell className="text-right">
+                  {(() => {
+                    const left = Number(b.freight_demand_usd) - Number(b.freight_paid_usd);
+                    return (
+                      <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
+                        {left < 0 ? `over by ${fmtUSD(-left)}` : fmtUSD(left)}
+                        <span className="block text-[10px] text-muted-foreground font-normal">{fmtUSD(b.freight_paid_usd)}/{fmtUSD(b.freight_demand_usd)} paid</span>
+                      </span>
+                    );
+                  })()}
+                </TableCell>
                 <TableCell><StatusPill value={b.pay_status} /></TableCell>
               </TableRow>
             ))}
             {balances.length === 0 && (
-              <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-6">No campaign products yet — vendor balances appear once products are configured.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-6">No campaign products yet — vendor balances appear once products are configured.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
@@ -160,6 +201,10 @@ export function VendorsPage() {
                 </SelectContent>
               </Select>
               <Input placeholder="Method" value={pMethod} onChange={e => setPMethod(e.target.value)} className="h-9 w-24" />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Input placeholder="Kits covered (optional)" value={pKits} onChange={e => setPKits(e.target.value)} className="h-9 w-40" />
+              <Input placeholder="Freight $ included (optional)" value={pFreight} onChange={e => setPFreight(e.target.value)} className="h-9 w-48" />
             </div>
             <div className="flex flex-wrap gap-2">
               <Input placeholder="Receipt / tx ref (optional)" value={pRef} onChange={e => setPRef(e.target.value)} className="h-9 flex-1" />
@@ -192,6 +237,8 @@ export function VendorsPage() {
                 <TableHead>Date</TableHead>
                 <TableHead>Vendor</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
+                <TableHead className="text-right">Kits</TableHead>
+                <TableHead className="text-right">Freight</TableHead>
                 <TableHead>Wallet</TableHead>
                 <TableHead>Method</TableHead>
                 <TableHead>Note</TableHead>
@@ -203,13 +250,15 @@ export function VendorsPage() {
                   <TableCell>{fmtDate(p.paid_on)}</TableCell>
                   <TableCell className="font-medium">{p.vendor_code}</TableCell>
                   <TableCell className="text-right">{fmtUSD(p.amount_usd)}</TableCell>
+                  <TableCell className="text-right">{p.kits_qty != null ? fmtNum(p.kits_qty) : '—'}</TableCell>
+                  <TableCell className="text-right">{p.freight_usd != null ? fmtUSD(p.freight_usd) : '—'}</TableCell>
                   <TableCell>{p.wallet_name || '—'}</TableCell>
                   <TableCell>{p.method || '—'}</TableCell>
                   <TableCell className="text-muted-foreground">{p.note || ''}</TableCell>
                 </TableRow>
               ))}
               {payments.length === 0 && (
-                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-6">No vendor payments yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">No vendor payments yet.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
