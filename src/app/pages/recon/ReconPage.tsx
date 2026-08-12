@@ -22,7 +22,7 @@ import { Scale, Zap } from 'lucide-react';
 
 type ReconRow = {
   order_id: number; order_number: string; customer_name: string; payment_rail: string | null;
-  order_status: string; billed_usd: string; comp_usd: string; due_usd: string; received_usd: string; override_usd: string | null;
+  order_status: string; billed_usd: string; comp_usd: string; writeoff_usd: string; due_usd: string; received_usd: string; override_usd: string | null;
   effective_received_usd: string; diff_usd: string; pending_payment_count: string; recon_status: string;
   native_unpriced: string | null;
 };
@@ -239,6 +239,11 @@ export function ReconPage() {
                           comp −{fmtUSD(r.comp_usd)}
                         </span>
                       )}
+                      {Number(r.writeoff_usd) > 0 && (
+                        <span className="rounded bg-green-100 text-green-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
+                          w/o −{fmtUSD(r.writeoff_usd)}
+                        </span>
+                      )}
                       {r.native_unpriced && (
                         <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
                           native {r.native_unpriced}
@@ -273,9 +278,9 @@ export function ReconPage() {
                     <TableCell>{r.payment_rail}</TableCell>
                     <TableCell className="text-right">
                       {fmtUSD(r.billed_usd)}
-                      {Number(r.comp_usd) > 0 && (
-                        <span className="block text-[11px] text-green-700" title="Comped (free) items — the customer owes billed minus this">
-                          −{fmtUSD(r.comp_usd)} comp → {fmtUSD(r.due_usd)} due
+                      {(Number(r.comp_usd) > 0 || Number(r.writeoff_usd) > 0) && (
+                        <span className="block text-[11px] text-green-700" title="Comped items and write-offs — the customer owes billed minus these">
+                          {Number(r.comp_usd) > 0 ? `−${fmtUSD(r.comp_usd)} comp ` : ''}{Number(r.writeoff_usd) > 0 ? `−${fmtUSD(r.writeoff_usd)} w/o ` : ''}→ {fmtUSD(r.due_usd)} due
                         </span>
                       )}
                     </TableCell>

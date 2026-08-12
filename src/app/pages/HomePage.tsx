@@ -18,7 +18,7 @@ import {
 } from '@/app/pages/DashboardCharts';
 
 type Stats = {
-  order_count: string; billed_usd: string; received_usd: string; due_usd: string; comp_usd: string;
+  order_count: string; billed_usd: string; received_usd: string; due_usd: string; comp_usd: string; writeoff_usd: string;
   short_count: string; awaiting_count: string; over_count: string; held_count: string;
   owed_to_vendors_usd: string; overpaid_vendor_count: string; net_profit_usd: string;
   pending_crypto_count: string;
@@ -62,6 +62,8 @@ export function HomePage() {
   // Collection health measures against DUE (billed minus comped items) —
   // gross billed stays displayed, but a fully-paid comped order is not a gap.
   const comp = parseFloat(s?.comp_usd || '0');
+  const writeoff = parseFloat(s?.writeoff_usd || '0');
+  const forgiven = comp + writeoff;
   const due = parseFloat(s?.due_usd || String(billed));
   const gap = due - received;
   const attention: { label: string; count: number; href: string }[] = [
@@ -82,7 +84,13 @@ export function HomePage() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-border/60 border border-border/60 rounded-lg overflow-hidden">
         <StatTile label="Orders" value={fmtNum(s?.order_count)} />
-        <StatTile label={comp > 0 ? 'Due (after comps)' : 'Billed'} value={fmtUSD(comp > 0 ? due : billed, { cents: false })} sub={comp > 0 ? `${fmtUSD(billed, { cents: false })} billed − ${fmtUSD(comp, { cents: false })} comped` : undefined} />
+        <StatTile
+          label={forgiven > 0 ? 'Due' : 'Billed'}
+          value={fmtUSD(forgiven > 0 ? due : billed, { cents: false })}
+          sub={forgiven > 0
+            ? `${fmtUSD(billed, { cents: false })} billed${comp > 0 ? ` − ${fmtUSD(comp, { cents: false })} comped` : ''}${writeoff > 0 ? ` − ${fmtUSD(writeoff, { cents: false })} written off` : ''}`
+            : undefined}
+        />
         <StatTile label="Received (verified)" value={fmtUSD(s?.received_usd, { cents: false })} tone="good" />
         <StatTile label="Collection Gap" value={fmtUSD(gap, { cents: false })} tone={gap > 1 ? 'bad' : 'good'} />
         <StatTile label="Owed to Vendors" value={fmtUSD(s?.owed_to_vendors_usd, { cents: false })} tone="warn" />

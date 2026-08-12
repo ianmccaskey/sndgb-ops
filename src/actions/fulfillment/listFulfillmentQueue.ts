@@ -31,7 +31,10 @@ function listFulfillmentQueue() {
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND o.status NOT IN ('cancelled','refunded')
         AND ({{params.stage}} = 'all'
-          OR ({{params.stage}} = 'ready' AND COALESCE(s.status::text,'pending') = 'pending' AND NOT o.hold_shipping AND r.recon_status = 'matched')
+          -- ready requires matched AND no unresolved payments: an order can
+          -- read matched (e.g. via write-off/comp) while a new hash pends —
+          -- money evidence must be resolved before shipping
+          OR ({{params.stage}} = 'ready' AND COALESCE(s.status::text,'pending') = 'pending' AND NOT o.hold_shipping AND r.recon_status = 'matched' AND r.pending_payment_count = 0)
           OR ({{params.stage}} = 'held' AND o.hold_shipping)
           OR ({{params.stage}} = 'packed' AND s.status = 'packed')
           OR ({{params.stage}} = 'shipped' AND s.status IN ('shipped','delivered','reshipped')))

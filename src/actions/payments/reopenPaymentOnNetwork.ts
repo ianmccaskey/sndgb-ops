@@ -23,10 +23,12 @@ function reopenPaymentOnNetwork() {
   return action('reopenPaymentOnNetwork', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH tgt AS (
+      WITH lck AS (
+        SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
+      ), tgt AS (
         SELECT p.id, p.tx_hash, p.method AS old_method,
           CASE WHEN p.tx_hash ~ '^0x[0-9a-fA-F]{64}$' THEN lower(p.tx_hash) ELSE p.tx_hash END AS canon
-        FROM payments p
+        FROM lck, payments p
         WHERE p.id = {{params.payment_id}}::bigint
           AND p.order_id = {{params.order_id}}::bigint
           AND p.status = 'rejected'
@@ -53,6 +55,20 @@ function reopenPaymentOnNetwork() {
               AND (CASE WHEN q.tx_hash ~ '^0x[0-9a-fA-F]{64}$' THEN lower(q.tx_hash) ELSE q.tx_hash END) = tgt.canon
           )
         RETURNING p.id, p.method
+      ), wo_clear AS (
+        -- new incoming payment evidence: a standing write-off must not keep
+        -- the order reading matched while this pends — auto-clear, audited;
+        -- if the payment fails verification the order shows short again
+        DELETE FROM order_writeoffs w
+        USING upd
+        WHERE w.order_id = {{params.order_id}}::bigint
+        RETURNING w.id, w.order_id, w.amount_usd
+      ), wo_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+               jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'payment_reopened')
+        FROM wo_clear
+        RETURNING row_pk
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'payments', upd.id::text, 'payment_reopened_on_network', {{params.actor}},

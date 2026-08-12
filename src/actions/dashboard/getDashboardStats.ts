@@ -17,6 +17,8 @@ function getDashboardStats() {
            WHERE r.group_buy_id = {{params.group_buy_id}}::bigint) AS due_usd,
         (SELECT COALESCE(SUM(comp_usd),0) FROM v_order_reconciliation r
            WHERE r.group_buy_id = {{params.group_buy_id}}::bigint) AS comp_usd,
+        (SELECT COALESCE(SUM(writeoff_usd),0) FROM v_order_reconciliation r
+           WHERE r.group_buy_id = {{params.group_buy_id}}::bigint) AS writeoff_usd,
         (SELECT COUNT(*) FROM v_order_reconciliation r
            WHERE r.group_buy_id = {{params.group_buy_id}}::bigint AND r.recon_status = 'short') AS short_count,
         (SELECT COUNT(*) FROM v_order_reconciliation r

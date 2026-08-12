@@ -10,6 +10,10 @@ import { action } from '@uibakery/data';
  *   belongs to an order in a DIFFERENT group buy, the update is refused
  *   (RETURNING is empty) rather than hijacking that order.
  * - The full original row is preserved in raw_import.
+ * - Takes the per-order advisory lock (class 42001) when the order already
+ *   exists: the update can change total_usd, which feeds the write-off cap
+ *   (due = billed - comps - write-off) — total changes must serialize with
+ *   cap reads. New orders have nothing to protect (no write-off can exist).
  */
 function importUpsertOrder() {
   return action('importUpsertOrder', 'SQL', {
@@ -30,7 +34,15 @@ function importUpsertOrder() {
         RETURNING id
       ), cust AS (
         SELECT id FROM existing UNION ALL SELECT id FROM ins
-      )
+      ), lck AS (
+        SELECT pg_advisory_xact_lock(42001, o.id::int) AS locked
+        FROM orders o
+        WHERE o.order_number = {{params.order_number}}
+      ), prev AS (
+        SELECT o.id, o.total_usd
+        FROM lck, orders o
+        WHERE o.order_number = {{params.order_number}}
+      ), up AS (
       INSERT INTO orders (
         external_id, order_number, group_buy_id, customer_id, status, payment_rail,
         contact_name, contact_email, contact_phone, discord_username,
@@ -64,6 +76,10 @@ function importUpsertOrder() {
         NULLIF({{params.customer_note}}::text, ''),
         {{params.raw_import}}::jsonb
       FROM cust
+      -- scalar dependency (not a join): lck is empty for NEW orders and must
+      -- not suppress the insert; referencing it forces the lock to be taken
+      -- first when the order exists
+      WHERE (SELECT COUNT(*) FROM lck) >= 0
       ON CONFLICT (order_number) DO UPDATE SET
         -- guarded below: never adopt an order that belongs to another campaign
         external_id = COALESCE(EXCLUDED.external_id, orders.external_id),
@@ -87,7 +103,26 @@ function importUpsertOrder() {
         customer_note = EXCLUDED.customer_note,
         raw_import = EXCLUDED.raw_import
       WHERE orders.group_buy_id = EXCLUDED.group_buy_id
-      RETURNING id
+      RETURNING id, total_usd
+      ), wo_clear AS (
+        -- a CHANGED billed total invalidates a standing write-off (the
+        -- forgiven shortfall was computed against the old total): auto-clear
+        -- it, audited. Unchanged totals — the routine re-import case — leave
+        -- write-offs alone (IS DISTINCT FROM guard).
+        DELETE FROM order_writeoffs w
+        USING up, prev
+        WHERE w.order_id = up.id
+          AND prev.id = up.id
+          AND prev.total_usd IS DISTINCT FROM up.total_usd
+        RETURNING w.id, w.order_id, w.amount_usd
+      ), wo_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', 'import',
+               jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'import_total_change')
+        FROM wo_clear
+        RETURNING row_pk
+      )
+      SELECT id FROM up
     `,
   });
 }

@@ -14,6 +14,7 @@ import undoPaymentRejection from '@/actions/payments/undoPaymentRejection';
 import recordChainVerification from '@/actions/payments/recordChainVerification';
 import { lookupTxPayment } from '@/lib/verifyPayment';
 import setOrderItemComp from '@/actions/orders/setOrderItemComp';
+import setOrderWriteoff from '@/actions/orders/setOrderWriteoff';
 import updateOrderRail from '@/actions/orders/updateOrderRail';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { shortHash } from '@/lib/explorer';
@@ -45,7 +46,8 @@ type OrderRow = {
   customer_name: string; customer_email: string | null;
   recon_status: string | null; received_usd: string | null; override_usd: string | null;
   effective_received_usd: string | null; diff_usd: string | null;
-  comp_usd: string | null; due_usd: string | null;
+  comp_usd: string | null; writeoff_usd: string | null; due_usd: string | null;
+  pending_payment_count: string | null;
 };
 
 type ItemRow = {
@@ -80,6 +82,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doUndoRejection] = useMutateAction(undoPaymentRejection);
   const [doRecordVerification] = useMutateAction(recordChainVerification);
   const [doSetComp] = useMutateAction(setOrderItemComp);
+  const [doSetWriteoff] = useMutateAction(setOrderWriteoff);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
 
   const [status, setStatus] = useState('imported');
@@ -98,6 +101,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
 
   // rail correction (order says ETH, money verified on SOL)
   const [railMsg, setRailMsg] = useState('');
+
+  // write-off (forgive a small residual shortfall)
+  const [woEditing, setWoEditing] = useState(false);
+  const [woAmt, setWoAmt] = useState('');
+  const [woReason, setWoReason] = useState('');
+  const [woMsg, setWoMsg] = useState('');
 
   // comped (free) items
   const [compingId, setCompingId] = useState<number | null>(null);
@@ -131,6 +140,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       setCashAmt(''); setCashRef(''); setCashMsg('');
       setCashMethod(o.payment_rail === 'cash' ? 'zelle' : 'other');
       setCompingId(null); setCompQty(''); setCompReason(''); setCompMsg('');
+      setWoEditing(false); setWoAmt(''); setWoReason(''); setWoMsg('');
       setRailMsg('');
     }
   }, [o?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -374,6 +384,34 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       reloadOrder();
     } catch (e: unknown) {
       setRailMsg(e instanceof Error ? e.message : 'Failed to correct rail');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Write-off: forgive a small residual shortfall (fee dust, rounding, a
+  // few dollars short). The SQL caps the amount at the order's CURRENT
+  // shortfall in-transaction, so a write-off can never exceed what's
+  // actually missing; the value stays tracked in recon and P&L.
+  const saveWriteoff = async (amountStr: string, reason: string) => {
+    if (!o) return;
+    const clearing = Number(amountStr) === 0;
+    if (!/^\d+(?:\.\d{1,2})?$/.test(amountStr.trim())) { setWoMsg('Amount must be a number with at most 2 decimals.'); return; }
+    if (!clearing && !reason.trim()) { setWoMsg('A reason is required — write-offs are audited money.'); return; }
+    setSaving(true); setWoMsg('');
+    try {
+      const res = await doSetWriteoff({
+        order_id: o.id, amount: amountStr.trim(), reason: reason.trim(), actor: userName,
+      }) as { written: string }[] | { written: string };
+      const written = Number(Array.isArray(res) ? res[0]?.written : res?.written);
+      if (!written) {
+        setWoMsg(clearing ? 'Nothing to clear.' : 'Refused — the amount exceeds what the order is actually short (or the reason is missing).');
+      } else {
+        setWoEditing(false); setWoAmt(''); setWoReason('');
+      }
+      reloadOrder();
+    } catch (e: unknown) {
+      setWoMsg(e instanceof Error ? e.message : 'Failed to save write-off');
     } finally {
       setSaving(false);
     }
@@ -675,12 +713,43 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   {Number(o.processor_fee_usd) > 0 && <div className="flex justify-between"><span>Processor fee</span><span>{fmtUSD(o.processor_fee_usd)}</span></div>}
                   <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{fmtUSD(o.total_usd)}</span></div>
                   {Number(o.comp_usd) > 0 && (
-                    <>
-                      <div className="flex justify-between text-green-700"><span>Comped items</span><span>−{fmtUSD(o.comp_usd)}</span></div>
-                      <div className="flex justify-between font-semibold text-foreground"><span>Due</span><span>{fmtUSD(o.due_usd)}</span></div>
-                    </>
+                    <div className="flex justify-between text-green-700"><span>Comped items</span><span>−{fmtUSD(o.comp_usd)}</span></div>
+                  )}
+                  {Number(o.writeoff_usd) > 0 && (
+                    <div className="flex justify-between text-green-700"><span>Write-off</span><span>−{fmtUSD(o.writeoff_usd)}</span></div>
+                  )}
+                  {(Number(o.comp_usd) > 0 || Number(o.writeoff_usd) > 0) && (
+                    <div className="flex justify-between font-semibold text-foreground"><span>Due</span><span>{fmtUSD(o.due_usd)}</span></div>
                   )}
                   <div className="flex justify-between"><span>Received (effective)</span><span>{fmtUSD(o.effective_received_usd)}</span></div>
+                  {(Number(o.diff_usd) > 0.005 || Number(o.writeoff_usd) > 0) && (
+                    <div className="mt-1">
+                      {Number(o.pending_payment_count) > 0 && Number(o.writeoff_usd) === 0 ? (
+                        <p className="text-[11px] text-muted-foreground">
+                          Write-off unavailable while {o.pending_payment_count} payment(s) are pending — verify or reject them first; a pending hash may still turn into money.
+                        </p>
+                      ) : !woEditing ? (
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" variant="outline" className="h-6 px-2 text-xs" disabled={saving}
+                            onClick={() => { setWoEditing(true); setWoAmt(Number(o.writeoff_usd) > 0 ? String(Number(o.writeoff_usd)) : String(Number(o.diff_usd))); setWoReason(''); setWoMsg(''); }}>
+                            {Number(o.writeoff_usd) > 0 ? 'Edit write-off' : `Write off ${fmtUSD(o.diff_usd)} short`}
+                          </Button>
+                          <span className="text-[10px]">forgiven value stays tracked in finances</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <Input placeholder="Amount $" value={woAmt} onChange={e => setWoAmt(e.target.value)} className="h-7 w-24 text-xs" />
+                          <Input placeholder="Why write this off? (audited)" value={woReason} onChange={e => setWoReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
+                          <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveWriteoff(woAmt, woReason)}>Save</Button>
+                          {Number(o.writeoff_usd) > 0 && (
+                            <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" disabled={saving} onClick={() => saveWriteoff('0', '')}>Remove</Button>
+                          )}
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setWoEditing(false); setWoMsg(''); }}>Cancel</Button>
+                        </div>
+                      )}
+                      {woMsg && <p className="text-xs text-red-600 mt-0.5">{woMsg}</p>}
+                    </div>
+                  )}
                   {o.override_usd != null && <div className="flex justify-between text-violet-700"><span>Manual override active</span><span>{fmtUSD(o.override_usd)}</span></div>}
                 </div>
               </div>

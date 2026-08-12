@@ -15,11 +15,16 @@ function importPayments() {
   return action('importPayments', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH src AS (
+      WITH lck AS (
+        -- per-order advisory lock (class 42001): creating PENDING payments
+        -- must serialize with the write-off guard, which refuses positive
+        -- write-offs while any payment is pending
+        SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
+      ), src AS (
         SELECT x.kind,
                CASE WHEN x.value ~ '^0x[0-9a-fA-F]{64}$' THEN lower(x.value) ELSE x.value END AS value,
                x.method
-        FROM jsonb_to_recordset({{params.payments}}::jsonb) AS x(kind text, value text, method text)
+        FROM lck, jsonb_to_recordset({{params.payments}}::jsonb) AS x(kind text, value text, method text)
       ), clear_pending_receipts AS (
         DELETE FROM payments
         WHERE order_id = {{params.order_id}}::bigint
@@ -43,6 +48,20 @@ function importPayments() {
         SELECT {{params.order_id}}::bigint, method::payment_method, value, 'pending'
         FROM src WHERE kind = 'receipt'
         RETURNING id
+      ), wo_clear AS (
+        -- new incoming payment evidence: a standing write-off must not keep
+        -- the order reading matched while it pends — auto-clear, audited;
+        -- if the payment fails verification the order shows short again
+        DELETE FROM order_writeoffs w
+        WHERE w.order_id = {{params.order_id}}::bigint
+          AND ((SELECT COUNT(*) FROM ins_hashes) > 0 OR (SELECT COUNT(*) FROM ins_receipts) > 0)
+        RETURNING w.id, w.order_id, w.amount_usd
+      ), wo_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', 'import',
+               jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'imported_payment')
+        FROM wo_clear
+        RETURNING row_pk
       )
       SELECT (SELECT COUNT(*) FROM ins_hashes) AS hashes_added,
              (SELECT COUNT(*) FROM ins_receipts) AS receipts_added

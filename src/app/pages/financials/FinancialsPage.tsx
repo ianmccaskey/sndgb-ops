@@ -22,7 +22,7 @@ type Pnl = {
   product_revenue_usd: string; order_count: string; admin_fee_revenue_usd: string;
   shipping_fee_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string;
   product_profit_usd: string; expenses_usd: string; label_costs_usd: string; net_profit_usd: string;
-  comps_usd: string;
+  comps_usd: string; writeoffs_usd: string;
   splits: { party: string; pct: string }[] | null;
 };
 type Expense = { id: number; category: string; description: string; unit_cost_usd: string; qty: string; total_usd: string };
@@ -129,6 +129,9 @@ export function FinancialsPage() {
             <div className="flex justify-between"><span className="text-muted-foreground">Tips</span><span>{fmtUSD(pnl?.tip_revenue_usd)}</span></div>
             {Number(pnl?.comps_usd) > 0 && (
               <div className="flex justify-between"><span className="text-muted-foreground">Comped product (free to customers)</span><span className="text-red-600">−{fmtUSD(pnl?.comps_usd)}</span></div>
+            )}
+            {Number(pnl?.writeoffs_usd) > 0 && (
+              <div className="flex justify-between"><span className="text-muted-foreground">Write-offs (forgiven shortfalls)</span><span className="text-red-600">−{fmtUSD(pnl?.writeoffs_usd)}</span></div>
             )}
             <div className="flex justify-between font-medium border-t pt-1"><span>Total revenue</span><span>{fmtUSD(pnl?.total_revenue_usd)}</span></div>
             <div className="flex justify-between mt-2"><span className="text-muted-foreground">Product profit</span><span>{fmtUSD(pnl?.product_profit_usd)}</span></div>
