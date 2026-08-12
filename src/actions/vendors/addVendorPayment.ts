@@ -50,10 +50,13 @@ function addVendorPayment() {
           -- unattributed kits would be invisible in it
           AND (inp.kits_n IS NULL OR ({{params.kits_qty}}::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
                AND inp.gbp_id IS NOT NULL
-               -- can't record paying for more kits than THIS PRODUCT is
-               -- currently owed — a typo (1000 for 100) must refuse, not
-               -- silently over-close the tracker
-               AND inp.kits_n <= (
+               -- paying for more kits than THIS PRODUCT is currently owed
+               -- refuses by default — a typo (1000 for 100) must not
+               -- silently over-close the tracker. A DELIBERATE over-buy
+               -- (stock beyond demand) passes allow_over='true' from the
+               -- user-confirmed dialog; the audit row records the override
+               -- and the vendor breakdown shows the line as over by X.
+               AND ({{params.allow_over}}::text = 'true' OR inp.kits_n <= (
                  SELECT m.final_count - COALESCE((
                    SELECT SUM(COALESCE(vp2.kits_qty, 0))
                    FROM vendor_payments vp2
@@ -61,7 +64,7 @@ function addVendorPayment() {
                  ), 0)
                  FROM v_moq_progress m
                  WHERE m.group_buy_product_id = inp.gbp_id
-               )))
+               ))))
           AND (inp.freight_n IS NULL OR ({{params.freight_usd}}::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
                -- freight is a portion of THIS payment — never more than it
                AND inp.freight_n <= {{params.amount_usd}}::numeric
@@ -76,7 +79,7 @@ function addVendorPayment() {
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
       SELECT 'vendor_payments', ins.id::text, 'insert', {{params.actor}},
-             jsonb_build_object('vendor_id', ins.vendor_id, 'amount_usd', ins.amount_usd, 'kits_qty', ins.kits_qty, 'freight_usd', ins.freight_usd, 'group_buy_product_id', ins.group_buy_product_id)
+             jsonb_build_object('vendor_id', ins.vendor_id, 'amount_usd', ins.amount_usd, 'kits_qty', ins.kits_qty, 'freight_usd', ins.freight_usd, 'group_buy_product_id', ins.group_buy_product_id, 'over_owed_override', {{params.allow_over}}::text = 'true')
       FROM ins
       RETURNING row_pk AS id
     `,

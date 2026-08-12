@@ -107,6 +107,21 @@ export function VendorsPage() {
       if (!/^\d+(?:\.\d{1,2})?$/.test(l.value.trim()) || !(Number(l.value) > 0)) { setPError('Every line needs a positive $ value (max 2 decimals).'); return; }
     }
     if (pFreight.trim() !== '' && (!/^\d+(?:\.\d{1,2})?$/.test(pFreight.trim()) || !(Number(pFreight) >= 0))) { setPError('Freight must be a dollar amount with at most 2 decimals.'); return; }
+    // deliberate over-buys (stocking beyond current demand) are allowed, but
+    // only through an explicit confirmation — the server cap stays on for
+    // anything not confirmed, so a typo still refuses
+    const overLines = new Set(active.filter(l => {
+      const pp = vendorProducts.find(v => String(v.group_buy_product_id) === l.product);
+      return pp ? Number(l.kits) > Number(pp.kits_demand) - Number(pp.kits_paid) : false;
+    }));
+    if (overLines.size > 0) {
+      const detail = [...overLines].map(l => {
+        const pp = vendorProducts.find(v => String(v.group_buy_product_id) === l.product)!;
+        const left = Math.max(Number(pp.kits_demand) - Number(pp.kits_paid), 0);
+        return `${pp.sku_code}: ${l.kits} kits, but only ${fmtNum(left)} still owed`;
+      }).join('\n');
+      if (!window.confirm(`These lines exceed what is currently owed:\n\n${detail}\n\nRecord anyway? The vendor breakdown will flag them as over-paid.`)) return;
+    }
     setPSaving(true); setPError('');
     const failed: string[] = [];
     const recordedLines = new Set<PayLine>();
@@ -121,11 +136,15 @@ export function VendorsPage() {
           vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate,
           amount_usd: Number(l.value), wallet_id: pWallet, method: pMethod, receipt_ref: pRef, note: pNote,
           kits_qty: l.kits.trim(), freight_usd: '', group_buy_product_id: l.product,
+          allow_over: overLines.has(l) ? 'true' : '',
           actor: userName,
         }) as unknown[] | null;
         const wrote = Array.isArray(res) ? res.length > 0 : !!res;
         if (wrote) recordedLines.add(l);
-        else failed.push(sku + ' (refused — kits may exceed what is owed)');
+        // only reachable when this page's owed figures were stale (someone
+        // else recorded meanwhile) — the reload below refreshes them, so
+        // pressing Record again raises the override confirmation
+        else failed.push(sku + ' (refused — exceeds kits still owed; press Record again to confirm the over-buy)');
       }
       if (Number(pFreight) > 0) {
         const res = await doPay({
@@ -133,6 +152,7 @@ export function VendorsPage() {
           amount_usd: Number(pFreight), wallet_id: pWallet, method: pMethod, receipt_ref: pRef,
           note: (pNote ? pNote + ' | ' : '') + 'freight',
           kits_qty: '', freight_usd: pFreight.trim(), group_buy_product_id: '',
+          allow_over: '',
           actor: userName,
         }) as unknown[] | null;
         const wrote = Array.isArray(res) ? res.length > 0 : !!res;
