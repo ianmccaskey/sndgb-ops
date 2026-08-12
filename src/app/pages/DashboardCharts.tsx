@@ -168,7 +168,9 @@ export function RailBars({ rails }: { rails: RailRow[] }) {
 export type PnlData = {
   product_revenue_usd: string; admin_fee_revenue_usd: string; shipping_fee_revenue_usd: string;
   tip_revenue_usd: string; total_revenue_usd: string; expenses_usd: string; label_costs_usd: string;
-  comps_usd: string; writeoffs_usd: string; net_profit_usd: string; splits: { party: string; pct: string }[] | null;
+  comps_usd: string; writeoffs_usd: string; adj_both_usd: string; net_profit_usd: string;
+  splits: { party: string; pct: string }[] | null;
+  adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
 };
 
 /** Revenue composition + deductions + net + profit split. */
@@ -186,6 +188,14 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
   const deductions = Number(pnl.expenses_usd) + Number(pnl.label_costs_usd);
   const net = Number(pnl.net_profit_usd);
   const splits = pnl.splits || [];
+  // Personal adjustments come out of THAT party's payout; 'both' is already
+  // deducted from net by the view.
+  const adjByParty = new Map((pnl.adjustments || []).map(a => [a.beneficiary, Number(a.value_usd)]));
+  // An adjustment whose beneficiary matches no CURRENT split party would be
+  // deducted from no one — that must be a loud warning, never a silent omission
+  // (split renames/deletes can orphan previously valid attributions).
+  const orphanedAdj = (pnl.adjustments || []).filter(a =>
+    a.beneficiary !== 'both' && Number(a.value_usd) !== 0 && !splits.some(s => s.party === a.beneficiary));
 
   return (
     <Card>
@@ -222,16 +232,43 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
           {Number(pnl.writeoffs_usd) > 0 && (
             <div className="flex justify-between"><span className="text-muted-foreground">Write-offs</span><span className="text-red-600">−{fmtUSD(pnl.writeoffs_usd, { cents: false })}</span></div>
           )}
+          {Number(pnl.adj_both_usd) !== 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Adjustments (both)</span>
+              {Number(pnl.adj_both_usd) > 0
+                ? <span className="text-red-600">−{fmtUSD(pnl.adj_both_usd, { cents: false })}</span>
+                : <span className="text-green-700">+{fmtUSD(-Number(pnl.adj_both_usd), { cents: false })}</span>}
+            </div>
+          )}
+          {(pnl.adjustments || []).filter(a => a.beneficiary !== 'both' && Number(a.value_usd) !== 0).map(a => (
+            <div key={a.beneficiary} className="flex justify-between">
+              <span className="text-muted-foreground">Adjustments — {a.beneficiary} (from their split)</span>
+              {Number(a.value_usd) > 0
+                ? <span className="text-red-600">−{fmtUSD(a.value_usd, { cents: false })}</span>
+                : <span className="text-green-700">+{fmtUSD(-Number(a.value_usd), { cents: false })}</span>}
+            </div>
+          ))}
           <div className="flex justify-between font-semibold"><span>Net profit</span><span className="text-green-700">{fmtUSD(net, { cents: false })}</span></div>
         </div>
+        {orphanedAdj.length > 0 && (
+          <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+            <span className="font-semibold">Unattributed adjustments:</span>{' '}
+            {orphanedAdj.map(a => `${a.beneficiary} (${fmtUSD(a.value_usd)})`).join(', ')} — no current split party matches, so this value is deducted from NO ONE's payout. Reassign these adjustments on the Products page.
+          </div>
+        )}
         {splits.length > 0 && (
           <div className="text-sm space-y-1 border-t pt-2">
-            {splits.map(s => (
-              <div key={s.party} className="flex justify-between">
-                <span className="text-muted-foreground">{s.party} ({Number(s.pct)}%)</span>
-                <span>{fmtUSD(net * Number(s.pct) / 100, { cents: false })}</span>
-              </div>
-            ))}
+            {splits.map(s => {
+              const personal = adjByParty.get(s.party) || 0;
+              return (
+                <div key={s.party} className="flex justify-between">
+                  <span className="text-muted-foreground">
+                    {s.party} ({Number(s.pct)}%){personal > 0 ? ` − ${fmtUSD(personal, { cents: false })} adj` : personal < 0 ? ` + ${fmtUSD(-personal, { cents: false })} adj credit` : ''}
+                  </span>
+                  <span>{fmtUSD(net * Number(s.pct) / 100 - personal, { cents: false })}</span>
+                </div>
+              );
+            })}
           </div>
         )}
       </CardContent>

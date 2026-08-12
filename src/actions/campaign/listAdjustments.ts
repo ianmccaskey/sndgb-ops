@@ -4,7 +4,8 @@ function listAdjustments() {
   return action('listAdjustments', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT a.id, a.group_buy_product_id, a.qty, a.reason, a.created_by, a.created_at,
+      SELECT a.id, a.group_buy_product_id, a.qty, a.reason, a.created_by, a.created_at, a.beneficiary,
+             (a.qty * gbp.gb_price_usd) AS value_usd,
              p.sku_code
       FROM admin_adjustments a
       JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id

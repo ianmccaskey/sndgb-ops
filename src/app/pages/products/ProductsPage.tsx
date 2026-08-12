@@ -9,9 +9,10 @@ import markOrderedFromVendor from '@/actions/campaign/markOrderedFromVendor';
 import listAdjustments from '@/actions/campaign/listAdjustments';
 import addAdjustment from '@/actions/campaign/addAdjustment';
 import deleteAdjustment from '@/actions/campaign/deleteAdjustment';
+import getPnl from '@/actions/financials/getPnl';
 import { useApp } from '@/app/AppContext';
 import { OrderingAppSync } from '@/app/pages/products/OrderingAppSync';
-import { rows } from '@/lib/rows';
+import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtNum, fmtDateTime } from '@/lib/fmt';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,7 +34,8 @@ type CampaignProduct = {
   qty_cap: string | null;
   cost_tier_qty: string | null; cost_tier_price: string | null;
 };
-type Adjustment = { id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string };
+type Adjustment = { id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string };
+type SplitParty = { party: string; pct: string };
 
 export function ProductsPage() {
   const { groupBuyId, userName } = useApp();
@@ -43,6 +45,8 @@ export function ProductsPage() {
   const [rawVendors] = useLoadAction(listVendors, [], {});
   const [rawCampaign, , , reloadCampaign] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawAdj, , , reloadAdj] = useLoadAction(listAdjustments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const splitParties: SplitParty[] = (firstRow<{ splits: SplitParty[] | null }>(rawPnl)?.splits) || [];
 
   const products = rows<Product>(rawProducts);
   const vendors = rows<Vendor>(rawVendors);
@@ -79,6 +83,7 @@ export function ProductsPage() {
   const [aProduct, setAProduct] = useState('');
   const [aQty, setAQty] = useState('');
   const [aReason, setAReason] = useState('');
+  const [aFor, setAFor] = useState('both');
   const [aError, setAError] = useState('');
 
   const saveCampaignProduct = async () => {
@@ -186,12 +191,12 @@ export function ProductsPage() {
     try {
       // The action refuses (returns no row) instead of letting Postgres
       // round an over-precision qty — surface that as an error, not success.
-      const res = await doAddAdj({ group_buy_product_id: Number(aProduct), qty, reason: aReason.trim(), created_by: userName });
+      const res = await doAddAdj({ group_buy_product_id: Number(aProduct), qty, reason: aReason.trim(), created_by: userName, beneficiary: aFor });
       // Mutate results can be an array of rows or a singleton object — treat
       // only an empty/absent result as refused (same handling as ImportPage).
       const wrote = Array.isArray(res) ? res.length > 0 : !!res;
       if (!wrote) throw new Error('Adjustment refused: qty must be non-zero with at most 2 decimal places.');
-      setAQty(''); setAReason('');
+      setAQty(''); setAReason(''); setAFor('both');
       reloadAdj(); reloadCampaign();
     } catch (e: unknown) {
       setAError(e instanceof Error ? e.message : 'Failed to add adjustment');
@@ -249,7 +254,14 @@ export function ProductsPage() {
                     <TableCell className="text-right font-medium">{fmtUSD(c.gb_price_usd)}</TableCell>
                     <TableCell className="text-right">{fmtNum(c.target_moq)}</TableCell>
                     <TableCell className={`text-right ${c.moq_met ? 'text-green-700 font-medium' : ''}`}>{fmtNum(c.demand_qty)}</TableCell>
-                    <TableCell className="text-right font-medium">{fmtNum(c.final_count)}</TableCell>
+                    <TableCell className="text-right font-medium">
+                      {fmtNum(c.final_count)}
+                      {Number(c.adjustment_qty) !== 0 && (
+                        <span className="block text-[10px] text-muted-foreground font-normal" title="Admin adjustments included in the final count">
+                          {Number(c.adjustment_qty) > 0 ? '+' : ''}{fmtNum(c.adjustment_qty)} adj
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">{fmtUSD(c.owed_to_vendor_usd, { cents: false })}</TableCell>
                     <TableCell className="text-right text-green-700">{fmtUSD(c.total_product_profit_usd, { cents: false })}</TableCell>
                     <TableCell className="text-right text-xs">
@@ -345,10 +357,20 @@ export function ProductsPage() {
                   </SelectContent>
                 </Select>
                 <Input placeholder="Qty (+/-)" value={aQty} onChange={e => setAQty(e.target.value)} className="h-9 w-24" />
+                <Select value={aFor} onValueChange={setAFor}>
+                  <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="both">Both</SelectItem>
+                    {splitParties.map(p => <SelectItem key={p.party} value={p.party}>{p.party}</SelectItem>)}
+                  </SelectContent>
+                </Select>
                 <Input placeholder="Reason (e.g. 'P&P personal x100')" value={aReason} onChange={e => setAReason(e.target.value)} className="h-9 flex-1 min-w-48" />
                 <Button size="sm" onClick={addAdj}>Add</Button>
               </div>
               {aError && <p className="text-sm text-red-600">{aError}</p>}
+              <p className="text-xs text-muted-foreground">
+                "For" decides whose profit pays for these units at GB price: a person's adjustments come out of their split payout; "Both" comes out of total profit before the split.
+              </p>
             </CardContent>
           </Card>
           <div className="border rounded-lg overflow-x-auto">
@@ -357,6 +379,8 @@ export function ProductsPage() {
                 <TableRow>
                   <TableHead>SKU</TableHead>
                   <TableHead className="text-right">Qty</TableHead>
+                  <TableHead>For</TableHead>
+                  <TableHead className="text-right">Value</TableHead>
                   <TableHead>Reason</TableHead>
                   <TableHead>By</TableHead>
                   <TableHead>When</TableHead>
@@ -368,6 +392,8 @@ export function ProductsPage() {
                   <TableRow key={a.id}>
                     <TableCell className="font-medium">{a.sku_code}</TableCell>
                     <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
+                    <TableCell>{a.beneficiary === 'both' ? 'Both' : a.beneficiary}</TableCell>
+                    <TableCell className="text-right">{fmtUSD(a.value_usd)}</TableCell>
                     <TableCell>{a.reason}</TableCell>
                     <TableCell>{a.created_by}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{fmtDateTime(a.created_at)}</TableCell>
@@ -380,7 +406,7 @@ export function ProductsPage() {
                   </TableRow>
                 ))}
                 {adjustments.length === 0 && (
-                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-6">No adjustments.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">No adjustments.</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>

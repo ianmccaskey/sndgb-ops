@@ -22,7 +22,8 @@ type Pnl = {
   product_revenue_usd: string; order_count: string; admin_fee_revenue_usd: string;
   shipping_fee_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string;
   product_profit_usd: string; expenses_usd: string; label_costs_usd: string; net_profit_usd: string;
-  comps_usd: string; writeoffs_usd: string;
+  comps_usd: string; writeoffs_usd: string; adj_both_usd: string;
+  adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
   splits: { party: string; pct: string }[] | null;
 };
 type Expense = { id: number; category: string; description: string; unit_cost_usd: string; qty: string; total_usd: string };
@@ -133,6 +134,14 @@ export function FinancialsPage() {
             {Number(pnl?.writeoffs_usd) > 0 && (
               <div className="flex justify-between"><span className="text-muted-foreground">Write-offs (forgiven shortfalls)</span><span className="text-red-600">−{fmtUSD(pnl?.writeoffs_usd)}</span></div>
             )}
+            {Number(pnl?.adj_both_usd) !== 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Admin adjustments (both, at GB price)</span>
+                {Number(pnl?.adj_both_usd) > 0
+                  ? <span className="text-red-600">−{fmtUSD(pnl?.adj_both_usd)}</span>
+                  : <span className="text-green-700">+{fmtUSD(-Number(pnl?.adj_both_usd))}</span>}
+              </div>
+            )}
             <div className="flex justify-between font-medium border-t pt-1"><span>Total revenue</span><span>{fmtUSD(pnl?.total_revenue_usd)}</span></div>
             <div className="flex justify-between mt-2"><span className="text-muted-foreground">Product profit</span><span>{fmtUSD(pnl?.product_profit_usd)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Expenses (supplies, shipping, testing…)</span><span className="text-red-600">−{fmtUSD(pnl?.expenses_usd)}</span></div>
@@ -140,12 +149,26 @@ export function FinancialsPage() {
             <div className="flex justify-between font-semibold text-base border-t pt-1">
               <span>Net profit</span><span className={netProfit >= 0 ? 'text-green-700' : 'text-red-600'}>{fmtUSD(netProfit)}</span>
             </div>
-            {(pnl?.splits || []).map(s => (
-              <div key={s.party} className="flex justify-between text-muted-foreground">
-                <span>{s.party} ({Number(s.pct)}%)</span>
-                <span>{fmtUSD(netProfit * Number(s.pct) / 100)}</span>
+            {((pnl?.adjustments || []).filter(a =>
+              a.beneficiary !== 'both' && Number(a.value_usd) !== 0 && !(pnl?.splits || []).some(s => s.party === a.beneficiary)
+            )).length > 0 && (
+              <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                <span className="font-semibold">Unattributed adjustments:</span>{' '}
+                {(pnl?.adjustments || [])
+                  .filter(a => a.beneficiary !== 'both' && Number(a.value_usd) !== 0 && !(pnl?.splits || []).some(s => s.party === a.beneficiary))
+                  .map(a => `${a.beneficiary} (${fmtUSD(a.value_usd)})`).join(', ')}
+                {' '}— no current split party matches, so this value is deducted from NO ONE's payout. Reassign on the Products page.
               </div>
-            ))}
+            )}
+            {(pnl?.splits || []).map(s => {
+              const personal = Number((pnl?.adjustments || []).find(a => a.beneficiary === s.party)?.value_usd || 0);
+              return (
+                <div key={s.party} className="flex justify-between text-muted-foreground">
+                  <span>{s.party} ({Number(s.pct)}%){personal > 0 ? ` − ${fmtUSD(personal)} personal adjustments` : personal < 0 ? ` + ${fmtUSD(-personal)} adjustment credit` : ''}</span>
+                  <span>{fmtUSD(netProfit * Number(s.pct) / 100 - personal)}</span>
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
 
