@@ -8,8 +8,7 @@ import addManualPaymentByNumber from '@/actions/payments/addManualPaymentByNumbe
 import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
-import { getEvmTxTransfers } from '@/lib/moralis';
-import { getSolTxTransfers } from '@/lib/helius';
+import { lookupTxPayment } from '@/lib/verifyPayment';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -35,57 +34,6 @@ type PendingPayment = {
   payment_id: number; method: string; tx_hash: string; order_id: number;
   order_number: string; total_usd: string; customer_name: string;
 };
-
-/**
- * Verify one pending crypto payment against the chain. Stablecoin transfers
- * to the receiving wallet count at face value; native ETH/SOL counts only
- * when a wallet address is configured and is recorded with its token amount
- * for drift tracking (USD value must then be entered via override/manual).
- */
-async function lookupPayment(
-  p: PendingPayment,
-  settings: Record<string, string>,
-): Promise<{ amountUsd: number; nativeAmount: number | null; nativeSymbol: string | null; note: string }> {
-  const method = p.method as 'eth' | 'sol' | 'base' | string;
-  if (method === 'sol') {
-    const key = settings.helius_api_key;
-    if (!key) throw new Error('Set the Helius API key in Settings first.');
-    const wallet = (settings.sol_wallet_address || '').trim();
-    const transfers = await getSolTxTransfers(key, p.tx_hash);
-    const toUs = wallet ? transfers.filter(t => t.to === wallet) : transfers;
-    // Everything the lib maps except the native coin is a USD stablecoin
-    // (USDC/USDT/PYUSD today) — counted at face value.
-    const stable = toUs.filter(t => t.token !== 'SOL').reduce((s, t) => s + t.amount, 0);
-    const native = toUs.filter(t => t.token === 'SOL').reduce((s, t) => s + t.amount, 0);
-    if (stable === 0 && native === 0) throw new Error(wallet ? 'No transfer to the configured SOL wallet found in this tx.' : 'No stablecoin transfer found in this tx.');
-    return {
-      amountUsd: stable,
-      nativeAmount: native > 0 ? native : null,
-      nativeSymbol: native > 0 ? 'SOL' : null,
-      note: wallet ? '' : 'No SOL wallet configured — amount not recipient-checked.',
-    };
-  }
-  if (method === 'eth' || method === 'base') {
-    const key = settings.moralis_api_key;
-    if (!key) throw new Error('Set the Moralis API key in Settings first.');
-    const walletKey = method === 'base' ? 'base_wallet_address' : 'eth_wallet_address';
-    const wallet = (settings[walletKey] || '').trim().toLowerCase();
-    const transfers = await getEvmTxTransfers(key, method, p.tx_hash);
-    const toUs = wallet ? transfers.filter(t => t.to === wallet) : transfers;
-    // Everything the lib maps except the native coin is a USD stablecoin
-    // (USDC/USDT/PYUSD today) — counted at face value.
-    const stable = toUs.filter(t => t.token !== 'ETH').reduce((s, t) => s + t.amount, 0);
-    const native = toUs.filter(t => t.token === 'ETH').reduce((s, t) => s + t.amount, 0);
-    if (stable === 0 && native === 0) throw new Error(wallet ? 'No transfer to the configured wallet found in this tx.' : 'No stablecoin transfer found in this tx.');
-    return {
-      amountUsd: stable,
-      nativeAmount: native > 0 ? native : null,
-      nativeSymbol: native > 0 ? 'ETH' : null,
-      note: wallet ? '' : 'No wallet address configured — amount not recipient-checked.',
-    };
-  }
-  throw new Error(`Cannot chain-verify a ${method} payment.`);
-}
 
 export function ReconPage() {
   const { groupBuyId, groupBuy, settings, userName } = useApp();
@@ -121,7 +69,7 @@ export function ReconPage() {
   const verifyOne = async (p: PendingPayment) => {
     setVerifying(v => ({ ...v, [p.payment_id]: 'checking…' }));
     try {
-      const res = await lookupPayment(p, settings);
+      const res = await lookupTxPayment(p.method, p.tx_hash, settings);
       const billed = parseFloat(p.total_usd);
       const tolerance = parseFloat(groupBuy?.reconcile_tolerance_usd || '1');
       // Native-token payments without a USD value stay pending-equivalent as

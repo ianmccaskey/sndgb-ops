@@ -11,6 +11,8 @@ import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
 import addManualPaymentByNumber from '@/actions/payments/addManualPaymentByNumber';
 import reopenPaymentOnNetwork from '@/actions/payments/reopenPaymentOnNetwork';
 import undoPaymentRejection from '@/actions/payments/undoPaymentRejection';
+import recordChainVerification from '@/actions/payments/recordChainVerification';
+import { lookupTxPayment } from '@/lib/verifyPayment';
 import setOrderItemComp from '@/actions/orders/setOrderItemComp';
 import updateOrderRail from '@/actions/orders/updateOrderRail';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
@@ -76,6 +78,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doCashPay] = useMutateAction(addManualPaymentByNumber);
   const [doReopenNetwork] = useMutateAction(reopenPaymentOnNetwork);
   const [doUndoRejection] = useMutateAction(undoPaymentRejection);
+  const [doRecordVerification] = useMutateAction(recordChainVerification);
   const [doSetComp] = useMutateAction(setOrderItemComp);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
 
@@ -146,6 +149,43 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     return plausible.filter(m => m !== p.method);
   };
 
+  // Inline on-chain verification — same lookup + same write-if-still-pending
+  // action as the Reconciliation page, so a hash just added (or re-opened)
+  // can be confirmed without leaving the order.
+  const verifyNow = async (p: PaymentRow) => {
+    if (!o || !p.tx_hash) return;
+    setSaving(true); setPayMsg('');
+    try {
+      const res = await lookupTxPayment(p.method, p.tx_hash, settings);
+      // Native-token payments without a USD value become mismatch so someone
+      // prices them; stablecoin payments verify at face value — order-level
+      // recon decides matched/short/over.
+      const status = res.amountUsd > 0 ? 'verified' : 'mismatch';
+      const recorded = await doRecordVerification({
+        payment_id: p.id,
+        amount_usd: res.amountUsd,
+        native_amount: res.nativeAmount != null ? String(res.nativeAmount) : '',
+        native_symbol: res.nativeSymbol || '',
+        value_at_pay_usd: '',
+        status,
+        notes: res.note,
+        actor: userName,
+      }) as unknown[] | null;
+      // Zero rows = the payment stopped being pending mid-lookup (e.g. it was
+      // rejected in another tab) — the stale result was NOT written.
+      const wrote = Array.isArray(recorded) ? recorded.length > 0 : !!recorded;
+      const nativeOnly = res.amountUsd === 0 && res.nativeAmount != null && res.nativeAmount > 0;
+      setPayMsg(!wrote ? 'Skipped — the payment is no longer pending.'
+        : nativeOnly ? `Native ${res.nativeAmount} ${res.nativeSymbol} found — needs USD pricing; set an order override below to count it.`
+        : `Verified on-chain: ${fmtUSD(res.amountUsd)}.`);
+      reloadPayments(); reloadOrder();
+    } catch (e: unknown) {
+      setPayMsg(e instanceof Error ? e.message : 'Verification failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Undo a MISTAKEN rejection (same network — the reopen buttons only offer
   // different ones). Explicit and audited: a reason is required, and the
   // payment goes back to pending to re-earn verification on-chain.
@@ -163,7 +203,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       if (!reopened) {
         setPayMsg('Could not undo — the hash may now live on another non-rejected payment.');
       } else {
-        setPayMsg('Rejection undone — the payment is pending again; run Verify on the Reconciliation page.');
+        setPayMsg('Rejection undone — the payment is pending again; click Verify next to it.');
         setUndoingId(null); setUndoReason('');
       }
       reloadPayments(); reloadOrder();
@@ -188,7 +228,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       if (!reopened) {
         setPayMsg('Could not re-open — the hash may already live on another non-rejected payment, or its format does not match that network.');
       } else {
-        setPayMsg(`Re-opened as pending on ${method.toUpperCase()} — run Verify on the Reconciliation page to confirm it on-chain.`);
+        setPayMsg(`Re-opened as pending on ${method.toUpperCase()} — click Verify next to it to confirm on-chain.`);
       }
       reloadPayments(); reloadOrder();
     } catch (e: unknown) {
@@ -421,7 +461,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       const res = await doAddHash({ order_id: o.id, method: newHashMethod, tx_hash: h, actor: userName }) as { inserted: string }[] | { inserted: string };
       const inserted = Number(Array.isArray(res) ? res[0]?.inserted : res?.inserted);
       if (!inserted) { setPayMsg('That hash is already recorded on a non-rejected payment — or was rejected on this very order.'); }
-      else { setPayMsg('Added as pending — run Verify on the Reconciliation page to confirm it on-chain.'); setNewHash(''); }
+      else { setPayMsg('Added as pending — click Verify next to it to confirm on-chain.'); setNewHash(''); }
       reloadPayments();
     } catch (e: unknown) {
       setPayMsg(e instanceof Error ? e.message : 'Failed to add hash');
@@ -695,6 +735,11 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-right whitespace-nowrap">{Number(p.amount_usd) > 0 ? fmtUSD(p.amount_usd) : '—'}</span>
+                        {p.status === 'pending' && p.tx_hash && ['eth', 'sol', 'base'].includes(p.method) && (
+                          <Button size="sm" variant="outline" className="h-6 px-2 text-xs" disabled={saving} onClick={() => verifyNow(p)}>
+                            Verify
+                          </Button>
+                        )}
                         {p.status !== 'rejected' && rejectingId !== p.id && (
                           <Button size="sm" variant="ghost" className="h-6 text-xs text-red-600" onClick={() => { setRejectingId(p.id); setRejectReason(''); setPayMsg(''); }}>
                             Reject
