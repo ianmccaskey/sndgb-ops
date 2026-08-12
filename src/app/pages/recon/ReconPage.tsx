@@ -29,6 +29,7 @@ type ReconRow = {
 type RailRow = {
   payment_rail: string | null; order_count: string; billed_usd: string; received_usd: string;
   gap_usd: string; wallet_name: string | null; wallet_balance_usd: string | null; snapshot_at: string | null;
+  vendor_paid_usd: string; vendor_paid_asof_usd: string; wallet_count: string | null;
 };
 type PendingPayment = {
   payment_id: number; method: string; tx_hash: string; order_id: number;
@@ -159,12 +160,44 @@ export function ReconPage() {
                 <div className={`flex justify-between font-semibold ${Math.abs(gap) > 1 ? 'text-red-600' : 'text-green-700'}`}>
                   <span>Gap</span><span>{fmtUSD(gap, { cents: false })}</span>
                 </div>
-                {r.wallet_name && (
+                {Number(r.vendor_paid_usd) > 0 && (
                   <div className="flex justify-between text-xs text-muted-foreground pt-1 border-t mt-1">
-                    <span>{r.wallet_name} snapshot</span>
-                    <span>{fmtUSD(r.wallet_balance_usd, { cents: false })} · {fmtDateTime(r.snapshot_at)}</span>
+                    <span>Paid to vendors (from this wallet)</span>
+                    <span>−{fmtUSD(r.vendor_paid_usd, { cents: false })}</span>
                   </div>
                 )}
+                {r.wallet_name && (() => {
+                  // Expected ≈ customer money received on this rail minus the
+                  // payouts already reflected in the snapshot (dated at or
+                  // before it) — so a post-payout snapshot reads as
+                  // accounted-for, and a payout newer than the snapshot
+                  // doesn't fabricate drift.
+                  const expected = parseFloat(r.received_usd || '0') - parseFloat(r.vendor_paid_asof_usd || '0');
+                  const snapshot = r.wallet_balance_usd != null ? parseFloat(r.wallet_balance_usd) : null;
+                  const drift = snapshot != null ? snapshot - expected : null;
+                  return (
+                    <div className={`text-xs text-muted-foreground ${Number(r.vendor_paid_usd) > 0 ? '' : 'pt-1 border-t mt-1'} space-y-0.5`}>
+                      <div className="flex justify-between">
+                        <span>{r.wallet_name} snapshot</span>
+                        <span>{fmtUSD(r.wallet_balance_usd, { cents: false })} · {fmtDateTime(r.snapshot_at)}</span>
+                      </div>
+                      {Number(r.vendor_paid_usd) > 0 && drift != null && Number(r.wallet_count) === 1 && (
+                        <div
+                          className="flex justify-between"
+                          title="Approximation assuming this wallet is dedicated to this campaign — an opening balance or unrelated transfers land in the drift figure. The drift is a pointer to investigate, not a reconciliation verdict."
+                        >
+                          <span>≈ Expected if dedicated (received − payouts)</span>
+                          <span>
+                            {fmtUSD(expected, { cents: false })}
+                            <span className={Math.abs(drift) <= 50 ? 'text-green-700' : 'text-amber-600'}>
+                              {' '}({drift >= 0 ? '+' : '−'}{fmtUSD(Math.abs(drift), { cents: false })})
+                            </span>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </CardContent>
             </Card>
           );
