@@ -34,7 +34,7 @@ type Payment = {
 type Wallet = { id: number; name: string };
 type ProductProgress = {
   group_buy_product_id: number; vendor_code: string; sku_code: string;
-  kits_demand: string; kits_paid: string; vendor_order_value_usd: string;
+  kits_demand: string; kits_paid: string; vendor_order_value_usd: string; per_kit_cost_usd: string;
 };
 
 export function VendorsPage() {
@@ -58,13 +58,15 @@ export function VendorsPage() {
 
   const [pVendor, setPVendor] = useState('');
   const [pDate, setPDate] = useState('');
-  const [pAmount, setPAmount] = useState('');
   const [pWallet, setPWallet] = useState('');
   const [pMethod, setPMethod] = useState('USDC');
   const [pRef, setPRef] = useState('');
   const [pNote, setPNote] = useState('');
-  const [pProduct, setPProduct] = useState('');
-  const [pKits, setPKits] = useState('');
+  // one payment = one or more product lines; each line's value auto-computes
+  // from kits × the product's current per-kit vendor cost, editable for
+  // discounts. Every line is recorded as its own guarded payment row.
+  type PayLine = { product: string; kits: string; value: string; valueDirty: boolean };
+  const [pLines, setPLines] = useState<PayLine[]>([{ product: '', kits: '', value: '', valueDirty: false }]);
   const [pFreight, setPFreight] = useState('');
   const [pError, setPError] = useState('');
   const [pSaving, setPSaving] = useState(false);
@@ -74,37 +76,87 @@ export function VendorsPage() {
 
   const overpaid = balances.filter(b => b.pay_status === 'OVERPAID');
 
-  const recordPayment = async () => {
-    const amt = Number(pAmount);
-    if (!pVendor || !pDate || !(amt > 0)) {
-      setPError('Vendor, date, and a positive amount are required.');
-      return;
-    }
-    if (pKits.trim() !== '' && !/^\d+(?:\.\d{1,2})?$/.test(pKits.trim())) { setPError('Kits must be a number with at most 2 decimals.'); return; }
-    if (pKits.trim() !== '' && !pProduct) { setPError('Pick which product the kits are for — the per-product tracker needs it.'); return; }
-    if (pFreight.trim() !== '' && !/^\d+(?:\.\d{1,2})?$/.test(pFreight.trim())) { setPError('Freight must be a dollar amount with at most 2 decimals.'); return; }
-    if (pFreight.trim() !== '' && Number(pFreight) > amt) { setPError('Freight is the portion of THIS payment — it cannot exceed the payment amount.'); return; }
-    setPSaving(true); setPError('');
-    try {
-      const res = await doPay({
-        vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate,
-        amount_usd: amt, wallet_id: pWallet, method: pMethod, receipt_ref: pRef, note: pNote,
-        kits_qty: pKits.trim(), freight_usd: pFreight.trim(), group_buy_product_id: pProduct,
-        actor: userName,
-      }) as unknown[] | null;
-      // The action's guards refuse by returning no rows — a silent zero-row
-      // result must NOT look like a recorded payment.
-      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
-      if (!wrote) {
-        setPError('Payment NOT recorded — check the kits/freight values (freight cannot exceed the payment amount).');
-        setPSaving(false);
-        return;
+  const vendorCode = vendors.find(v => String(v.id) === pVendor)?.code || '';
+  const vendorProducts = productProgress.filter(pp => pp.vendor_code === vendorCode);
+
+  const setLine = (i: number, patch: Partial<PayLine>) => {
+    setPLines(ls => ls.map((l, j) => {
+      if (j !== i) return l;
+      const next = { ...l, ...patch };
+      // kits or product changed and the operator has not hand-edited the
+      // value: recompute kits × per-kit vendor cost
+      if (!next.valueDirty && (patch.kits !== undefined || patch.product !== undefined)) {
+        const pp = vendorProducts.find(v => String(v.group_buy_product_id) === next.product);
+        const kits = Number(next.kits);
+        next.value = pp && kits > 0 ? (Math.round(kits * Number(pp.per_kit_cost_usd) * 100) / 100).toFixed(2) : '';
       }
-      setPAmount(''); setPRef(''); setPNote(''); setPKits(''); setPFreight(''); setPProduct('');
-      reloadBalances(); reloadPayments(); reloadProgress();
+      return next;
+    }));
+  };
+
+  const linesTotal = pLines.reduce((sum, l) => sum + (Number(l.value) > 0 ? Number(l.value) : 0), 0);
+  const paymentTotal = Math.round((linesTotal + (Number(pFreight) > 0 ? Number(pFreight) : 0)) * 100) / 100;
+
+  const recordPayment = async () => {
+    const active = pLines.filter(l => l.product || l.kits.trim() || l.value.trim());
+    if (!pVendor || !pDate) { setPError('Vendor and date are required.'); return; }
+    if (active.length === 0 && !(Number(pFreight) > 0)) { setPError('Add at least one product line (or freight).'); return; }
+    for (const l of active) {
+      if (!l.product) { setPError('Every line needs a product.'); return; }
+      if (!/^\d+(?:\.\d{1,2})?$/.test(l.kits.trim()) || !(Number(l.kits) > 0)) { setPError('Every line needs a positive kit count (max 2 decimals).'); return; }
+      if (!/^\d+(?:\.\d{1,2})?$/.test(l.value.trim()) || !(Number(l.value) > 0)) { setPError('Every line needs a positive $ value (max 2 decimals).'); return; }
+    }
+    if (pFreight.trim() !== '' && (!/^\d+(?:\.\d{1,2})?$/.test(pFreight.trim()) || !(Number(pFreight) >= 0))) { setPError('Freight must be a dollar amount with at most 2 decimals.'); return; }
+    setPSaving(true); setPError('');
+    const failed: string[] = [];
+    const recordedLines = new Set<PayLine>();
+    let freightRecorded = false;
+    try {
+      // each line is its own guarded payment row (single-row inserts are a
+      // platform requirement); shared date/wallet/method/receipt/note tie
+      // them together in the log
+      for (const l of active) {
+        const sku = vendorProducts.find(v => String(v.group_buy_product_id) === l.product)?.sku_code || '?';
+        const res = await doPay({
+          vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate,
+          amount_usd: Number(l.value), wallet_id: pWallet, method: pMethod, receipt_ref: pRef, note: pNote,
+          kits_qty: l.kits.trim(), freight_usd: '', group_buy_product_id: l.product,
+          actor: userName,
+        }) as unknown[] | null;
+        const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+        if (wrote) recordedLines.add(l);
+        else failed.push(sku + ' (refused — kits may exceed what is owed)');
+      }
+      if (Number(pFreight) > 0) {
+        const res = await doPay({
+          vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate,
+          amount_usd: Number(pFreight), wallet_id: pWallet, method: pMethod, receipt_ref: pRef,
+          note: (pNote ? pNote + ' | ' : '') + 'freight',
+          kits_qty: '', freight_usd: pFreight.trim(), group_buy_product_id: '',
+          actor: userName,
+        }) as unknown[] | null;
+        const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+        if (wrote) freightRecorded = true;
+        else failed.push('freight (refused — exceeds freight still owed)');
+      }
+      if (failed.length > 0) {
+        setPError('Some lines were NOT recorded: ' + failed.join('; ') + '. Recorded lines moved to the log below; the form now holds only what is still unrecorded.');
+      } else {
+        setPRef(''); setPNote('');
+      }
     } catch (e: unknown) {
-      setPError(e instanceof Error ? e.message : 'Failed to record payment');
+      setPError((e instanceof Error ? e.message : 'Failed to record payment') + ' — recorded lines moved to the log; the form keeps only what is still unrecorded.');
     } finally {
+      // Runs on success, refusal, AND thrown errors alike: the form must
+      // always end up holding EXACTLY the unrecorded subset, so a retry can
+      // never duplicate a row that already landed (recorded lines are in
+      // the log with their audited Remove path).
+      setPLines(ls => {
+        const remaining = ls.filter(l => !recordedLines.has(l) && (l.product || l.kits.trim() || l.value.trim()));
+        return remaining.length > 0 ? remaining : [{ product: '', kits: '', value: '', valueDirty: false }];
+      });
+      if (freightRecorded) setPFreight('');
+      reloadBalances(); reloadPayments(); reloadProgress();
       setPSaving(false);
     }
   };
@@ -216,46 +268,58 @@ export function VendorsPage() {
           <CardHeader className="pb-2"><CardTitle className="text-base">Record vendor payment</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             <div className="flex flex-wrap gap-2">
-              <Select value={pVendor} onValueChange={v => { setPVendor(v); setPProduct(''); }}>
+              <Select value={pVendor} disabled={pSaving} onValueChange={v => { setPVendor(v); setPLines([{ product: '', kits: '', value: '', valueDirty: false }]); }}>
                 <SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Vendor" /></SelectTrigger>
                 <SelectContent>
                   {vendors.filter(v => v.active).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <Select value={pProduct} onValueChange={setPProduct}>
-                <SelectTrigger className="h-9 flex-1"><SelectValue placeholder={pVendor ? 'Product (for kits)' : 'Pick a vendor first'} /></SelectTrigger>
-                <SelectContent>
-                  {productProgress
-                    .filter(pp => pp.vendor_code === (vendors.find(v => String(v.id) === pVendor)?.code || ''))
-                    .map(pp => (
+              <Input type="date" value={pDate} disabled={pSaving} onChange={e => setPDate(e.target.value)} className="h-9 w-40" />
+            </div>
+            {pLines.map((l, i) => (
+              <div key={i} className="flex flex-wrap gap-2 items-center">
+                <Select value={l.product} disabled={pSaving} onValueChange={v => setLine(i, { product: v })}>
+                  <SelectTrigger className="h-9 flex-1 min-w-40"><SelectValue placeholder={pVendor ? 'Product' : 'Pick a vendor first'} /></SelectTrigger>
+                  <SelectContent>
+                    {vendorProducts.map(pp => (
                       <SelectItem key={pp.group_buy_product_id} value={String(pp.group_buy_product_id)}>
-                        {pp.sku_code} ({fmtNum(Number(pp.kits_demand) - Number(pp.kits_paid))} left)
+                        {pp.sku_code} ({fmtNum(Number(pp.kits_demand) - Number(pp.kits_paid))} left @ {fmtUSD(pp.per_kit_cost_usd)})
                       </SelectItem>
                     ))}
-                </SelectContent>
-              </Select>
-              <Input type="date" value={pDate} onChange={e => setPDate(e.target.value)} className="h-9 w-40" />
+                  </SelectContent>
+                </Select>
+                <Input placeholder="Kits" value={l.kits} disabled={pSaving} onChange={e => setLine(i, { kits: e.target.value })} className="h-9 w-20" />
+                <Input placeholder="Value $" value={l.value} disabled={pSaving} onChange={e => setLine(i, { value: e.target.value, valueDirty: e.target.value.trim() !== '' })} className="h-9 w-28" />
+                {pLines.length > 1 && (
+                  <Button size="sm" variant="ghost" className="h-9 px-2 text-red-600" disabled={pSaving} onClick={() => setPLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
+                )}
+              </div>
+            ))}
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button size="sm" variant="outline" className="h-8 text-xs" disabled={!pVendor || pSaving}
+                onClick={() => setPLines(ls => [...ls, { product: '', kits: '', value: '', valueDirty: false }])}>
+                + Add product line
+              </Button>
+              <Input placeholder="Freight $ (optional)" value={pFreight} disabled={pSaving} onChange={e => setPFreight(e.target.value)} className="h-8 w-40" />
             </div>
             <div className="flex flex-wrap gap-2">
-              <Input placeholder="Amount USD" value={pAmount} onChange={e => setPAmount(e.target.value)} className="h-9 w-36" />
-              <Select value={pWallet} onValueChange={setPWallet}>
+              <Select value={pWallet} disabled={pSaving} onValueChange={setPWallet}>
                 <SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Paid from wallet" /></SelectTrigger>
                 <SelectContent>
                   {wallets.map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <Input placeholder="Method" value={pMethod} onChange={e => setPMethod(e.target.value)} className="h-9 w-24" />
+              <Input placeholder="Method" value={pMethod} disabled={pSaving} onChange={e => setPMethod(e.target.value)} className="h-9 w-24" />
             </div>
             <div className="flex flex-wrap gap-2">
-              <Input placeholder="Kits covered (optional)" value={pKits} onChange={e => setPKits(e.target.value)} className="h-9 w-40" />
-              <Input placeholder="Freight $ included (optional)" value={pFreight} onChange={e => setPFreight(e.target.value)} className="h-9 w-48" />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Input placeholder="Receipt / tx ref (optional)" value={pRef} onChange={e => setPRef(e.target.value)} className="h-9 flex-1" />
-              <Input placeholder="Note (e.g. which SKU)" value={pNote} onChange={e => setPNote(e.target.value)} className="h-9 flex-1" />
+              <Input placeholder="Receipt / tx ref (optional)" value={pRef} disabled={pSaving} onChange={e => setPRef(e.target.value)} className="h-9 flex-1" />
+              <Input placeholder="Note" value={pNote} disabled={pSaving} onChange={e => setPNote(e.target.value)} className="h-9 flex-1" />
             </div>
             {pError && <p className="text-sm text-red-600">{pError}</p>}
-            <Button size="sm" onClick={recordPayment} disabled={pSaving}>Record payment</Button>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold">Total: {fmtUSD(paymentTotal)}</span>
+              <Button size="sm" onClick={recordPayment} disabled={pSaving || paymentTotal <= 0}>Record payment</Button>
+            </div>
           </CardContent>
         </Card>
 

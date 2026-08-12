@@ -13,6 +13,12 @@ function listVendorProductProgress() {
       SELECT m.group_buy_product_id, m.vendor_code, m.sku_code,
              m.final_count AS kits_demand,
              m.vendor_order_value_usd,
+             m.unit_cost_usd,
+             -- blended per-kit vendor cost (folds tier-block ceilings in);
+             -- falls back to the flat unit cost when nothing is owed yet
+             CASE WHEN m.final_count > 0
+               THEN ROUND(m.vendor_order_value_usd / m.final_count, 4)
+               ELSE m.unit_cost_usd END AS per_kit_cost_usd,
              COALESCE(vp.kits_paid, 0) AS kits_paid
       FROM v_moq_progress m
       LEFT JOIN (
