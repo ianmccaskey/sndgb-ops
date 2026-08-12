@@ -3,7 +3,9 @@ import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listVendors from '@/actions/vendors/listVendors';
 import listVendorBalances from '@/actions/vendors/listVendorBalances';
 import listVendorPayments from '@/actions/vendors/listVendorPayments';
+import listVendorProductProgress from '@/actions/vendors/listVendorProductProgress';
 import addVendorPayment from '@/actions/vendors/addVendorPayment';
+import deleteVendorPayment from '@/actions/vendors/deleteVendorPayment';
 import saveVendor from '@/actions/vendors/saveVendor';
 import listWallets from '@/actions/financials/listWallets';
 import { useApp } from '@/app/AppContext';
@@ -27,9 +29,13 @@ type Balance = {
 type Payment = {
   id: number; paid_on: string; amount_usd: string; method: string | null;
   receipt_ref: string | null; note: string | null; vendor_code: string; wallet_name: string | null;
-  kits_qty: string | null; freight_usd: string | null;
+  kits_qty: string | null; freight_usd: string | null; sku_code: string | null;
 };
 type Wallet = { id: number; name: string };
+type ProductProgress = {
+  group_buy_product_id: number; vendor_code: string; sku_code: string;
+  kits_demand: string; kits_paid: string; vendor_order_value_usd: string;
+};
 
 export function VendorsPage() {
   const { groupBuyId, userName } = useApp();
@@ -38,14 +44,17 @@ export function VendorsPage() {
   const [rawBalances, , , reloadBalances] = useLoadAction(listVendorBalances, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawPayments, , , reloadPayments] = useLoadAction(listVendorPayments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets] = useLoadAction(listWallets, [], {});
+  const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
 
   const vendors = rows<Vendor>(rawVendors);
   const balances = rows<Balance>(rawBalances);
   const payments = rows<Payment>(rawPayments);
   const wallets = rows<Wallet>(rawWallets);
+  const productProgress = rows<ProductProgress>(rawProgress);
 
   const [doPay] = useMutateAction(addVendorPayment);
   const [doSaveVendor] = useMutateAction(saveVendor);
+  const [doDeletePayment] = useMutateAction(deleteVendorPayment);
 
   const [pVendor, setPVendor] = useState('');
   const [pDate, setPDate] = useState('');
@@ -54,6 +63,7 @@ export function VendorsPage() {
   const [pMethod, setPMethod] = useState('USDC');
   const [pRef, setPRef] = useState('');
   const [pNote, setPNote] = useState('');
+  const [pProduct, setPProduct] = useState('');
   const [pKits, setPKits] = useState('');
   const [pFreight, setPFreight] = useState('');
   const [pError, setPError] = useState('');
@@ -71,6 +81,7 @@ export function VendorsPage() {
       return;
     }
     if (pKits.trim() !== '' && !/^\d+(?:\.\d{1,2})?$/.test(pKits.trim())) { setPError('Kits must be a number with at most 2 decimals.'); return; }
+    if (pKits.trim() !== '' && !pProduct) { setPError('Pick which product the kits are for — the per-product tracker needs it.'); return; }
     if (pFreight.trim() !== '' && !/^\d+(?:\.\d{1,2})?$/.test(pFreight.trim())) { setPError('Freight must be a dollar amount with at most 2 decimals.'); return; }
     if (pFreight.trim() !== '' && Number(pFreight) > amt) { setPError('Freight is the portion of THIS payment — it cannot exceed the payment amount.'); return; }
     setPSaving(true); setPError('');
@@ -78,7 +89,7 @@ export function VendorsPage() {
       const res = await doPay({
         vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate,
         amount_usd: amt, wallet_id: pWallet, method: pMethod, receipt_ref: pRef, note: pNote,
-        kits_qty: pKits.trim(), freight_usd: pFreight.trim(),
+        kits_qty: pKits.trim(), freight_usd: pFreight.trim(), group_buy_product_id: pProduct,
         actor: userName,
       }) as unknown[] | null;
       // The action's guards refuse by returning no rows — a silent zero-row
@@ -89,8 +100,8 @@ export function VendorsPage() {
         setPSaving(false);
         return;
       }
-      setPAmount(''); setPRef(''); setPNote(''); setPKits(''); setPFreight('');
-      reloadBalances(); reloadPayments();
+      setPAmount(''); setPRef(''); setPNote(''); setPKits(''); setPFreight(''); setPProduct('');
+      reloadBalances(); reloadPayments(); reloadProgress();
     } catch (e: unknown) {
       setPError(e instanceof Error ? e.message : 'Failed to record payment');
     } finally {
@@ -142,7 +153,8 @@ export function VendorsPage() {
           </TableHeader>
           <TableBody>
             {balances.map(b => (
-              <TableRow key={b.vendor_id}>
+              <React.Fragment key={b.vendor_id}>
+              <TableRow>
                 <TableCell className="font-medium">{b.vendor_code}</TableCell>
                 <TableCell className="text-right">{fmtUSD(b.owed_usd)}</TableCell>
                 <TableCell className="text-right">{fmtUSD(b.paid_usd)}</TableCell>
@@ -171,6 +183,26 @@ export function VendorsPage() {
                 </TableCell>
                 <TableCell><StatusPill value={b.pay_status} /></TableCell>
               </TableRow>
+              {productProgress.filter(pp => pp.vendor_code === b.vendor_code).map(pp => {
+                const left = Number(pp.kits_demand) - Number(pp.kits_paid);
+                return (
+                  <TableRow key={`pp-${pp.group_buy_product_id}`} className="bg-muted/30 hover:bg-muted/40">
+                    <TableCell className="pl-8 text-sm text-muted-foreground">↳ {pp.sku_code}</TableCell>
+                    <TableCell className="text-right text-sm text-muted-foreground">{fmtUSD(pp.vendor_order_value_usd, { cents: false })}</TableCell>
+                    <TableCell />
+                    <TableCell />
+                    <TableCell className="text-right text-sm">
+                      <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
+                        {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
+                        <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(pp.kits_paid)}/{fmtNum(pp.kits_demand)} paid</span>
+                      </span>
+                    </TableCell>
+                    <TableCell />
+                    <TableCell />
+                  </TableRow>
+                );
+              })}
+              </React.Fragment>
             ))}
             {balances.length === 0 && (
               <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-6">No campaign products yet — vendor balances appear once products are configured.</TableCell></TableRow>
@@ -184,10 +216,22 @@ export function VendorsPage() {
           <CardHeader className="pb-2"><CardTitle className="text-base">Record vendor payment</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             <div className="flex flex-wrap gap-2">
-              <Select value={pVendor} onValueChange={setPVendor}>
+              <Select value={pVendor} onValueChange={v => { setPVendor(v); setPProduct(''); }}>
                 <SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Vendor" /></SelectTrigger>
                 <SelectContent>
                   {vendors.filter(v => v.active).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={pProduct} onValueChange={setPProduct}>
+                <SelectTrigger className="h-9 flex-1"><SelectValue placeholder={pVendor ? 'Product (for kits)' : 'Pick a vendor first'} /></SelectTrigger>
+                <SelectContent>
+                  {productProgress
+                    .filter(pp => pp.vendor_code === (vendors.find(v => String(v.id) === pVendor)?.code || ''))
+                    .map(pp => (
+                      <SelectItem key={pp.group_buy_product_id} value={String(pp.group_buy_product_id)}>
+                        {pp.sku_code} ({fmtNum(Number(pp.kits_demand) - Number(pp.kits_paid))} left)
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               <Input type="date" value={pDate} onChange={e => setPDate(e.target.value)} className="h-9 w-40" />
@@ -237,11 +281,13 @@ export function VendorsPage() {
                 <TableHead>Date</TableHead>
                 <TableHead>Vendor</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Product</TableHead>
                 <TableHead className="text-right">Kits</TableHead>
                 <TableHead className="text-right">Freight</TableHead>
                 <TableHead>Wallet</TableHead>
                 <TableHead>Method</TableHead>
                 <TableHead>Note</TableHead>
+                <TableHead></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -250,15 +296,30 @@ export function VendorsPage() {
                   <TableCell>{fmtDate(p.paid_on)}</TableCell>
                   <TableCell className="font-medium">{p.vendor_code}</TableCell>
                   <TableCell className="text-right">{fmtUSD(p.amount_usd)}</TableCell>
+                  <TableCell>{p.sku_code || '—'}</TableCell>
                   <TableCell className="text-right">{p.kits_qty != null ? fmtNum(p.kits_qty) : '—'}</TableCell>
                   <TableCell className="text-right">{p.freight_usd != null ? fmtUSD(p.freight_usd) : '—'}</TableCell>
                   <TableCell>{p.wallet_name || '—'}</TableCell>
                   <TableCell>{p.method || '—'}</TableCell>
                   <TableCell className="text-muted-foreground">{p.note || ''}</TableCell>
+                  <TableCell>
+                    <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600"
+                      onClick={async () => {
+                        // Deleting a payment moves real balances — make the
+                        // operator confirm exactly which one they're removing.
+                        if (!window.confirm(`Remove this vendor payment?\n\n${p.vendor_code} — ${fmtUSD(p.amount_usd)} on ${fmtDate(p.paid_on)}${p.sku_code ? ` (${p.sku_code})` : ''}\n\nThe full payment is preserved in the audit log for reconstruction.`)) return;
+                        const res = await doDeletePayment({ id: p.id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
+                        const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+                        if (!wrote) { setPError('Payment not removed — it may belong to a different campaign or was already deleted.'); return; }
+                        reloadBalances(); reloadPayments(); reloadProgress();
+                      }}>
+                      Remove
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
               {payments.length === 0 && (
-                <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">No vendor payments yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-6">No vendor payments yet.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>

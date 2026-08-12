@@ -119,14 +119,21 @@ export function ProductsPage() {
     }
     setCError('');
     try {
-      await doUpsertCampaign({
+      const res = await doUpsertCampaign({
         group_buy_id: groupBuyId, product_id: Number(cProduct), vendor_id: Number(cVendor),
         unit_cost_usd: unitCost, margin_usd: margin, target_moq: Number(cMoq),
         testing_cost_usd: Number(cTesting || 0), freight_usd: Number(cFreight || 0),
         qty_cap: cCap.trim(),
         cost_tier_qty: tiered ? cTierQty.trim() : '',
         cost_tier_price: tiered ? cTierPrice.trim() : '',
-      });
+      }) as unknown[] | null;
+      // Zero rows = the vendor-change guard refused (kit payments are already
+      // attributed to this product under its current vendor).
+      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!wrote) {
+        setCError('Not saved — this product already has vendor payments recorded against it, so its vendor cannot be changed. Remove/reassign those payments on the Vendors page first.');
+        return;
+      }
       resetCampaignForm();
       reloadCampaign();
     } catch (e: unknown) {

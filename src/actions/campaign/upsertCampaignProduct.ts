@@ -1,5 +1,12 @@
 import { action } from '@uibakery/data';
 
+/**
+ * The update path refuses a VENDOR change once product-attributed vendor
+ * payments exist for the line: per-product kit payments are summed by
+ * group_buy_product_id, so silently moving the product to another vendor
+ * would count old-vendor payments as the new vendor's progress (and eat its
+ * kit allowance). Zero rows = refused; delete/reassign the payments first.
+ */
 function upsertCampaignProduct() {
   return action('upsertCampaignProduct', 'SQL', {
     datasourceName: 'SND GB DB',
@@ -30,6 +37,11 @@ function upsertCampaignProduct() {
         qty_cap = EXCLUDED.qty_cap,
         cost_tier_qty = EXCLUDED.cost_tier_qty,
         cost_tier_price = EXCLUDED.cost_tier_price
+      WHERE group_buy_products.vendor_id = EXCLUDED.vendor_id
+         OR NOT EXISTS (
+           SELECT 1 FROM vendor_payments vp
+           WHERE vp.group_buy_product_id = group_buy_products.id
+         )
       RETURNING id
     `,
   });
