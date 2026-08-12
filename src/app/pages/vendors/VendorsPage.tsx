@@ -109,16 +109,22 @@ export function VendorsPage() {
     if (pFreight.trim() !== '' && (!/^\d+(?:\.\d{1,2})?$/.test(pFreight.trim()) || !(Number(pFreight) >= 0))) { setPError('Freight must be a dollar amount with at most 2 decimals.'); return; }
     // deliberate over-buys (stocking beyond current demand) are allowed, but
     // only through an explicit confirmation — the server cap stays on for
-    // anything not confirmed, so a typo still refuses
-    const overLines = new Set(active.filter(l => {
+    // anything not confirmed, so a typo still refuses. The owed figure the
+    // user confirms AGAINST travels with the line: the server re-reads owed
+    // under its lock and refuses if it shrank meanwhile, so a concurrent
+    // recorder can never silently widen a confirmed over-buy.
+    const kitsOwed = (l: PayLine) => {
       const pp = vendorProducts.find(v => String(v.group_buy_product_id) === l.product);
-      return pp ? Number(l.kits) > Number(pp.kits_demand) - Number(pp.kits_paid) : false;
+      return pp ? Math.round((Number(pp.kits_demand) - Number(pp.kits_paid)) * 100) / 100 : null;
+    };
+    const overLines = new Set(active.filter(l => {
+      const owed = kitsOwed(l);
+      return owed !== null && Number(l.kits) > owed;
     }));
     if (overLines.size > 0) {
       const detail = [...overLines].map(l => {
         const pp = vendorProducts.find(v => String(v.group_buy_product_id) === l.product)!;
-        const left = Math.max(Number(pp.kits_demand) - Number(pp.kits_paid), 0);
-        return `${pp.sku_code}: ${l.kits} kits, but only ${fmtNum(left)} still owed`;
+        return `${pp.sku_code}: ${l.kits} kits, but only ${fmtNum(Math.max(kitsOwed(l)!, 0))} still owed`;
       }).join('\n');
       if (!window.confirm(`These lines exceed what is currently owed:\n\n${detail}\n\nRecord anyway? The vendor breakdown will flag them as over-paid.`)) return;
     }
@@ -137,6 +143,7 @@ export function VendorsPage() {
           amount_usd: Number(l.value), wallet_id: pWallet, method: pMethod, receipt_ref: pRef, note: pNote,
           kits_qty: l.kits.trim(), freight_usd: '', group_buy_product_id: l.product,
           allow_over: overLines.has(l) ? 'true' : '',
+          confirmed_owed: overLines.has(l) ? String(kitsOwed(l) ?? '') : '',
           actor: userName,
         }) as unknown[] | null;
         const wrote = Array.isArray(res) ? res.length > 0 : !!res;
@@ -152,7 +159,7 @@ export function VendorsPage() {
           amount_usd: Number(pFreight), wallet_id: pWallet, method: pMethod, receipt_ref: pRef,
           note: (pNote ? pNote + ' | ' : '') + 'freight',
           kits_qty: '', freight_usd: pFreight.trim(), group_buy_product_id: '',
-          allow_over: '',
+          allow_over: '', confirmed_owed: '',
           actor: userName,
         }) as unknown[] | null;
         const wrote = Array.isArray(res) ? res.length > 0 : !!res;

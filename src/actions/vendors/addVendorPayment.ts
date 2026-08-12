@@ -17,7 +17,21 @@ function addVendorPayment() {
         -- guarding '' checks below evaluate before the casts
         SELECT NULLIF({{params.group_buy_product_id}}::text, '')::bigint AS gbp_id,
                NULLIF({{params.kits_qty}}::text, '')::numeric AS kits_n,
-               NULLIF({{params.freight_usd}}::text, '')::numeric AS freight_n
+               NULLIF({{params.freight_usd}}::text, '')::numeric AS freight_n,
+               NULLIF({{params.confirmed_owed}}::text, '')::numeric AS confirmed_owed
+      ), cur AS (
+        -- kits still owed for the chosen product, read AFTER the advisory
+        -- lock so it reflects every payment that committed before this one
+        SELECT (
+          SELECT m.final_count - COALESCE((
+            SELECT SUM(COALESCE(vp2.kits_qty, 0))
+            FROM vendor_payments vp2
+            WHERE vp2.group_buy_product_id = inp.gbp_id
+          ), 0)
+          FROM v_moq_progress m
+          WHERE m.group_buy_product_id = inp.gbp_id
+        ) AS kits_remaining
+        FROM lck, inp
       ), ins AS (
         INSERT INTO vendor_payments (vendor_id, group_buy_id, paid_on, amount_usd, wallet_id, method, receipt_ref, note, kits_qty, freight_usd, group_buy_product_id)
         SELECT
@@ -54,17 +68,16 @@ function addVendorPayment() {
                -- refuses by default — a typo (1000 for 100) must not
                -- silently over-close the tracker. A DELIBERATE over-buy
                -- (stock beyond demand) passes allow_over='true' from the
-               -- user-confirmed dialog; the audit row records the override
-               -- and the vendor breakdown shows the line as over by X.
-               AND ({{params.allow_over}}::text = 'true' OR inp.kits_n <= (
-                 SELECT m.final_count - COALESCE((
-                   SELECT SUM(COALESCE(vp2.kits_qty, 0))
-                   FROM vendor_payments vp2
-                   WHERE vp2.group_buy_product_id = inp.gbp_id
-                 ), 0)
-                 FROM v_moq_progress m
-                 WHERE m.group_buy_product_id = inp.gbp_id
-               ))))
+               -- user-confirmed dialog, ANCHORED to the owed figure the
+               -- user confirmed against: if owed shrank meanwhile (a
+               -- concurrent recorder), the confirmation is stale and the
+               -- line refuses rather than widening the over-buy silently.
+               AND (
+                 ({{params.allow_over}}::text = 'true'
+                  AND inp.confirmed_owed IS NOT NULL
+                  AND (SELECT c.kits_remaining FROM cur c) >= inp.confirmed_owed)
+                 OR inp.kits_n <= (SELECT c.kits_remaining FROM cur c)
+               )))
           AND (inp.freight_n IS NULL OR ({{params.freight_usd}}::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
                -- freight is a portion of THIS payment — never more than it
                AND inp.freight_n <= {{params.amount_usd}}::numeric
@@ -79,8 +92,11 @@ function addVendorPayment() {
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
       SELECT 'vendor_payments', ins.id::text, 'insert', {{params.actor}},
-             jsonb_build_object('vendor_id', ins.vendor_id, 'amount_usd', ins.amount_usd, 'kits_qty', ins.kits_qty, 'freight_usd', ins.freight_usd, 'group_buy_product_id', ins.group_buy_product_id, 'over_owed_override', {{params.allow_over}}::text = 'true')
-      FROM ins
+             jsonb_build_object('vendor_id', ins.vendor_id, 'amount_usd', ins.amount_usd, 'kits_qty', ins.kits_qty, 'freight_usd', ins.freight_usd, 'group_buy_product_id', ins.group_buy_product_id,
+                                'over_owed_override', {{params.allow_over}}::text = 'true',
+                                'confirmed_owed', inp.confirmed_owed,
+                                'owed_at_insert', cur.kits_remaining)
+      FROM ins, inp, cur
       RETURNING row_pk AS id
     `,
   });
