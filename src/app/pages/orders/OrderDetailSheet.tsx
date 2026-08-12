@@ -10,6 +10,7 @@ import addPaymentHash from '@/actions/payments/addPaymentHash';
 import getOrderTxRefs from '@/actions/payments/getOrderTxRefs';
 import addManualPaymentByNumber from '@/actions/payments/addManualPaymentByNumber';
 import reopenPaymentOnNetwork from '@/actions/payments/reopenPaymentOnNetwork';
+import undoPaymentRejection from '@/actions/payments/undoPaymentRejection';
 import setOrderItemComp from '@/actions/orders/setOrderItemComp';
 import updateOrderRail from '@/actions/orders/updateOrderRail';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
@@ -74,6 +75,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doCashPay] = useMutateAction(addManualPaymentByNumber);
   const [doReopenNetwork] = useMutateAction(reopenPaymentOnNetwork);
+  const [doUndoRejection] = useMutateAction(undoPaymentRejection);
   const [doSetComp] = useMutateAction(setOrderItemComp);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
 
@@ -103,6 +105,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   // payment corrections
   const [rejectingId, setRejectingId] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [undoingId, setUndoingId] = useState<number | null>(null);
+  const [undoReason, setUndoReason] = useState('');
   const [newHash, setNewHash] = useState('');
   const [newHashMethod, setNewHashMethod] = useState('eth');
   const [payMsg, setPayMsg] = useState('');
@@ -118,6 +122,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       setOverrideReason('');
       setError('');
       setRejectingId(null); setRejectReason('');
+      setUndoingId(null); setUndoReason('');
       setNewHash(''); setPayMsg(''); setPushMsg('');
       setNewHashMethod(o.payment_rail === 'sol' || o.payment_rail === 'base' ? o.payment_rail : 'eth');
       setCashAmt(''); setCashRef(''); setCashMsg('');
@@ -139,6 +144,34 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     const plausible = /^0x[0-9a-fA-F]{64}$/.test(h) ? ['eth', 'base']
       : /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(h) ? ['sol'] : [];
     return plausible.filter(m => m !== p.method);
+  };
+
+  // Undo a MISTAKEN rejection (same network — the reopen buttons only offer
+  // different ones). Explicit and audited: a reason is required, and the
+  // payment goes back to pending to re-earn verification on-chain.
+  const undoRejection = async (p: PaymentRow) => {
+    if (!o) return;
+    if (!undoReason.trim()) { setPayMsg('A reason is required — why was the rejection wrong? (audited)'); return; }
+    setSaving(true); setPayMsg('');
+    try {
+      const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
+      const res = await doUndoRejection({
+        payment_id: p.id, order_id: o.id, reason: undoReason.trim(), actor: userName,
+        note: `${ts} rejection undone (${undoReason.trim()}) — back to pending for on-chain verification.`,
+      }) as { reopened: string }[] | { reopened: string };
+      const reopened = Number(Array.isArray(res) ? res[0]?.reopened : res?.reopened);
+      if (!reopened) {
+        setPayMsg('Could not undo — the hash may now live on another non-rejected payment.');
+      } else {
+        setPayMsg('Rejection undone — the payment is pending again; run Verify on the Reconciliation page.');
+        setUndoingId(null); setUndoReason('');
+      }
+      reloadPayments(); reloadOrder();
+    } catch (e: unknown) {
+      setPayMsg(e instanceof Error ? e.message : 'Failed to undo rejection');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const reopenOnNetwork = async (p: PaymentRow, method: string) => {
@@ -634,14 +667,29 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
                         {p.receipt_ref && <div className="text-xs text-muted-foreground">receipt: {p.receipt_ref}</div>}
                         {p.status === 'rejected' && p.notes && <div className="text-xs text-muted-foreground">rejected: {p.notes}</div>}
-                        {p.status === 'rejected' && reopenTargets(p).length > 0 && (
-                          <div className="flex items-center gap-1.5 mt-0.5">
+                        {p.status === 'rejected' && p.tx_hash && (
+                          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                             {reopenTargets(p).map(m => (
                               <Button key={m} size="sm" variant="outline" className="h-6 px-2 text-xs" disabled={saving} onClick={() => reopenOnNetwork(p, m)}>
                                 Re-open as {m.toUpperCase()}
                               </Button>
                             ))}
-                            <span className="text-[10px] text-muted-foreground">wrong-network fix — goes back to pending</span>
+                            {reopenTargets(p).length > 0 && (
+                              <span className="text-[10px] text-muted-foreground">wrong-network fix</span>
+                            )}
+                            {undoingId !== p.id && (
+                              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-muted-foreground" disabled={saving}
+                                onClick={() => { setUndoingId(p.id); setUndoReason(''); setPayMsg(''); }}>
+                                Undo rejection
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                        {p.status === 'rejected' && undoingId === p.id && (
+                          <div className="flex gap-2 mt-1">
+                            <Input placeholder="Why was the rejection wrong? (audited)" value={undoReason} onChange={e => setUndoReason(e.target.value)} className="h-7 flex-1 text-xs" />
+                            <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => undoRejection(p)}>Confirm undo</Button>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setUndoingId(null)}>Cancel</Button>
                           </div>
                         )}
                       </div>
