@@ -38,6 +38,31 @@ export type ImportJob = {
 
 const IDLE: ImportJob = { running: false, forGroupBuyId: null, sourceKey: null, total: 0, results: [], finished: false };
 
+/**
+ * Retry wrapper for the import's database calls. A bulk import fires hundreds
+ * of rapid sequential queries and UI Bakery's gateway occasionally 502s under
+ * the burst ("Failed to request http://.../postgres/query, response
+ * status=502") — transient transport failures, not data problems. Retrying is
+ * SAFE here because every import-path action is idempotent by design (order
+ * and item upserts, NOT-EXISTS-guarded payment inserts, prune, status sync):
+ * a request that actually landed before its response was lost re-runs to the
+ * same end state. Only transport-shaped errors retry; SQL/data errors fail
+ * immediately and surface per-order like before.
+ */
+const TRANSIENT = /failed to request|response status=5\d\d|network|timeout|econn|socket/i;
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  const delays = [500, 2000]; // total 3 attempts
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (attempt >= delays.length || !TRANSIENT.test(msg)) throw e;
+      await new Promise(r => setTimeout(r, delays[attempt]));
+    }
+  }
+}
+
 type StartArgs = { groupBuyId: number; orders: ParsedOrder[]; cancellations: B44Cancellation[] };
 
 /**
@@ -119,7 +144,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     const base = o.subtotal + o.tip + o.adminFee + o.shippingFee;
     const processorFee = o.paymentRail === 'cash' && o.total > base ? +(o.total - base).toFixed(2) : 0;
 
-    const upserted = await doUpsert({
+    const upserted = await withRetry(() => doUpsert({
       group_buy_id: gbId,
       order_number: o.orderNumber,
       external_id: o.externalId || '',
@@ -142,7 +167,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       placed_at: o.placedAt || '',
       customer_note: o.customerNote || '',
       raw_import: JSON.stringify(o.raw),
-    }) as { id: number }[] | { id: number };
+    })) as { id: number }[] | { id: number };
     const orderId = Array.isArray(upserted) ? upserted[0]?.id : upserted?.id;
     if (!orderId) throw new Error('Refused: this order number already exists under a different campaign');
 
@@ -163,13 +188,13 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // destructively pruned partial state.
     let itemsWritten = 0;
     for (const it of mergedItems) {
-      const res = await doUpsertItem({ order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty, actor: userName }) as unknown[] | null;
+      const res = await withRetry(() => doUpsertItem({ order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty, actor: userName })) as unknown[] | null;
       if (Array.isArray(res) ? res.length > 0 : !!res) itemsWritten++;
     }
     if (itemsWritten !== mergedItems.length) {
       throw new Error(`Only ${itemsWritten}/${mergedItems.length} items matched campaign products`);
     }
-    await doPruneItems({ order_id: orderId, group_buy_id: gbId, items: JSON.stringify(mergedItems) });
+    await withRetry(() => doPruneItems({ order_id: orderId, group_buy_id: gbId, items: JSON.stringify(mergedItems) }));
 
     if (o.payments.length > 0) {
       const method = o.paymentRail === 'cash' ? 'other' : o.paymentRail;
@@ -180,10 +205,10 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       const hashes = o.payments.filter(p => p.kind === 'tx_hash');
       const receipts = o.payments.filter(p => p.kind === 'receipt');
       for (const p of hashes) {
-        await doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method }]) });
+        await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method }]) }));
       }
       if (receipts.length > 0) {
-        await doPayments({ order_id: orderId, payments: JSON.stringify(receipts.map(p => ({ kind: p.kind, value: p.value, method: 'other' }))) });
+        await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify(receipts.map(p => ({ kind: p.kind, value: p.value, method: 'other' }))) }));
       }
     }
 
@@ -202,7 +227,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     }
     for (const c of cancellations) {
       try {
-        const res = await envRef.current.doSyncStatus({ order_number: c.orderNumber, group_buy_id: groupBuyId, status: c.status }) as { id: number }[] | { id: number } | null;
+        const res = await withRetry(() => envRef.current.doSyncStatus({ order_number: c.orderNumber, group_buy_id: groupBuyId, status: c.status })) as { id: number }[] | { id: number } | null;
         const touched = Array.isArray(res) ? res.length > 0 : !!res;
         out.push({
           orderNumber: c.orderNumber,
