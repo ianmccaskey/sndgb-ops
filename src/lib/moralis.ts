@@ -9,6 +9,8 @@
  *  - wallet balance snapshots
  */
 
+import { fetchWithBackoff } from './http';
+
 const EVM_BASE = 'https://deep-index.moralis.io/api/v2.2';
 
 export type EvmChain = 'eth' | 'base';
@@ -33,11 +35,12 @@ const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a
 async function get(apiKey: string, url: string): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(url, { headers: { 'X-API-Key': apiKey, accept: 'application/json' } });
+    res = await fetchWithBackoff(url, { headers: { 'X-API-Key': apiKey, accept: 'application/json' } });
   } catch {
     throw new Error('Could not reach Moralis — check your network connection.');
   }
   if (!res.ok) {
+    if (res.status === 429) throw new Error('Moralis is rate-limiting (429) — wait a few seconds and retry.');
     const body = await res.json().catch(() => null) as { message?: string } | null;
     throw new Error(body?.message || `Moralis request failed (HTTP ${res.status}).`);
   }

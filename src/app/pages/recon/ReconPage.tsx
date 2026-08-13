@@ -105,8 +105,11 @@ export function ReconPage() {
 
   const verifyAll = async () => {
     setBulkRunning(true);
-    for (const p of pending) {
-      await verifyOne(p);
+    for (let i = 0; i < pending.length; i++) {
+      await verifyOne(pending[i]);
+      // pace bulk runs so the provider's per-second rate limit is rarely
+      // hit at all — the fetch layer's 429 backoff is the safety net
+      if (i < pending.length - 1) await new Promise(r => setTimeout(r, 300));
     }
     setBulkRunning(false);
     reloadAll();

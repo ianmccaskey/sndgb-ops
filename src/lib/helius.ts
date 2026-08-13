@@ -7,6 +7,8 @@
  * - Wallet snapshots: standard JSON-RPC via the Helius mainnet endpoint.
  */
 
+import { fetchWithBackoff } from './http';
+
 const MINTS: Record<string, { symbol: string; decimals: number }> = {
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: { symbol: 'USDC', decimals: 6 },
   Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: { symbol: 'USDT', decimals: 6 },
@@ -33,7 +35,7 @@ export type SolTransfer = {
 export async function getSolTxTransfers(heliusKey: string, signature: string): Promise<SolTransfer[]> {
   let res: Response;
   try {
-    res = await fetch(apiUrl(heliusKey), {
+    res = await fetchWithBackoff(apiUrl(heliusKey), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ transactions: [signature] }),
@@ -42,6 +44,7 @@ export async function getSolTxTransfers(heliusKey: string, signature: string): P
     throw new Error('Could not reach Helius — check your network connection.');
   }
   if (!res.ok) {
+    if (res.status === 429) throw new Error('Helius is rate-limiting (429) — wait a few seconds and retry.');
     const body = await res.json().catch(() => null) as { error?: string } | null;
     throw new Error(body?.error || `Helius request failed (HTTP ${res.status}).`);
   }
@@ -76,7 +79,7 @@ export async function getSolTxTransfers(heliusKey: string, signature: string): P
 }
 
 async function rpc(heliusKey: string, method: string, params: unknown[]): Promise<unknown> {
-  const res = await fetch(rpcUrl(heliusKey), {
+  const res = await fetchWithBackoff(rpcUrl(heliusKey), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
