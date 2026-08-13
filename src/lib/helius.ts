@@ -87,7 +87,16 @@ async function rpc(heliusKey: string, method: string, params: unknown[]): Promis
   if (res.status === 429) throw new Error('Helius is rate-limiting (429) — wait a few seconds and retry.');
   if (!res.ok) throw new Error(`Helius RPC HTTP ${res.status}`);
   const j = await res.json() as { result?: unknown; error?: { message?: string } };
-  if (j.error) throw new Error(j.error.message || 'Helius RPC error');
+  if (j.error) {
+    const msg = j.error.message || 'Helius RPC error';
+    // Helius signals throttling via HTTP 429 (handled above with backoff);
+    // normalize the message just in case a quota error ever arrives as a
+    // JSON-RPC error body instead
+    if (/rate.?limit|too many requests/i.test(msg)) {
+      throw new Error('Helius is rate-limiting — wait a few seconds and retry.');
+    }
+    throw new Error(msg);
+  }
   return j.result;
 }
 
