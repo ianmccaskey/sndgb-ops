@@ -4,12 +4,13 @@
  * Retries 429 and transient 5xx responses — honoring a Retry-After header
  * when the provider sends one — with exponential backoff and jitter, so a
  * bulk verify run rides out Helius/Moralis rate limits instead of failing
- * each row. Network-level throws are NOT retried here: callers own their
- * connectivity messaging, and a hard network error usually isn't transient
- * on the timescale of a click.
+ * each row. Network-level throws (connection reset, DNS blip, dropped
+ * proxy) get the same bounded retries — the callers only use this for
+ * idempotent chain-state lookups — with the last error rethrown so
+ * callers keep their own connectivity messaging.
  */
 
-const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -29,9 +30,14 @@ export async function fetchWithBackoff(
 ): Promise<Response> {
   let delay = 600;
   for (let i = 1; ; i++) {
-    const res = await fetch(input, init);
-    if (!RETRYABLE.has(res.status) || i >= attempts) return res;
-    await sleep(retryAfterMs(res) ?? Math.round(delay * (1 + Math.random() * 0.25)));
+    let res: Response | null = null;
+    try {
+      res = await fetch(input, init);
+    } catch (e) {
+      if (i >= attempts) throw e;
+    }
+    if (res && (!RETRYABLE.has(res.status) || i >= attempts)) return res;
+    await sleep((res && retryAfterMs(res)) ?? Math.round(delay * (1 + Math.random() * 0.25)));
     delay = Math.min(delay * 2, 8_000);
   }
 }
