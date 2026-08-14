@@ -37,6 +37,10 @@ function addLocalOrderItem() {
         -- price) to campaign A's order
         JOIN orders o ON o.id = {{params.order_id}}::bigint
           AND o.group_buy_id = gbp.group_buy_id
+          -- financially active orders only: recon hides cancelled/refunded
+          -- orders, so a local item here would be dormant billing that
+          -- silently reappears if the status ever flips back
+          AND o.status NOT IN ('cancelled', 'refunded')
         WHERE p.sku_code = {{params.sku}}
           -- the order must still be in the pack flow: once its latest
           -- shipment is packed/shipped, a new item would bill the customer

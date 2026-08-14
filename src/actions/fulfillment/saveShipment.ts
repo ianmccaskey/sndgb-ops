@@ -4,9 +4,17 @@ function saveShipment() {
   return action('saveShipment', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH existing AS (
+      WITH lck AS (
+        -- per-order advisory lock (class 42001): the local item add/remove
+        -- actions gate on the LATEST shipment status, so shipment status
+        -- transitions must serialize with them — otherwise an item add can
+        -- read 'pending' while a concurrent pack commits, and land a
+        -- billable item fulfillment never saw
+        SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
+      ), existing AS (
         SELECT id FROM shipments
         WHERE order_id = {{params.order_id}}::bigint
+          AND (SELECT COUNT(*) FROM lck) >= 0
         ORDER BY created_at DESC LIMIT 1
       ), upd AS (
         UPDATE shipments SET
@@ -30,6 +38,7 @@ function saveShipment() {
                CASE WHEN {{params.status}} IN ('shipped','reshipped') THEN now() ELSE NULL END,
                NULLIF({{params.note}}::text, '')
         WHERE NOT EXISTS (SELECT 1 FROM existing)
+          AND (SELECT COUNT(*) FROM lck) >= 0
         RETURNING id
       )
       SELECT COALESCE((SELECT id FROM upd), (SELECT id FROM ins)) AS id
