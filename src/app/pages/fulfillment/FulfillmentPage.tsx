@@ -22,7 +22,7 @@ type QueueRow = {
   hold_shipping: boolean; customer_note: string | null; admin_note: string | null;
   recon_status: string | null; items_summary: string; item_count: string;
   direct_items_summary: string; direct_outstanding_summary: string;
-  all_direct: boolean; direct_outstanding: boolean;
+  direct_outstanding_ids: string; all_direct: boolean; direct_outstanding: boolean;
   shipment_id: number | null; shipment_status: string | null; carrier: string | null;
   tracking_number: string | null; label_cost_usd: string | null; box: string | null;
 };
@@ -61,7 +61,16 @@ export function FulfillmentPage() {
     if (fulfilled && !window.confirm(`Mark the vendor-shipped items of ${r.order_number} as sent?\n\n${r.direct_outstanding_summary}`)) return;
     setSaving(true); setError('');
     try {
-      await doMarkDirect({ order_id: r.id, item_id: '', fulfilled, actor: userName });
+      // the confirmed ids travel with the call: the stamp is anchored to
+      // exactly what the dialog listed, and refuses if lines changed since
+      const res = await doMarkDirect({
+        order_id: r.id, item_id: '',
+        expected_ids: fulfilled ? r.direct_outstanding_ids : '',
+        fulfilled, actor: userName,
+      }) as unknown[] | null;
+      if (fulfilled && !(Array.isArray(res) ? res.length > 0 : !!res)) {
+        setError(`${r.order_number}'s direct lines changed since this list loaded — list refreshed, please check and try again.`);
+      }
       reload();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to update direct-ship state');
