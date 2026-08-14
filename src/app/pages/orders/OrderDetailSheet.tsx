@@ -550,6 +550,21 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       const summary = toAdd.map(i => `${i.sku_code} × ${Number(i.qty)}`).join(', ');
       if (!window.confirm(`Push to the ordering app order ${o.order_number}?\n\n${summary}\n\nUpstream subtotal and total increase by ${fmtUSD(addValue)}.`)) return;
 
+      // The confirm dialog is an unbounded wait between read and write — a
+      // full-array items PUT built on a stale snapshot would silently erase
+      // any upstream change made meanwhile. Re-read AFTER the confirm and
+      // abort on any drift; the PUT then follows the verified read within
+      // milliseconds instead of minutes.
+      const fresh = await getB44Order(cfg, o.external_id);
+      const drifted = JSON.stringify(fresh.items || []) !== JSON.stringify(b44.items || [])
+        || Number(fresh.subtotal || 0) !== Number(b44.subtotal || 0)
+        || Number(fresh.total || 0) !== Number(b44.total || 0)
+        || String(fresh.notes || '') !== String(b44.notes || '');
+      if (drifted) {
+        setAddMsg('The ordering app order changed while you were confirming — nothing was pushed. Re-check the order and retry.');
+        return;
+      }
+
       const pushingLine = `${ts} pushing ${toAdd.length} added item(s) to the ordering app: ${summary} (+${fmtUSD(addValue)}).`;
       const pushingRes = await doAppendNote({
         order_id: o.id, note: pushingLine, actor: userName,
