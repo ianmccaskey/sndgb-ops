@@ -10,3 +10,9 @@ ALTER TABLE order_items ADD COLUMN direct_ship BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE order_items ADD COLUMN direct_ship_source TEXT NOT NULL DEFAULT 'upstream'
   CHECK (direct_ship_source IN ('upstream', 'manual'));
+
+-- Direct lines carry their own completion state, independent of the order's
+-- local shipment row: a MIXED order's local half can pack and ship while the
+-- vendor half is still owed — without this, saving the local shipment would
+-- drop the order out of every actionable queue with vendor work outstanding.
+ALTER TABLE order_items ADD COLUMN direct_fulfilled_at TIMESTAMPTZ;

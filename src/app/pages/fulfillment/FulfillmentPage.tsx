@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listFulfillmentQueue from '@/actions/fulfillment/listFulfillmentQueue';
 import saveShipment from '@/actions/fulfillment/saveShipment';
+import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { fmtUSD } from '@/lib/fmt';
@@ -20,18 +21,19 @@ type QueueRow = {
   state_code: string | null; postal_code: string | null;
   hold_shipping: boolean; customer_note: string | null; admin_note: string | null;
   recon_status: string | null; items_summary: string; item_count: string;
-  direct_items_summary: string; all_direct: boolean;
+  direct_items_summary: string; all_direct: boolean; direct_outstanding: boolean;
   shipment_id: number | null; shipment_status: string | null; carrier: string | null;
   tracking_number: string | null; label_cost_usd: string | null; box: string | null;
 };
 
 export function FulfillmentPage() {
-  const { groupBuyId } = useApp();
+  const { groupBuyId, userName } = useApp();
   const [stage, setStage] = useState('ready');
   const enabled = groupBuyId != null;
   const [raw, , , reload] = useLoadAction(listFulfillmentQueue, [groupBuyId, stage], { group_buy_id: groupBuyId, stage }, { enabled });
   const queue = rows<QueueRow>(raw);
   const [doSave] = useMutateAction(saveShipment);
+  const [doMarkDirect] = useMutateAction(markOrderDirectFulfilled);
 
   const [editing, setEditing] = useState<QueueRow | null>(null);
   const [carrier, setCarrier] = useState('');
@@ -52,6 +54,19 @@ export function FulfillmentPage() {
     setStatus(r.shipment_status || 'packed');
     setNote('');
     setError('');
+  };
+
+  const markDirect = async (r: QueueRow, fulfilled: boolean) => {
+    if (fulfilled && !window.confirm(`Mark the vendor-shipped items of ${r.order_number} as sent?\n\n${r.direct_items_summary}`)) return;
+    setSaving(true); setError('');
+    try {
+      await doMarkDirect({ order_id: r.id, fulfilled, actor: userName });
+      reload();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to update direct-ship state');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const save = async () => {
@@ -93,6 +108,8 @@ export function FulfillmentPage() {
         </TabsList>
       </Tabs>
 
+      {error && !editing && <p className="text-sm text-red-600">{error}</p>}
+
       <div className="border rounded-lg overflow-x-auto">
         <Table>
           <TableHeader>
@@ -124,13 +141,15 @@ export function FulfillmentPage() {
                 </TableCell>
                 <TableCell className="text-xs max-w-[220px]">
                   <span className="flex items-center gap-1.5 min-w-0">
-                    <span className="truncate" title={r.items_summary}>{r.all_direct ? r.direct_items_summary : r.items_summary}</span>
-                    {!r.all_direct && r.direct_items_summary && (
+                    <span className="truncate" title={(r.all_direct || stage === 'direct') ? r.direct_items_summary : r.items_summary}>
+                      {(r.all_direct || stage === 'direct') ? r.direct_items_summary : r.items_summary}
+                    </span>
+                    {stage !== 'direct' && !r.all_direct && r.direct_items_summary && (
                       <span
-                        className="rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
-                        title={`Vendor ships directly: ${r.direct_items_summary}`}
+                        className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${r.direct_outstanding ? 'bg-violet-100 text-violet-900' : 'bg-green-100 text-green-900'}`}
+                        title={`${r.direct_outstanding ? 'Vendor still owes' : 'Vendor shipped'}: ${r.direct_items_summary}`}
                       >
-                        + direct
+                        {r.direct_outstanding ? '+ direct' : 'direct ✓'}
                       </span>
                     )}
                   </span>
@@ -139,9 +158,24 @@ export function FulfillmentPage() {
                 <TableCell><StatusPill value={r.shipment_status || 'pending'} /></TableCell>
                 <TableCell className="text-xs font-mono">{r.tracking_number || '—'}</TableCell>
                 <TableCell>
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openEdit(r)}>
-                    {r.shipment_id ? 'Update' : 'Pack / ship'}
-                  </Button>
+                  <span className="flex gap-1">
+                    {stage === 'direct' ? (
+                      <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => markDirect(r, true)}>
+                        Vendor shipped
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openEdit(r)}>
+                        {r.shipment_id ? 'Update' : 'Pack / ship'}
+                      </Button>
+                    )}
+                    {stage !== 'direct' && r.direct_items_summary && !r.direct_outstanding && (
+                      <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" disabled={saving}
+                        title="Put the vendor-shipped items back in the Direct ship tab"
+                        onClick={() => markDirect(r, false)}>
+                        Undo direct
+                      </Button>
+                    )}
+                  </span>
                 </TableCell>
               </TableRow>
             ))}

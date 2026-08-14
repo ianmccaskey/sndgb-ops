@@ -14,6 +14,7 @@ function listFulfillmentQueue() {
              COALESCE(it.item_count, 0) AS item_count,
              COALESCE(it.direct_items_summary, '') AS direct_items_summary,
              COALESCE(it.all_direct, false) AS all_direct,
+             COALESCE(it.direct_outstanding, false) AS direct_outstanding,
              s.id AS shipment_id, s.status AS shipment_status, s.carrier, s.tracking_number,
              s.label_cost_usd, s.box
       FROM orders o
@@ -26,7 +27,8 @@ function listFulfillmentQueue() {
                COALESCE(SUM(oi.qty) FILTER (WHERE NOT oi.direct_ship), 0) AS item_count,
                string_agg(p.sku_code || ' (' || oi.qty || ')', '; ' ORDER BY p.sku_code)
                  FILTER (WHERE oi.direct_ship) AS direct_items_summary,
-               bool_and(oi.direct_ship) AS all_direct
+               bool_and(oi.direct_ship) AS all_direct,
+               bool_or(oi.direct_ship AND oi.direct_fulfilled_at IS NULL) AS direct_outstanding
         FROM order_items oi
         JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
         JOIN products p ON p.id = gbp.product_id
@@ -44,10 +46,13 @@ function listFulfillmentQueue() {
           -- orders leave the pack list — they are the 'direct' stage.
           OR ({{params.stage}} = 'ready' AND COALESCE(s.status::text,'pending') = 'pending' AND NOT o.hold_shipping AND r.recon_status = 'matched' AND r.pending_payment_count = 0
               AND NOT COALESCE(it.all_direct, false))
-          -- same money gates as ready, but every line ships from the vendor:
-          -- this is the coordinate-with-vendor list, not the pack list
-          OR ({{params.stage}} = 'direct' AND COALESCE(s.status::text,'pending') = 'pending' AND NOT o.hold_shipping AND r.recon_status = 'matched' AND r.pending_payment_count = 0
-              AND COALESCE(it.all_direct, false))
+          -- same money gates as ready, but for VENDOR-shipped lines: any order
+          -- (fully direct or mixed) with a direct line the vendor hasn't
+          -- shipped yet. Deliberately NOT gated on the local shipment row —
+          -- a mixed order's local half packing/shipping must not hide its
+          -- outstanding vendor half. Rows leave via "Mark vendor shipped".
+          OR ({{params.stage}} = 'direct' AND NOT o.hold_shipping AND r.recon_status = 'matched' AND r.pending_payment_count = 0
+              AND COALESCE(it.direct_outstanding, false))
           OR ({{params.stage}} = 'held' AND o.hold_shipping)
           OR ({{params.stage}} = 'packed' AND s.status = 'packed')
           OR ({{params.stage}} = 'shipped' AND s.status IN ('shipped','delivered','reshipped')))
