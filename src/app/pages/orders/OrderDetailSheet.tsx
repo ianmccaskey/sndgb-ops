@@ -16,6 +16,9 @@ import { lookupTxPayment } from '@/lib/verifyPayment';
 import setOrderItemComp from '@/actions/orders/setOrderItemComp';
 import setOrderItemDirectShip from '@/actions/orders/setOrderItemDirectShip';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
+import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
+import deleteLocalOrderItem from '@/actions/orders/deleteLocalOrderItem';
+import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import setOrderWriteoff from '@/actions/orders/setOrderWriteoff';
 import updateOrderRail from '@/actions/orders/updateOrderRail';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
@@ -56,6 +59,7 @@ type ItemRow = {
   id: number; qty: string; unit_price_usd: string; line_total_usd: string;
   comp_qty: string; comp_reason: string | null; comp_value_usd: string;
   direct_ship: boolean; direct_ship_source: string; direct_fulfilled_at: string | null;
+  item_source: string;
   sku_code: string; product_name: string;
 };
 type PaymentRow = {
@@ -65,13 +69,17 @@ type PaymentRow = {
 };
 
 export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null; onClose: () => void }) {
-  const { userName, settings } = useApp();
+  const { userName, settings, groupBuyId } = useApp();
   const open = orderId != null;
   const [rawOrder, , , reloadOrder] = useLoadAction(getOrder, [orderId], { order_id: orderId }, { enabled: open });
   const [rawItems, , , reloadItems] = useLoadAction(getOrderItems, [orderId], { order_id: orderId }, { enabled: open });
   const [rawPayments, , , reloadPayments] = useLoadAction(listOrderPayments, [orderId], { order_id: orderId }, { enabled: open });
+  const [rawCampaignProducts] = useLoadAction(listCampaignProducts, [groupBuyId, open], { group_buy_id: groupBuyId }, { enabled: open && groupBuyId != null });
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
+  const campaignProducts = rows<{ sku_code: string; gb_price_usd: string }>(rawCampaignProducts);
+  const localItemsUsd = items.filter(i => i.item_source === 'local')
+    .reduce((s, i) => s + Number(i.line_total_usd), 0);
   const payments = rows<PaymentRow>(rawPayments);
 
   const [doUpdate] = useMutateAction(updateOrderAdmin);
@@ -87,6 +95,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doSetComp] = useMutateAction(setOrderItemComp);
   const [doSetDirectShip] = useMutateAction(setOrderItemDirectShip);
   const [doMarkDirectFulfilled] = useMutateAction(markOrderDirectFulfilled);
+  const [doAddLocalItem] = useMutateAction(addLocalOrderItem);
+  const [doDeleteLocalItem] = useMutateAction(deleteLocalOrderItem);
   const [doSetWriteoff] = useMutateAction(setOrderWriteoff);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
 
@@ -115,6 +125,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
 
   // comped (free) items
   const [compingId, setCompingId] = useState<number | null>(null);
+  const [addSku, setAddSku] = useState('');
+  const [addQty, setAddQty] = useState('');
+  const [addMsg, setAddMsg] = useState('');
   const [compQty, setCompQty] = useState('');
   const [compReason, setCompReason] = useState('');
   const [compMsg, setCompMsg] = useState('');
@@ -465,6 +478,45 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     }
   };
 
+  // Locally added items: the ordering app can be closed to item changes
+  // while THIS app (what fulfillment runs from) still needs the truth.
+  // Local rows survive every pull, bill on top of the upstream total, and
+  // get adopted if the SKU later appears upstream.
+  const addItem = async () => {
+    if (!o) return;
+    if (!addSku) { setAddMsg('Pick a product.'); return; }
+    if (!/^\d+(?:\.\d{1,2})?$/.test(addQty.trim()) || !(Number(addQty) > 0)) { setAddMsg('Qty must be positive with at most 2 decimals.'); return; }
+    setSaving(true); setAddMsg('');
+    try {
+      const res = await doAddLocalItem({
+        order_id: o.id, group_buy_id: o.group_buy_id, sku: addSku, qty: addQty.trim(), actor: userName,
+      }) as unknown[] | null;
+      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!wrote) setAddMsg('Refused — that product is already on the order (top-ups belong in the ordering app), or the qty is invalid.');
+      else { setAddSku(''); setAddQty(''); }
+      reloadItems(); reloadOrder();
+    } catch (e: unknown) {
+      setAddMsg(e instanceof Error ? e.message : 'Failed to add item');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeLocalItem = async (it: ItemRow) => {
+    if (!o) return;
+    if (!window.confirm(`Remove ${it.sku_code} × ${it.qty} (added in this app) from ${o.order_number}?`)) return;
+    setSaving(true); setAddMsg('');
+    try {
+      const res = await doDeleteLocalItem({ order_id: o.id, item_id: it.id, actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setAddMsg('Refused — only items added in this app can be removed here.');
+      reloadItems(); reloadOrder();
+    } catch (e: unknown) {
+      setAddMsg(e instanceof Error ? e.message : 'Failed to remove item');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Per-LINE vendor-shipped state: two direct SKUs (possibly from different
   // vendors) complete separately — the fulfillment tab's bulk button covers
   // the everything-shipped case.
@@ -719,6 +771,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             comp {Number(it.comp_qty)} · −{fmtUSD(it.comp_value_usd)}
                           </span>
                         )}
+                        {it.item_source === 'local' && (
+                          <span
+                            className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                            title="Added in this app — not in the ordering app yet; survives pulls and bills on top of the order total"
+                          >
+                            added here
+                          </span>
+                        )}
                         {it.direct_ship && (
                           <span
                             className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${it.direct_fulfilled_at ? 'bg-green-100 text-green-900' : 'bg-violet-100 text-violet-900'}`}
@@ -754,6 +814,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             {it.direct_fulfilled_at ? 'Undo vendor shipped' : 'Vendor shipped'}
                           </Button>
                         )}
+                        {it.item_source === 'local' && (
+                          <Button
+                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-red-600"
+                            disabled={saving} onClick={() => removeLocalItem(it)}
+                          >
+                            Remove
+                          </Button>
+                        )}
                       </span>
                     </div>
                     {compingId === it.id && (
@@ -770,6 +838,22 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   </div>
                 ))}
                 {compMsg && <p className="text-xs text-red-600 mt-1">{compMsg}</p>}
+                <div className="flex flex-wrap gap-1.5 mt-2 items-center">
+                  <Select value={addSku} onValueChange={v => { setAddSku(v); setAddMsg(''); }}>
+                    <SelectTrigger className="h-7 flex-1 min-w-36 text-xs"><SelectValue placeholder="Add item…" /></SelectTrigger>
+                    <SelectContent>
+                      {campaignProducts.map(p => (
+                        <SelectItem key={p.sku_code} value={p.sku_code}>{p.sku_code} @ {fmtUSD(p.gb_price_usd)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input placeholder="Qty" value={addQty} onChange={e => setAddQty(e.target.value)} className="h-7 w-16 text-xs" />
+                  <Button size="sm" className="h-7 text-xs" disabled={saving || !addSku} onClick={addItem}>Add</Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Added items bill on top of the order total and survive pulls; they're marked until the ordering app learns about them.
+                </p>
+                {addMsg && <p className="text-xs text-red-600 mt-1">{addMsg}</p>}
                 <Separator className="my-2" />
                 <div className="space-y-0.5 text-muted-foreground">
                   <div className="flex justify-between"><span>Subtotal</span><span>{fmtUSD(o.subtotal_usd)}</span></div>
@@ -778,6 +862,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   <div className="flex justify-between"><span>Shipping fee</span><span>{fmtUSD(o.shipping_fee_usd)}</span></div>
                   {Number(o.processor_fee_usd) > 0 && <div className="flex justify-between"><span>Processor fee</span><span>{fmtUSD(o.processor_fee_usd)}</span></div>}
                   <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{fmtUSD(o.total_usd)}</span></div>
+                  {localItemsUsd > 0 && (
+                    <>
+                      <div className="flex justify-between text-amber-700"><span>Added in this app</span><span>+{fmtUSD(localItemsUsd)}</span></div>
+                      <div className="flex justify-between font-semibold text-foreground"><span>Expected with additions</span><span>{fmtUSD(Number(o.total_usd) + localItemsUsd)}</span></div>
+                    </>
+                  )}
                   {Number(o.comp_usd) > 0 && (
                     <div className="flex justify-between text-green-700"><span>Comped items</span><span>−{fmtUSD(o.comp_usd)}</span></div>
                   )}

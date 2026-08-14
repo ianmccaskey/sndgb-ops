@@ -11,6 +11,9 @@ function deleteOrderItemsNotIn() {
     query: `
       DELETE FROM order_items oi
       WHERE oi.order_id = {{params.order_id}}::bigint
+        -- locally added items are invisible to the ordering app by
+        -- definition — its item list must never prune them
+        AND oi.item_source <> 'local'
         AND oi.group_buy_product_id NOT IN (
           SELECT gbp.id
           FROM jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)

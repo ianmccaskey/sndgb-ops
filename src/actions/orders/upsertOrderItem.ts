@@ -31,7 +31,7 @@ function upsertOrderItem() {
         -- FOR UPDATE: locks the existing row so a concurrent comp edit can't
         -- land between this snapshot and the conflict-update below — the
         -- clamp and its audit comparison must see the same old value.
-        SELECT oi.id, oi.comp_qty, oi.unit_price_usd
+        SELECT oi.id, oi.comp_qty, oi.unit_price_usd, oi.item_source
         FROM order_items oi
         JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
           AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
@@ -53,6 +53,10 @@ function upsertOrderItem() {
         ON CONFLICT (order_id, group_buy_product_id) DO UPDATE SET
           qty = EXCLUDED.qty,
           unit_price_usd = EXCLUDED.unit_price_usd,
+          -- upstream now knows this product: a locally-added row is ADOPTED
+          -- (source flips, upstream qty wins, and the local extra-billing
+          -- stops — the upstream header total carries the money from here)
+          item_source = 'import',
           comp_qty = LEAST(order_items.comp_qty, EXCLUDED.qty),
           -- direct-ship refreshes from the source only when the source
           -- actually knows (non-blank param — the paste path sends '') and
@@ -93,7 +97,10 @@ function upsertOrderItem() {
         WHERE w.order_id = {{params.order_id}}::bigint
           AND prev.id = ins.id
           AND (prev.comp_qty IS DISTINCT FROM ins.comp_qty
-               OR prev.unit_price_usd IS DISTINCT FROM ins.unit_price_usd)
+               OR prev.unit_price_usd IS DISTINCT FROM ins.unit_price_usd
+               -- adopting a local row moves due (its extra-billing stops),
+               -- so a standing write-off no longer describes reality
+               OR prev.item_source = 'local')
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
@@ -108,6 +115,15 @@ function upsertOrderItem() {
         FROM ins
         JOIN prev ON prev.id = ins.id
         WHERE ins.comp_qty < prev.comp_qty
+        RETURNING row_pk
+      ), adopt_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', ins.id::text, 'local_item_adopted_by_import', {{params.actor}},
+               jsonb_build_object('order_id', {{params.order_id}}::bigint, 'sku', {{params.sku}},
+                                  'imported_qty', ({{params.qty}})::numeric)
+        FROM ins
+        JOIN prev ON prev.id = ins.id
+        WHERE prev.item_source = 'local'
         RETURNING row_pk
       )
       SELECT id FROM ins
