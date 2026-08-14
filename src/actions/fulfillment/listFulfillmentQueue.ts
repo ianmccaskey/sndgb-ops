@@ -13,6 +13,7 @@ function listFulfillmentQueue() {
              COALESCE(it.items_summary, '') AS items_summary,
              COALESCE(it.item_count, 0) AS item_count,
              COALESCE(it.direct_items_summary, '') AS direct_items_summary,
+             COALESCE(it.direct_outstanding_summary, '') AS direct_outstanding_summary,
              COALESCE(it.all_direct, false) AS all_direct,
              COALESCE(it.direct_outstanding, false) AS direct_outstanding,
              s.id AS shipment_id, s.status AS shipment_status, s.carrier, s.tracking_number,
@@ -27,6 +28,11 @@ function listFulfillmentQueue() {
                COALESCE(SUM(oi.qty) FILTER (WHERE NOT oi.direct_ship), 0) AS item_count,
                string_agg(p.sku_code || ' (' || oi.qty || ')', '; ' ORDER BY p.sku_code)
                  FILTER (WHERE oi.direct_ship) AS direct_items_summary,
+               -- what the vendor STILL owes — the direct tab's row text and
+               -- the bulk button's confirm show this, so the confirmation
+               -- lists exactly the lines the bulk action will stamp
+               string_agg(p.sku_code || ' (' || oi.qty || ')', '; ' ORDER BY p.sku_code)
+                 FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL) AS direct_outstanding_summary,
                bool_and(oi.direct_ship) AS all_direct,
                bool_or(oi.direct_ship AND oi.direct_fulfilled_at IS NULL) AS direct_outstanding
         FROM order_items oi

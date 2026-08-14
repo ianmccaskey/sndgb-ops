@@ -21,7 +21,8 @@ type QueueRow = {
   state_code: string | null; postal_code: string | null;
   hold_shipping: boolean; customer_note: string | null; admin_note: string | null;
   recon_status: string | null; items_summary: string; item_count: string;
-  direct_items_summary: string; all_direct: boolean; direct_outstanding: boolean;
+  direct_items_summary: string; direct_outstanding_summary: string;
+  all_direct: boolean; direct_outstanding: boolean;
   shipment_id: number | null; shipment_status: string | null; carrier: string | null;
   tracking_number: string | null; label_cost_usd: string | null; box: string | null;
 };
@@ -57,7 +58,7 @@ export function FulfillmentPage() {
   };
 
   const markDirect = async (r: QueueRow, fulfilled: boolean) => {
-    if (fulfilled && !window.confirm(`Mark the vendor-shipped items of ${r.order_number} as sent?\n\n${r.direct_items_summary}`)) return;
+    if (fulfilled && !window.confirm(`Mark the vendor-shipped items of ${r.order_number} as sent?\n\n${r.direct_outstanding_summary}`)) return;
     setSaving(true); setError('');
     try {
       await doMarkDirect({ order_id: r.id, item_id: '', fulfilled, actor: userName });
@@ -141,8 +142,8 @@ export function FulfillmentPage() {
                 </TableCell>
                 <TableCell className="text-xs max-w-[220px]">
                   <span className="flex items-center gap-1.5 min-w-0">
-                    <span className="truncate" title={(r.all_direct || stage === 'direct') ? r.direct_items_summary : r.items_summary}>
-                      {(r.all_direct || stage === 'direct') ? r.direct_items_summary : r.items_summary}
+                    <span className="truncate" title={stage === 'direct' ? r.direct_outstanding_summary : r.all_direct ? r.direct_items_summary : r.items_summary}>
+                      {stage === 'direct' ? r.direct_outstanding_summary : r.all_direct ? r.direct_items_summary : r.items_summary}
                     </span>
                     {stage !== 'direct' && !r.all_direct && r.direct_items_summary && (
                       <span
