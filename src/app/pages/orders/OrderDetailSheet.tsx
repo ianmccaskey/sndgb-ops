@@ -492,7 +492,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         order_id: o.id, group_buy_id: o.group_buy_id, sku: addSku, qty: addQty.trim(), actor: userName,
       }) as unknown[] | null;
       const wrote = Array.isArray(res) ? res.length > 0 : !!res;
-      if (!wrote) setAddMsg('Refused — that product is already on the order (top-ups belong in the ordering app), or the qty is invalid.');
+      if (!wrote) setAddMsg('Refused — the product is already on the order (top-ups belong in the ordering app), or the order already packed/shipped (reopen its shipment to pending first).');
       else { setAddSku(''); setAddQty(''); }
       reloadItems(); reloadOrder();
     } catch (e: unknown) {

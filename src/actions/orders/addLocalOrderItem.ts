@@ -38,6 +38,15 @@ function addLocalOrderItem() {
         JOIN orders o ON o.id = {{params.order_id}}::bigint
           AND o.group_buy_id = gbp.group_buy_id
         WHERE p.sku_code = {{params.sku}}
+          -- the order must still be in the pack flow: once its latest
+          -- shipment is packed/shipped, a new item would bill the customer
+          -- for something fulfillment never sees — reopen the shipment
+          -- (set it back to pending) first, then add
+          AND COALESCE((
+            SELECT sh.status::text FROM shipments sh
+            WHERE sh.order_id = o.id
+            ORDER BY sh.created_at DESC LIMIT 1
+          ), 'pending') = 'pending'
           AND ({{params.qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.qty}})::numeric > 0
           AND (SELECT COUNT(*) FROM lck) >= 0

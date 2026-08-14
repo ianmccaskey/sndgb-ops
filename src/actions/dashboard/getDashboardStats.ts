@@ -7,8 +7,11 @@ function getDashboardStats() {
       SELECT
         (SELECT COUNT(*) FROM orders o WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
            AND o.status NOT IN ('cancelled','refunded')) AS order_count,
-        (SELECT COALESCE(SUM(total_usd),0) FROM orders o WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
-           AND o.status NOT IN ('cancelled','refunded')) AS billed_usd,
+        -- billed comes from the recon view so locally added items (billed on
+        -- top of the upstream order total) are counted consistently with
+        -- due/received below
+        (SELECT COALESCE(SUM(billed_usd),0) FROM v_order_reconciliation r
+           WHERE r.group_buy_id = {{params.group_buy_id}}::bigint) AS billed_usd,
         (SELECT COALESCE(SUM(effective_received_usd),0) FROM v_order_reconciliation r
            WHERE r.group_buy_id = {{params.group_buy_id}}::bigint) AS received_usd,
         -- due = billed minus comped (free) items; collection health must use
