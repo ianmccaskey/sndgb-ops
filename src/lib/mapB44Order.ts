@@ -86,7 +86,18 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
       errors.push({ line: index + 1, text: orderNumber, reason: `Quantity ${it.quantity} for '${it.product_name || pid}' has more than 2 decimal places — cannot store exactly` });
       return null;
     }
-    items.push({ sku, qty, directShip: it.wants_direct_ship === true });
+    const directShip = it.wants_direct_ship === true;
+    // Duplicate-SKU lines get merged into ONE order_items row downstream, so
+    // a SKU that is direct-shipped on one line and packed-by-us on another is
+    // unrepresentable — refuse loudly rather than silently converting local
+    // units into vendor-direct units (which would drop them from the pack
+    // queue). Fix the routing in the ordering app and re-pull.
+    const clash = items.find(prev => prev.sku === sku && prev.directShip !== directShip);
+    if (clash) {
+      errors.push({ line: index + 1, text: orderNumber, reason: `'${sku}' appears both direct-shipped and packed-by-us on this order — one SKU can only ship one way; fix it in the ordering app and re-pull` });
+      return null;
+    }
+    items.push({ sku, qty, directShip });
   }
 
   const { payments } = parseHashBlob(o.transaction_hashtags);
