@@ -104,16 +104,42 @@ function importUpsertOrder() {
         raw_import = EXCLUDED.raw_import
       WHERE orders.group_buy_id = EXCLUDED.group_buy_id
       RETURNING id, total_usd
+      ), adopt AS (
+        -- ATOMIC with the total update: the incoming item list carries the
+        -- SKUs upstream now knows, so any matching LOCALLY-ADDED row flips
+        -- to 'import' in the same statement the header total lands — a
+        -- partial import failure between this call and the per-item upserts
+        -- can never leave a product billed twice (once inside the new total
+        -- and again as a local add-on). The later item upsert then just
+        -- refreshes qty on an already-imported row.
+        UPDATE order_items oi SET item_source = 'import'
+        FROM up,
+             jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)
+             JOIN products p ON p.sku_code = x.sku
+             JOIN group_buy_products gbp ON gbp.product_id = p.id
+               AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
+        WHERE oi.order_id = up.id
+          AND oi.group_buy_product_id = gbp.id
+          AND oi.item_source = 'local'
+        RETURNING oi.id
+      ), adopt_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', adopt.id::text, 'local_item_adopted_by_import', 'import',
+               jsonb_build_object('order_id', (SELECT id FROM up))
+        FROM adopt
+        RETURNING row_pk
       ), wo_clear AS (
         -- a CHANGED billed total invalidates a standing write-off (the
         -- forgiven shortfall was computed against the old total): auto-clear
         -- it, audited. Unchanged totals — the routine re-import case — leave
-        -- write-offs alone (IS DISTINCT FROM guard).
+        -- write-offs alone (IS DISTINCT FROM guard). An adoption also moves
+        -- due (the local extra-billing stops), so it clears too.
         DELETE FROM order_writeoffs w
         USING up, prev
         WHERE w.order_id = up.id
           AND prev.id = up.id
-          AND prev.total_usd IS DISTINCT FROM up.total_usd
+          AND (prev.total_usd IS DISTINCT FROM up.total_usd
+               OR EXISTS (SELECT 1 FROM adopt))
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

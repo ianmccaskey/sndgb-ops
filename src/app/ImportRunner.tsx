@@ -144,7 +144,31 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     const base = o.subtotal + o.tip + o.adminFee + o.shippingFee;
     const processorFee = o.paymentRail === 'cash' && o.total > base ? +(o.total - base).toFixed(2) : 0;
 
+    // Items are written one row per product: UI Bakery's action layer rejects
+    // multi-row inserts with repeated key columns, which is what silently
+    // broke the old replaceOrderItems (and blocked payment sync behind it).
+    // Duplicate SKU lines from the source are summed into one row first.
+    // Summed in integer hundredths: quantities are 2-decimal values and the
+    // write boundary rejects finer precision, so float addition (0.1 + 0.2 =
+    // 0.30000000000000004) must never reach the qty param.
+    const qtyBySku = new Map<string, { cents: number; directShip: boolean | undefined }>();
+    for (const it of o.items) {
+      const cur = qtyBySku.get(it.sku);
+      qtyBySku.set(it.sku, {
+        cents: (cur?.cents || 0) + Math.round(it.qty * 100),
+        // merged duplicate-SKU lines reduce with OR: if ANY source line is
+        // direct-shipped the merged row is; undefined only when no line knows
+        directShip: cur?.directShip === undefined && it.directShip === undefined
+          ? undefined : (cur?.directShip || it.directShip || false),
+      });
+    }
+    const mergedItems = [...qtyBySku.entries()].map(([sku, v]) => ({ sku, qty: v.cents / 100, directShip: v.directShip }));
+
     const upserted = await withRetry(() => doUpsert({
+      // the header upsert adopts any locally-added row whose SKU is in this
+      // list ATOMICALLY with the total update — a failure later in this
+      // function can never leave a product double-billed
+      items: JSON.stringify(mergedItems),
       group_buy_id: gbId,
       order_number: o.orderNumber,
       external_id: o.externalId || '',
@@ -170,26 +194,6 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     })) as { id: number }[] | { id: number };
     const orderId = Array.isArray(upserted) ? upserted[0]?.id : upserted?.id;
     if (!orderId) throw new Error('Refused: this order number already exists under a different campaign');
-
-    // Items are written one row per product: UI Bakery's action layer rejects
-    // multi-row inserts with repeated key columns, which is what silently
-    // broke the old replaceOrderItems (and blocked payment sync behind it).
-    // Duplicate SKU lines from the source are summed into one row first.
-    // Summed in integer hundredths: quantities are 2-decimal values and the
-    // write boundary rejects finer precision, so float addition (0.1 + 0.2 =
-    // 0.30000000000000004) must never reach the qty param.
-    const qtyBySku = new Map<string, { cents: number; directShip: boolean | undefined }>();
-    for (const it of o.items) {
-      const cur = qtyBySku.get(it.sku);
-      qtyBySku.set(it.sku, {
-        cents: (cur?.cents || 0) + Math.round(it.qty * 100),
-        // merged duplicate-SKU lines reduce with OR: if ANY source line is
-        // direct-shipped the merged row is; undefined only when no line knows
-        directShip: cur?.directShip === undefined && it.directShip === undefined
-          ? undefined : (cur?.directShip || it.directShip || false),
-      });
-    }
-    const mergedItems = [...qtyBySku.entries()].map(([sku, v]) => ({ sku, qty: v.cents / 100, directShip: v.directShip }));
 
     // Upsert every row FIRST and prove the whole replacement set is writable;
     // only then prune items removed upstream. A mid-loop failure leaves stale
