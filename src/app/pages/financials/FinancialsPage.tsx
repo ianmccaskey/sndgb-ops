@@ -6,6 +6,7 @@ import addExpense from '@/actions/financials/addExpense';
 import deleteExpense from '@/actions/financials/deleteExpense';
 import listWallets from '@/actions/financials/listWallets';
 import addWalletSnapshot from '@/actions/financials/addWalletSnapshot';
+import listNonCoaVendorOwed from '@/actions/vendors/listNonCoaVendorOwed';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
@@ -32,6 +33,8 @@ type Wallet = {
   latest_balance_usd: string | null; latest_native_balance: string | null;
   latest_snapshot_at: string | null; latest_source: string | null;
 };
+type OwedRow = { vendor_code: string; demand_usd: string; paid_usd: string; owed_usd: string };
+type CovBalance = { name: string; chain: string; usd: number };
 
 export function FinancialsPage() {
   const { groupBuyId, settings } = useApp();
@@ -39,6 +42,7 @@ export function FinancialsPage() {
   const [rawPnl, , , reloadPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawExpenses, , , reloadExpenses] = useLoadAction(listExpenses, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
+  const [rawOwed, , , reloadOwed] = useLoadAction(listNonCoaVendorOwed, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
 
   const pnl = firstRow<Pnl>(rawPnl);
   const expenses = rows<Expense>(rawExpenses);
@@ -56,6 +60,42 @@ export function FinancialsPage() {
 
   const [refreshing, setRefreshing] = useState<Record<number, string>>({});
   const [manualBalance, setManualBalance] = useState<Record<number, string>>({});
+
+  // wallet-coverage check: live ETH+SOL stablecoin holdings vs non-COA vendor owed
+  const [covRunning, setCovRunning] = useState(false);
+  const [covError, setCovError] = useState('');
+  const [covBalances, setCovBalances] = useState<CovBalance[] | null>(null);
+
+  const owedRows = rows<OwedRow>(rawOwed).filter(v => Number(v.owed_usd) > 0);
+  const covOwed = rows<OwedRow>(rawOwed).reduce((s, v) => s + Number(v.owed_usd), 0);
+  const covHeld = (covBalances || []).reduce((s, b) => s + b.usd, 0);
+
+  const runCoverage = async () => {
+    setCovRunning(true); setCovError(''); setCovBalances(null);
+    try {
+      const targets = wallets.filter(w => w.active && (w.chain === 'eth' || w.chain === 'sol') && w.address);
+      if (targets.length === 0) throw new Error('No active ETH/SOL wallets with addresses (Settings).');
+      const balances: CovBalance[] = [];
+      // sequential on purpose — the same providers rate-limit bursts
+      for (const w of targets) {
+        if (w.chain === 'sol') {
+          if (!settings.helius_api_key) throw new Error('Helius key missing (Settings).');
+          const b = await getSolBalances(settings.helius_api_key, w.address!);
+          balances.push({ name: w.name, chain: w.chain, usd: b.usdc + b.usdt + b.pyusd });
+        } else {
+          if (!settings.moralis_api_key) throw new Error('Moralis key missing (Settings).');
+          const b = await getEvmBalances(settings.moralis_api_key, 'eth', w.address!);
+          balances.push({ name: w.name, chain: w.chain, usd: b.usdc + b.usdt + b.pyusd });
+        }
+      }
+      setCovBalances(balances);
+      reloadOwed(); // owed side re-reads so both sides of the comparison are current
+    } catch (e: unknown) {
+      setCovError(e instanceof Error ? e.message : 'Failed to fetch balances');
+    } finally {
+      setCovRunning(false);
+    }
+  };
 
   const netProfit = parseFloat(pnl?.net_profit_usd || '0');
 
@@ -202,6 +242,56 @@ export function FinancialsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-base">Wallet coverage vs vendor owed (non-COA)</CardTitle></CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={runCoverage} disabled={covRunning}>
+              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${covRunning ? 'animate-spin' : ''}`} /> Compare now
+            </Button>
+            <span className="text-xs text-muted-foreground">Live ETH + SOL wallet stablecoins vs what non-COA products still owe vendors.</span>
+          </div>
+          {covError && <p className="text-sm text-red-600">{covError}</p>}
+          {covBalances && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1">
+                <div className="text-xs font-semibold text-muted-foreground uppercase">In wallets (stablecoins)</div>
+                {covBalances.map(b => (
+                  <div key={b.name} className="flex justify-between text-muted-foreground">
+                    <span>{b.name} ({b.chain})</span><span>{fmtUSD(b.usd)}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between font-semibold border-t pt-1">
+                  <span>Total held</span><span>{fmtUSD(covHeld)}</span>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs font-semibold text-muted-foreground uppercase">Still owed to vendors (non-COA)</div>
+                {owedRows.map(v => (
+                  <div key={v.vendor_code} className="flex justify-between text-muted-foreground">
+                    <span>{v.vendor_code}</span><span>{fmtUSD(v.owed_usd)}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between font-semibold border-t pt-1">
+                  <span>Total owed</span><span>{fmtUSD(covOwed)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+          {covBalances && (
+            <div className={`text-base font-bold ${covHeld - covOwed >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              {covHeld - covOwed >= 0
+                ? `Over by ${fmtUSD(covHeld - covOwed)} — wallets cover what's owed`
+                : `Under by ${fmtUSD(covOwed - covHeld)} — wallets do NOT cover what's owed`}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Counts USDC/USDT/PYUSD in active ETH and SOL wallets (native ETH/SOL excluded — no live USD pricing).
+            Owed = non-COA product cost + those products' freight, minus vendor payments (COA-attributed payments excluded), clamped per vendor.
+          </p>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Expenses</CardTitle></CardHeader>
