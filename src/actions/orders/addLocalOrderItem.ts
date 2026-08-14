@@ -32,6 +32,8 @@ function addLocalOrderItem() {
         FROM products p
         JOIN group_buy_products gbp ON gbp.product_id = p.id
           AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
+          -- a cancelled campaign product must not gain new billable demand
+          AND gbp.status = 'active'
         -- the ORDER must live in the same campaign as the product — a stale
         -- or mismatched call must never attach campaign B's product (and
         -- price) to campaign A's order

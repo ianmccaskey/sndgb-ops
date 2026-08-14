@@ -77,7 +77,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [rawCampaignProducts] = useLoadAction(listCampaignProducts, [groupBuyId, open], { group_buy_id: groupBuyId }, { enabled: open && groupBuyId != null });
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
-  const campaignProducts = rows<{ sku_code: string; gb_price_usd: string }>(rawCampaignProducts);
+  const campaignProducts = rows<{ sku_code: string; gb_price_usd: string; status: string }>(rawCampaignProducts)
+    .filter(p => p.status === 'active');
   const localItemsUsd = items.filter(i => i.item_source === 'local')
     .reduce((s, i) => s + Number(i.line_total_usd), 0);
   const payments = rows<PaymentRow>(rawPayments);
