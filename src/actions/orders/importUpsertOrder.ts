@@ -105,19 +105,29 @@ function importUpsertOrder() {
         -- a fee override RETIRES when upstream catches up to it (a pushed
         -- edit coming back, or an upstream fix to the same value): the
         -- effective fee is unchanged in that instant, and clearing lets
-        -- future upstream fee changes flow again instead of being masked
+        -- future upstream fee changes flow again instead of being masked.
+        -- GATED on the header total moving in the SAME pull: a partial push
+        -- that landed fee fields but not the total must NOT retire — the
+        -- override (and its billed delta) stays alive, keeping the intended
+        -- bill and the visible marker until the totals repair runs. This
+        -- gate needs no total arithmetic, so cash-rail gross-up (which lives
+        -- only in the total) can't false it.
         admin_fee_override_usd = CASE
           WHEN orders.admin_fee_override_usd IS NOT NULL AND EXCLUDED.admin_fee_usd = orders.admin_fee_override_usd
+               AND EXCLUDED.total_usd IS DISTINCT FROM orders.total_usd
             THEN NULL ELSE orders.admin_fee_override_usd END,
         shipping_fee_override_usd = CASE
           WHEN orders.shipping_fee_override_usd IS NOT NULL AND EXCLUDED.shipping_fee_usd = orders.shipping_fee_override_usd
+               AND EXCLUDED.total_usd IS DISTINCT FROM orders.total_usd
             THEN NULL ELSE orders.shipping_fee_override_usd END,
         shipping_insurance_override_usd = CASE
           WHEN orders.shipping_insurance_override_usd IS NOT NULL
                AND COALESCE(NULLIF({{params.shipping_insurance_usd}}::text, '')::numeric, orders.shipping_insurance_usd) = orders.shipping_insurance_override_usd
+               AND EXCLUDED.total_usd IS DISTINCT FROM orders.total_usd
             THEN NULL ELSE orders.shipping_insurance_override_usd END,
         tip_override_usd = CASE
           WHEN orders.tip_override_usd IS NOT NULL AND EXCLUDED.tip_usd = orders.tip_override_usd
+               AND EXCLUDED.total_usd IS DISTINCT FROM orders.total_usd
             THEN NULL ELSE orders.tip_override_usd END,
         processor_fee_usd = EXCLUDED.processor_fee_usd,
         total_usd = EXCLUDED.total_usd,
