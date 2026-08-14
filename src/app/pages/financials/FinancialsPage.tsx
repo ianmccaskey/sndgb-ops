@@ -42,7 +42,6 @@ export function FinancialsPage() {
   const [rawPnl, , , reloadPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawExpenses, , , reloadExpenses] = useLoadAction(listExpenses, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
-  const [rawOwed, , , reloadOwed] = useLoadAction(listNonCoaVendorOwed, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
 
   const pnl = firstRow<Pnl>(rawPnl);
   const expenses = rows<Expense>(rawExpenses);
@@ -51,6 +50,7 @@ export function FinancialsPage() {
   const [doAddExpense] = useMutateAction(addExpense);
   const [doDelExpense] = useMutateAction(deleteExpense);
   const [doSnapshot] = useMutateAction(addWalletSnapshot);
+  const [fetchOwed] = useMutateAction(listNonCoaVendorOwed);
 
   const [eCat, setECat] = useState('supplies');
   const [eDesc, setEDesc] = useState('');
@@ -61,20 +61,24 @@ export function FinancialsPage() {
   const [refreshing, setRefreshing] = useState<Record<number, string>>({});
   const [manualBalance, setManualBalance] = useState<Record<number, string>>({});
 
-  // wallet-coverage check: live ETH+SOL stablecoin holdings vs non-COA vendor owed
+  // wallet-coverage check: live ETH+SOL stablecoin holdings vs non-COA vendor
+  // owed. Both sides are fetched in the SAME run and rendered only together,
+  // so the verdict can never pair fresh balances with stale owed figures.
   const [covRunning, setCovRunning] = useState(false);
   const [covError, setCovError] = useState('');
   const [covBalances, setCovBalances] = useState<CovBalance[] | null>(null);
+  const [covOwedRows, setCovOwedRows] = useState<OwedRow[] | null>(null);
 
-  const owedRows = rows<OwedRow>(rawOwed).filter(v => Number(v.owed_usd) > 0);
-  const covOwed = rows<OwedRow>(rawOwed).reduce((s, v) => s + Number(v.owed_usd), 0);
+  const owedRows = (covOwedRows || []).filter(v => Number(v.owed_usd) > 0);
+  const covOwed = (covOwedRows || []).reduce((s, v) => s + Number(v.owed_usd), 0);
   const covHeld = (covBalances || []).reduce((s, b) => s + b.usd, 0);
 
   const runCoverage = async () => {
-    setCovRunning(true); setCovError(''); setCovBalances(null);
+    setCovRunning(true); setCovError(''); setCovBalances(null); setCovOwedRows(null);
     try {
       const targets = wallets.filter(w => w.active && (w.chain === 'eth' || w.chain === 'sol') && w.address);
       if (targets.length === 0) throw new Error('No active ETH/SOL wallets with addresses (Settings).');
+      const owed = rows<OwedRow>(await fetchOwed({ group_buy_id: groupBuyId }));
       const balances: CovBalance[] = [];
       // sequential on purpose — the same providers rate-limit bursts
       for (const w of targets) {
@@ -88,8 +92,8 @@ export function FinancialsPage() {
           balances.push({ name: w.name, chain: w.chain, usd: b.usdc + b.usdt + b.pyusd });
         }
       }
+      setCovOwedRows(owed);
       setCovBalances(balances);
-      reloadOwed(); // owed side re-reads so both sides of the comparison are current
     } catch (e: unknown) {
       setCovError(e instanceof Error ? e.message : 'Failed to fetch balances');
     } finally {
