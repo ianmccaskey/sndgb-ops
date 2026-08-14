@@ -59,7 +59,7 @@ type ItemRow = {
   id: number; qty: string; unit_price_usd: string; line_total_usd: string;
   comp_qty: string; comp_reason: string | null; comp_value_usd: string;
   direct_ship: boolean; direct_ship_source: string; direct_fulfilled_at: string | null;
-  item_source: string;
+  item_source: string; product_external_id: string | null;
   sku_code: string; product_name: string;
 };
 type PaymentRow = {
@@ -518,6 +518,98 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     }
   };
 
+  // Push locally-added items INTO the ordering app's order record. The
+  // storefront being closed to item changes doesn't block this: it's a
+  // direct entity write, same as the rail/tx-ref pushes. Read-merge-write at
+  // click time; items already present upstream are skipped (retry-safe); the
+  // upstream subtotal/total grow by the pushed value so the next pull adopts
+  // the local rows atomically and the money converges. Standing rules:
+  // local audit trail BEFORE the upstream mutation, full-postcondition
+  // verification on error.
+  const pushAddedItems = async () => {
+    if (!o || !o.external_id) return;
+    const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
+    const locals = items.filter(i => i.item_source === 'local');
+    if (locals.length === 0) return;
+    const unsynced = locals.filter(i => !i.product_external_id);
+    if (unsynced.length > 0) {
+      setAddMsg(`Cannot push: ${unsynced.map(i => i.sku_code).join(', ')} ${unsynced.length === 1 ? 'has' : 'have'} no ordering-app product id — pull products on the Products → Ordering app tab first.`);
+      return;
+    }
+    setSaving(true); setAddMsg('');
+    try {
+      const cfg = { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' };
+      const b44 = await getB44Order(cfg, o.external_id);
+      const upstreamIds = new Set((b44.items || []).map(x => String(x.product_id || '')));
+      const toAdd = locals.filter(i => !upstreamIds.has(String(i.product_external_id)));
+      if (toAdd.length === 0) {
+        setAddMsg('The ordering app already has these items — run a pull and they will be adopted automatically.');
+        return;
+      }
+      const addValue = Math.round(toAdd.reduce((s, i) => s + Number(i.qty) * Number(i.unit_price_usd), 0) * 100) / 100;
+      const summary = toAdd.map(i => `${i.sku_code} × ${Number(i.qty)}`).join(', ');
+      if (!window.confirm(`Push to the ordering app order ${o.order_number}?\n\n${summary}\n\nUpstream subtotal and total increase by ${fmtUSD(addValue)}.`)) return;
+
+      const pushingLine = `${ts} pushing ${toAdd.length} added item(s) to the ordering app: ${summary} (+${fmtUSD(addValue)}).`;
+      const pushingRes = await doAppendNote({
+        order_id: o.id, note: pushingLine, actor: userName,
+        detail: JSON.stringify({ items_push: true, skus: toAdd.map(i => i.sku_code), value_usd: addValue }),
+      }) as { admin_note: string }[] | { admin_note: string };
+      setAdminNote(prev => (Array.isArray(pushingRes) ? pushingRes[0]?.admin_note : pushingRes?.admin_note) ?? (prev ? `${prev}\n${pushingLine}` : pushingLine));
+
+      const newItems = [
+        ...(b44.items || []),
+        ...toAdd.map(i => ({
+          product_id: i.product_external_id,
+          product_name: i.product_name || i.sku_code,
+          price: Number(i.unit_price_usd),
+          quantity: Number(i.qty),
+          shipped_date: null,
+          vendor_paid: false,
+          coa_link: null,
+          wants_direct_ship: i.direct_ship || null,
+          direct_ship_threshold: null,
+        })),
+      ];
+      const upLine = `${ts} ${toAdd.length} item(s) added by SND GB Ops (ordering closed): ${summary} (+$${addValue.toFixed(2)}).`;
+      const newSubtotal = Math.round((Number(b44.subtotal || 0) + addValue) * 100) / 100;
+      const newTotal = Math.round((Number(b44.total || 0) + addValue) * 100) / 100;
+      try {
+        await updateB44Order(cfg, o.external_id, {
+          items: newItems,
+          subtotal: newSubtotal,
+          total: newTotal,
+          notes: b44.notes ? `${b44.notes}\n${upLine}` : upLine,
+        });
+      } catch (pushErr: unknown) {
+        // verify the FULL intended postcondition before claiming anything
+        let landed = false;
+        let outcome = 'outcome UNKNOWN — check the ordering app before retrying';
+        try {
+          const after = await getB44Order(cfg, o.external_id);
+          const afterIds = new Set((after.items || []).map(x => String(x.product_id || '')));
+          const itemsOk = toAdd.every(i => afterIds.has(String(i.product_external_id)));
+          const noteOk = String(after.notes || '').includes(upLine);
+          landed = itemsOk && noteOk;
+          outcome = landed ? 'it LANDED upstream (items + note) despite the error'
+            : itemsOk ? 'PARTIAL: the items are upstream but the note is missing — verify the totals and add the note upstream manually'
+            : 'upstream is unchanged — retry the push';
+        } catch { /* keep UNKNOWN */ }
+        const failLine = `${ts} items push error (${pushErr instanceof Error ? pushErr.message : 'unknown error'}) — ${outcome}.`;
+        try {
+          const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ items_push_error: true, landed }) }) as { admin_note: string }[] | { admin_note: string };
+          setAdminNote(prev => (Array.isArray(failRes) ? failRes[0]?.admin_note : failRes?.admin_note) ?? (prev ? `${prev}\n${failLine}` : failLine));
+        } catch { /* surfaced below */ }
+        if (!landed) { setAddMsg(`Ordering app push failed (${outcome}).`); return; }
+      }
+      setAddMsg('Pushed to the ordering app. Run a pull — the items will be adopted and the "added here" badges clear automatically.');
+    } catch (e: unknown) {
+      setAddMsg(e instanceof Error ? e.message : 'Failed to push items');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Per-LINE vendor-shipped state: two direct SKUs (possibly from different
   // vendors) complete separately — the fulfillment tab's bulk button covers
   // the everything-shipped case.
@@ -850,6 +942,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   </Select>
                   <Input placeholder="Qty" value={addQty} onChange={e => setAddQty(e.target.value)} className="h-7 w-16 text-xs" />
                   <Button size="sm" className="h-7 text-xs" disabled={saving || !addSku} onClick={addItem}>Add</Button>
+                  {localItemsUsd > 0 && o.external_id && (
+                    <Button size="sm" variant="outline" className="h-7 text-xs" disabled={saving} onClick={pushAddedItems}
+                      title="Write the added items into the ordering app's order (works even while ordering is closed) and raise its total to match">
+                      Push added items to ordering app
+                    </Button>
+                  )}
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
                   Added items bill on top of the order total and survive pulls; they're marked until the ordering app learns about them.
