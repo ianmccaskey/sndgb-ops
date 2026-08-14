@@ -600,9 +600,41 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         .map(f => ({ ...f, value: o[f.override] != null ? Number(o[f.override]) : null, current: Number(b44[f.field] ?? 0) }))
         .filter(f => f.value != null && Math.round(f.value * 100) !== Math.round(f.current * 100));
       if (toAdd.length === 0 && feeChanges.length === 0) {
-        setAddMsg(locals.length > 0 || FEE_PUSH_MAP.some(f => o[f.override] != null)
-          ? 'The ordering app already matches — run a pull and the badges/edit markers will clear automatically.'
-          : 'Nothing to push.');
+        if (locals.length === 0 && !FEE_PUSH_MAP.some(f => o[f.override] != null)) {
+          setAddMsg('Nothing to push.');
+          return;
+        }
+        // Items and fees match upstream — but a PARTIAL earlier push (or a
+        // hand-edit of the fee fields upstream) can leave the TOTAL stale,
+        // and a pull would then retire the overrides against a wrong total.
+        // Cross-check against the locally-expected figure and offer a
+        // totals-only repair before pointing at the pull.
+        const pushedItemsValue = Math.round(locals
+          .filter(i => upstreamIds.has(String(i.product_external_id)))
+          .reduce((s, i) => s + Number(i.qty) * Number(i.unit_price_usd), 0) * 100) / 100;
+        const expectedTotal = Math.round((Number(o.total_usd) + pushedItemsValue + feeDeltaUsd) * 100) / 100;
+        if (Math.round(Number(b44.total || 0) * 100) !== Math.round(expectedTotal * 100)) {
+          if (!window.confirm(`The ordering app's items and fees match, but its TOTAL is ${fmtUSD(Number(b44.total || 0))} where ${fmtUSD(expectedTotal)} is expected (a partial earlier push, or an upstream edit).\n\nRepair the upstream total to ${fmtUSD(expectedTotal)}?`)) {
+            setAddMsg('Upstream total left as-is — do NOT pull until it is fixed, or the fee edits will retire against the wrong total.');
+            return;
+          }
+          const expectedSubtotal = Math.round((Number(o.subtotal_usd) + pushedItemsValue) * 100) / 100;
+          const repairLine = `${ts} repairing the ordering app's total: ${fmtUSD(Number(b44.total || 0))} → ${fmtUSD(expectedTotal)} (items/fees already matched).`;
+          const repairRes = await doAppendNote({
+            order_id: o.id, note: repairLine, actor: userName,
+            detail: JSON.stringify({ total_repair: true, from: Number(b44.total || 0), to: expectedTotal }),
+          }) as { admin_note: string }[] | { admin_note: string };
+          setAdminNote(prev => (Array.isArray(repairRes) ? repairRes[0]?.admin_note : repairRes?.admin_note) ?? (prev ? `${prev}\n${repairLine}` : repairLine));
+          const upRepairLine = `${ts} total corrected to $${expectedTotal.toFixed(2)} by SND GB Ops.`;
+          await updateB44Order(cfg, o.external_id, {
+            subtotal: expectedSubtotal,
+            total: expectedTotal,
+            notes: b44.notes ? `${b44.notes}\n${upRepairLine}` : upRepairLine,
+          });
+          setAddMsg('Upstream total repaired. Run a pull — badges and edit markers clear automatically.');
+          return;
+        }
+        setAddMsg('The ordering app already matches — run a pull and the badges/edit markers will clear automatically.');
         return;
       }
       const addValue = Math.round(toAdd.reduce((s, i) => s + Number(i.qty) * Number(i.unit_price_usd), 0) * 100) / 100;
