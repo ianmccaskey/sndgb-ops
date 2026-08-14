@@ -566,19 +566,24 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     }
   };
 
-  // Push locally-added items INTO the ordering app's order record. The
-  // storefront being closed to item changes doesn't block this: it's a
-  // direct entity write, same as the rail/tx-ref pushes. Read-merge-write at
-  // click time; items already present upstream are skipped (retry-safe); the
-  // upstream subtotal/total grow by the pushed value so the next pull adopts
-  // the local rows atomically and the money converges. Standing rules:
-  // local audit trail BEFORE the upstream mutation, full-postcondition
-  // verification on error.
-  const pushAddedItems = async () => {
+  // Push local CHANGES — added items AND fee overrides — into the ordering
+  // app's order record. The storefront being closed doesn't block this: it's
+  // a direct entity write, same as the rail/tx-ref pushes. Read-merge-write
+  // at click time; items already upstream and fees already matching are
+  // skipped (retry-safe); the upstream subtotal/total move by the pushed
+  // value so the next pull adopts the items and retires matching fee
+  // overrides. Standing rules: local audit trail BEFORE the upstream
+  // mutation, full-postcondition verification on error.
+  const FEE_PUSH_MAP = [
+    { field: 'admin_fee', label: 'admin fee', override: 'admin_fee_override_usd' },
+    { field: 'shipping_fee', label: 'shipping fee', override: 'shipping_fee_override_usd' },
+    { field: 'shipping_insurance_fee', label: 'insurance', override: 'shipping_insurance_override_usd' },
+    { field: 'tip', label: 'tip', override: 'tip_override_usd' },
+  ] as const;
+  const pushChanges = async () => {
     if (!o || !o.external_id) return;
     const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
     const locals = items.filter(i => i.item_source === 'local');
-    if (locals.length === 0) return;
     const unsynced = locals.filter(i => !i.product_external_id);
     if (unsynced.length > 0) {
       setAddMsg(`Cannot push: ${unsynced.map(i => i.sku_code).join(', ')} ${unsynced.length === 1 ? 'has' : 'have'} no ordering-app product id — pull products on the Products → Ordering app tab first.`);
@@ -590,37 +595,48 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       const b44 = await getB44Order(cfg, o.external_id);
       const upstreamIds = new Set((b44.items || []).map(x => String(x.product_id || '')));
       const toAdd = locals.filter(i => !upstreamIds.has(String(i.product_external_id)));
-      if (toAdd.length === 0) {
-        setAddMsg('The ordering app already has these items — run a pull and they will be adopted automatically.');
+      // fee overrides that differ from what upstream currently says
+      const feeChanges = FEE_PUSH_MAP
+        .map(f => ({ ...f, value: o[f.override] != null ? Number(o[f.override]) : null, current: Number(b44[f.field] ?? 0) }))
+        .filter(f => f.value != null && Math.round(f.value * 100) !== Math.round(f.current * 100));
+      if (toAdd.length === 0 && feeChanges.length === 0) {
+        setAddMsg(locals.length > 0 || FEE_PUSH_MAP.some(f => o[f.override] != null)
+          ? 'The ordering app already matches — run a pull and the badges/edit markers will clear automatically.'
+          : 'Nothing to push.');
         return;
       }
       const addValue = Math.round(toAdd.reduce((s, i) => s + Number(i.qty) * Number(i.unit_price_usd), 0) * 100) / 100;
-      const summary = toAdd.map(i => `${i.sku_code} × ${Number(i.qty)}`).join(', ');
-      if (!window.confirm(`Push to the ordering app order ${o.order_number}?\n\n${summary}\n\nUpstream subtotal and total increase by ${fmtUSD(addValue)}.`)) return;
+      const feeDelta = Math.round(feeChanges.reduce((s, f) => s + (f.value! - f.current), 0) * 100) / 100;
+      const itemsSummary = toAdd.map(i => `${i.sku_code} × ${Number(i.qty)}`).join(', ');
+      const feesSummary = feeChanges.map(f => `${f.label} ${fmtUSD(f.current)} → ${fmtUSD(f.value!)}`).join(', ');
+      const summary = [itemsSummary, feesSummary].filter(Boolean).join('; ');
+      const totalDelta = Math.round((addValue + feeDelta) * 100) / 100;
+      if (!window.confirm(`Push to the ordering app order ${o.order_number}?\n\n${summary}\n\nUpstream total ${totalDelta >= 0 ? 'increases' : 'decreases'} by ${fmtUSD(Math.abs(totalDelta))}.`)) return;
 
       // The confirm dialog is an unbounded wait between read and write — a
-      // full-array items PUT built on a stale snapshot would silently erase
-      // any upstream change made meanwhile. Re-read AFTER the confirm and
-      // abort on any drift; the PUT then follows the verified read within
-      // milliseconds instead of minutes.
+      // PUT built on a stale snapshot would silently erase any upstream
+      // change made meanwhile. Re-read AFTER the confirm and abort on any
+      // drift in the fields this push overwrites; the PUT then follows the
+      // verified read within milliseconds instead of minutes.
       const fresh = await getB44Order(cfg, o.external_id);
       const drifted = JSON.stringify(fresh.items || []) !== JSON.stringify(b44.items || [])
         || Number(fresh.subtotal || 0) !== Number(b44.subtotal || 0)
         || Number(fresh.total || 0) !== Number(b44.total || 0)
-        || String(fresh.notes || '') !== String(b44.notes || '');
+        || String(fresh.notes || '') !== String(b44.notes || '')
+        || FEE_PUSH_MAP.some(f => Number(fresh[f.field] ?? 0) !== Number(b44[f.field] ?? 0));
       if (drifted) {
         setAddMsg('The ordering app order changed while you were confirming — nothing was pushed. Re-check the order and retry.');
         return;
       }
 
-      const pushingLine = `${ts} pushing ${toAdd.length} added item(s) to the ordering app: ${summary} (+${fmtUSD(addValue)}).`;
+      const pushingLine = `${ts} pushing changes to the ordering app: ${summary} (total ${totalDelta >= 0 ? '+' : '−'}${fmtUSD(Math.abs(totalDelta))}).`;
       const pushingRes = await doAppendNote({
         order_id: o.id, note: pushingLine, actor: userName,
-        detail: JSON.stringify({ items_push: true, skus: toAdd.map(i => i.sku_code), value_usd: addValue }),
+        detail: JSON.stringify({ changes_push: true, skus: toAdd.map(i => i.sku_code), fees: feeChanges.map(f => f.field), total_delta_usd: totalDelta }),
       }) as { admin_note: string }[] | { admin_note: string };
       setAdminNote(prev => (Array.isArray(pushingRes) ? pushingRes[0]?.admin_note : pushingRes?.admin_note) ?? (prev ? `${prev}\n${pushingLine}` : pushingLine));
 
-      const newItems = [
+      const newItems = toAdd.length === 0 ? (b44.items || []) : [
         ...(b44.items || []),
         ...toAdd.map(i => ({
           product_id: i.product_external_id,
@@ -634,12 +650,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           direct_ship_threshold: null,
         })),
       ];
-      const upLine = `${ts} ${toAdd.length} item(s) added by SND GB Ops (ordering closed): ${summary} (+$${addValue.toFixed(2)}).`;
+      const upLine = `${ts} order updated by SND GB Ops (ordering closed): ${summary} (total ${totalDelta >= 0 ? '+' : '−'}$${Math.abs(totalDelta).toFixed(2)}).`;
       const newSubtotal = Math.round((Number(b44.subtotal || 0) + addValue) * 100) / 100;
-      const newTotal = Math.round((Number(b44.total || 0) + addValue) * 100) / 100;
+      const newTotal = Math.round((Number(b44.total || 0) + addValue + feeDelta) * 100) / 100;
+      const feeFields = Object.fromEntries(feeChanges.map(f => [f.field, f.value]));
       try {
         await updateB44Order(cfg, o.external_id, {
           items: newItems,
+          ...feeFields,
           subtotal: newSubtotal,
           total: newTotal,
           notes: b44.notes ? `${b44.notes}\n${upLine}` : upLine,
@@ -652,28 +670,29 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           const after = await getB44Order(cfg, o.external_id);
           const afterIds = new Set((after.items || []).map(x => String(x.product_id || '')));
           const itemsOk = toAdd.every(i => afterIds.has(String(i.product_external_id)));
+          const feesOk = feeChanges.every(f => Math.round(Number(after[f.field] ?? 0) * 100) === Math.round(f.value! * 100));
           const noteOk = String(after.notes || '').includes(upLine);
-          // the totals ARE the money invariant: items landing without the
-          // raised subtotal/total would adopt on the next pull against a
-          // stale total and underbill — never call that landed
+          // the totals ARE the money invariant: changes landing without the
+          // adjusted subtotal/total would converge on the next pull against
+          // a stale total and misbill — never call that landed
           const totalsOk = Math.round(Number(after.subtotal || 0) * 100) === Math.round(newSubtotal * 100)
             && Math.round(Number(after.total || 0) * 100) === Math.round(newTotal * 100);
-          landed = itemsOk && noteOk && totalsOk;
-          outcome = landed ? 'it LANDED upstream (items + totals + note) despite the error'
-            : itemsOk && !totalsOk ? `PARTIAL: the items are upstream but subtotal/total do NOT match the intended ${fmtUSD(newSubtotal)}/${fmtUSD(newTotal)} — fix the totals upstream manually BEFORE the next pull, or it will import an underbilled total`
-            : itemsOk ? 'PARTIAL: items and totals are upstream but the note is missing — add the note upstream manually'
-            : 'upstream is unchanged — retry the push';
+          landed = itemsOk && feesOk && noteOk && totalsOk;
+          outcome = landed ? 'it LANDED upstream (items + fees + totals + note) despite the error'
+            : (itemsOk && feesOk && !totalsOk) ? `PARTIAL: items/fees are upstream but subtotal/total do NOT match the intended ${fmtUSD(newSubtotal)}/${fmtUSD(newTotal)} — fix the totals upstream manually BEFORE the next pull, or it will import a wrong total`
+            : (itemsOk && feesOk) ? 'PARTIAL: items, fees, and totals are upstream but the note is missing — add the note upstream manually'
+            : 'upstream is unchanged or partially changed — check the ordering app, then retry the push';
         } catch { /* keep UNKNOWN */ }
-        const failLine = `${ts} items push error (${pushErr instanceof Error ? pushErr.message : 'unknown error'}) — ${outcome}.`;
+        const failLine = `${ts} changes push error (${pushErr instanceof Error ? pushErr.message : 'unknown error'}) — ${outcome}.`;
         try {
-          const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ items_push_error: true, landed }) }) as { admin_note: string }[] | { admin_note: string };
+          const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ changes_push_error: true, landed }) }) as { admin_note: string }[] | { admin_note: string };
           setAdminNote(prev => (Array.isArray(failRes) ? failRes[0]?.admin_note : failRes?.admin_note) ?? (prev ? `${prev}\n${failLine}` : failLine));
         } catch { /* surfaced below */ }
         if (!landed) { setAddMsg(`Ordering app push failed (${outcome}).`); return; }
       }
-      setAddMsg('Pushed to the ordering app. Run a pull — the items will be adopted and the "added here" badges clear automatically.');
+      setAddMsg('Pushed to the ordering app. Run a pull — added items are adopted and matching fee edits retire automatically.');
     } catch (e: unknown) {
-      setAddMsg(e instanceof Error ? e.message : 'Failed to push items');
+      setAddMsg(e instanceof Error ? e.message : 'Failed to push changes');
     } finally {
       setSaving(false);
     }
@@ -1011,10 +1030,10 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   </Select>
                   <Input placeholder="Qty" value={addQty} onChange={e => setAddQty(e.target.value)} className="h-7 w-16 text-xs" />
                   <Button size="sm" className="h-7 text-xs" disabled={saving || !addSku} onClick={addItem}>Add</Button>
-                  {localItemsUsd > 0 && o.external_id && (
-                    <Button size="sm" variant="outline" className="h-7 text-xs" disabled={saving} onClick={pushAddedItems}
-                      title="Write the added items into the ordering app's order (works even while ordering is closed) and raise its total to match">
-                      Push added items to ordering app
+                  {(localItemsUsd > 0 || feeDeltaUsd !== 0) && o.external_id && (
+                    <Button size="sm" variant="outline" className="h-7 text-xs" disabled={saving} onClick={pushChanges}
+                      title="Write added items and fee edits into the ordering app's order (works even while ordering is closed) and adjust its total to match">
+                      Push changes to ordering app
                     </Button>
                   )}
                 </div>
