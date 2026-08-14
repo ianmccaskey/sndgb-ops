@@ -18,6 +18,14 @@ function deleteLocalOrderItem() {
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
           AND oi.item_source = 'local'
+          -- same pack-flow gate as the add path, in reverse: once the order
+          -- packed/shipped, removing an item would drop billed/due while the
+          -- box may already contain it — reopen the shipment first
+          AND COALESCE((
+            SELECT sh.status::text FROM shipments sh
+            WHERE sh.order_id = oi.order_id
+            ORDER BY sh.created_at DESC LIMIT 1
+          ), 'pending') = 'pending'
         RETURNING oi.id, oi.group_buy_product_id, oi.qty, oi.unit_price_usd
       ), wo_clear AS (
         DELETE FROM order_writeoffs w
