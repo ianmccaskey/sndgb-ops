@@ -590,9 +590,15 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           const afterIds = new Set((after.items || []).map(x => String(x.product_id || '')));
           const itemsOk = toAdd.every(i => afterIds.has(String(i.product_external_id)));
           const noteOk = String(after.notes || '').includes(upLine);
-          landed = itemsOk && noteOk;
-          outcome = landed ? 'it LANDED upstream (items + note) despite the error'
-            : itemsOk ? 'PARTIAL: the items are upstream but the note is missing — verify the totals and add the note upstream manually'
+          // the totals ARE the money invariant: items landing without the
+          // raised subtotal/total would adopt on the next pull against a
+          // stale total and underbill — never call that landed
+          const totalsOk = Math.round(Number(after.subtotal || 0) * 100) === Math.round(newSubtotal * 100)
+            && Math.round(Number(after.total || 0) * 100) === Math.round(newTotal * 100);
+          landed = itemsOk && noteOk && totalsOk;
+          outcome = landed ? 'it LANDED upstream (items + totals + note) despite the error'
+            : itemsOk && !totalsOk ? `PARTIAL: the items are upstream but subtotal/total do NOT match the intended ${fmtUSD(newSubtotal)}/${fmtUSD(newTotal)} — fix the totals upstream manually BEFORE the next pull, or it will import an underbilled total`
+            : itemsOk ? 'PARTIAL: items and totals are upstream but the note is missing — add the note upstream manually'
             : 'upstream is unchanged — retry the push';
         } catch { /* keep UNKNOWN */ }
         const failLine = `${ts} items push error (${pushErr instanceof Error ? pushErr.message : 'unknown error'}) — ${outcome}.`;
