@@ -51,18 +51,20 @@ function listFulfillmentQueue() {
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND o.status NOT IN ('cancelled','refunded')
         AND ({{params.stage}} = 'all'
-          -- ready requires matched AND no unresolved payments: an order can
-          -- read matched (e.g. via write-off/comp) while a new hash pends —
-          -- money evidence must be resolved before shipping. Fully-direct
-          -- orders leave the pack list — they are the 'direct' stage.
-          OR ({{params.stage}} = 'ready' AND COALESCE(s.status::text,'pending') = 'pending' AND NOT o.hold_shipping AND r.recon_status = 'matched' AND r.pending_payment_count = 0
+          -- ready requires fully collected (matched — or OVER: an overpaid
+          -- order is fully collected and shippable) AND no unresolved
+          -- payments: an order can read matched (e.g. via write-off/comp)
+          -- while a new hash pends — money evidence must be resolved before
+          -- shipping. Fully-direct orders leave the pack list — they are the
+          -- 'direct' stage.
+          OR ({{params.stage}} = 'ready' AND COALESCE(s.status::text,'pending') = 'pending' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over') AND r.pending_payment_count = 0
               AND NOT COALESCE(it.all_direct, false))
           -- same money gates as ready, but for VENDOR-shipped lines: any order
           -- (fully direct or mixed) with a direct line the vendor hasn't
           -- shipped yet. Deliberately NOT gated on the local shipment row —
           -- a mixed order's local half packing/shipping must not hide its
           -- outstanding vendor half. Rows leave via "Mark vendor shipped".
-          OR ({{params.stage}} = 'direct' AND NOT o.hold_shipping AND r.recon_status = 'matched' AND r.pending_payment_count = 0
+          OR ({{params.stage}} = 'direct' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over') AND r.pending_payment_count = 0
               AND COALESCE(it.direct_outstanding, false))
           OR ({{params.stage}} = 'held' AND o.hold_shipping)
           OR ({{params.stage}} = 'packed' AND s.status = 'packed')
