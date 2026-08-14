@@ -22,7 +22,13 @@ function setOrderItemDirectShip() {
       ), upd AS (
         UPDATE order_items oi SET
           direct_ship = {{params.direct_ship}}::boolean,
-          direct_ship_source = 'manual'
+          direct_ship_source = 'manual',
+          -- turning a line direct that wasn't must not inherit an old
+          -- fulfillment timestamp — the vendor owes this line NOW
+          direct_fulfilled_at = CASE
+            WHEN {{params.direct_ship}}::boolean AND NOT oi.direct_ship THEN NULL
+            ELSE oi.direct_fulfilled_at
+          END
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
         RETURNING oi.id, oi.direct_ship

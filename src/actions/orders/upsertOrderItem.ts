@@ -65,6 +65,23 @@ function upsertOrderItem() {
                  AND order_items.direct_ship_source = 'upstream'
               THEN NULLIF({{params.direct_ship}}::text, '')::boolean
             ELSE order_items.direct_ship
+          END,
+          -- a recorded vendor fulfillment goes STALE when the obligation
+          -- changes: if the line ends up direct after this import and its
+          -- qty changed (vendor owes a different amount) or it re-became
+          -- direct (vendor owes again), clear the completion so the order
+          -- re-enters the Direct ship queue instead of hiding real work
+          direct_fulfilled_at = CASE
+            WHEN (CASE
+                    WHEN NULLIF({{params.direct_ship}}::text, '')::boolean IS NOT NULL
+                         AND order_items.direct_ship_source = 'upstream'
+                      THEN NULLIF({{params.direct_ship}}::text, '')::boolean
+                    ELSE order_items.direct_ship
+                  END)
+                 AND (order_items.qty IS DISTINCT FROM EXCLUDED.qty
+                      OR NOT order_items.direct_ship)
+              THEN NULL
+            ELSE order_items.direct_fulfilled_at
           END
         RETURNING id, comp_qty, unit_price_usd
       ), wo_clear AS (
