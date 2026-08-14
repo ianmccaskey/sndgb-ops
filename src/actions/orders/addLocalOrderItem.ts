@@ -28,10 +28,15 @@ function addLocalOrderItem() {
         SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
       ), ins AS (
         INSERT INTO order_items (order_id, group_buy_product_id, qty, unit_price_usd, item_source)
-        SELECT {{params.order_id}}::bigint, gbp.id, {{params.qty}}::numeric, gbp.gb_price_usd, 'local'
+        SELECT o.id, gbp.id, {{params.qty}}::numeric, gbp.gb_price_usd, 'local'
         FROM products p
         JOIN group_buy_products gbp ON gbp.product_id = p.id
           AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
+        -- the ORDER must live in the same campaign as the product — a stale
+        -- or mismatched call must never attach campaign B's product (and
+        -- price) to campaign A's order
+        JOIN orders o ON o.id = {{params.order_id}}::bigint
+          AND o.group_buy_id = gbp.group_buy_id
         WHERE p.sku_code = {{params.sku}}
           AND ({{params.qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.qty}})::numeric > 0
