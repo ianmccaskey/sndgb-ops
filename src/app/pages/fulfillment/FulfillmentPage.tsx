@@ -60,7 +60,7 @@ export function FulfillmentPage() {
     if (fulfilled && !window.confirm(`Mark the vendor-shipped items of ${r.order_number} as sent?\n\n${r.direct_items_summary}`)) return;
     setSaving(true); setError('');
     try {
-      await doMarkDirect({ order_id: r.id, fulfilled, actor: userName });
+      await doMarkDirect({ order_id: r.id, item_id: '', fulfilled, actor: userName });
       reload();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to update direct-ship state');

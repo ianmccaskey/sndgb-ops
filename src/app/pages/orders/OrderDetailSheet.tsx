@@ -15,6 +15,7 @@ import recordChainVerification from '@/actions/payments/recordChainVerification'
 import { lookupTxPayment } from '@/lib/verifyPayment';
 import setOrderItemComp from '@/actions/orders/setOrderItemComp';
 import setOrderItemDirectShip from '@/actions/orders/setOrderItemDirectShip';
+import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import setOrderWriteoff from '@/actions/orders/setOrderWriteoff';
 import updateOrderRail from '@/actions/orders/updateOrderRail';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
@@ -54,7 +55,7 @@ type OrderRow = {
 type ItemRow = {
   id: number; qty: string; unit_price_usd: string; line_total_usd: string;
   comp_qty: string; comp_reason: string | null; comp_value_usd: string;
-  direct_ship: boolean; direct_ship_source: string;
+  direct_ship: boolean; direct_ship_source: string; direct_fulfilled_at: string | null;
   sku_code: string; product_name: string;
 };
 type PaymentRow = {
@@ -85,6 +86,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doRecordVerification] = useMutateAction(recordChainVerification);
   const [doSetComp] = useMutateAction(setOrderItemComp);
   const [doSetDirectShip] = useMutateAction(setOrderItemDirectShip);
+  const [doMarkDirectFulfilled] = useMutateAction(markOrderDirectFulfilled);
   const [doSetWriteoff] = useMutateAction(setOrderWriteoff);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
 
@@ -463,6 +465,25 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     }
   };
 
+  // Per-LINE vendor-shipped state: two direct SKUs (possibly from different
+  // vendors) complete separately — the fulfillment tab's bulk button covers
+  // the everything-shipped case.
+  const markLineDirectFulfilled = async (it: ItemRow, fulfilled: boolean) => {
+    if (!o) return;
+    setSaving(true); setCompMsg('');
+    try {
+      const res = await doMarkDirectFulfilled({
+        order_id: o.id, item_id: String(it.id), fulfilled, actor: userName,
+      }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Nothing to change on that line.');
+      reloadItems();
+    } catch (e: unknown) {
+      setCompMsg(e instanceof Error ? e.message : 'Failed to update vendor-shipped state');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const recordCashPayment = async () => {
     if (!o) return;
     const amt = Number(cashAmt);
@@ -700,10 +721,10 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         )}
                         {it.direct_ship && (
                           <span
-                            className="rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
-                            title={it.direct_ship_source === 'manual' ? 'Set manually here' : 'From the ordering app'}
+                            className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${it.direct_fulfilled_at ? 'bg-green-100 text-green-900' : 'bg-violet-100 text-violet-900'}`}
+                            title={`${it.direct_ship_source === 'manual' ? 'Set manually here' : 'From the ordering app'}${it.direct_fulfilled_at ? ` · vendor shipped ${fmtDateTime(it.direct_fulfilled_at)}` : ' · vendor has not shipped yet'}`}
                           >
-                            direct ship
+                            {it.direct_fulfilled_at ? 'direct ✓' : 'direct ship'}
                           </span>
                         )}
                       </span>
@@ -724,6 +745,15 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         >
                           {it.direct_ship ? 'From us' : 'Direct ship'}
                         </Button>
+                        {it.direct_ship && (
+                          <Button
+                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
+                            disabled={saving} onClick={() => markLineDirectFulfilled(it, !it.direct_fulfilled_at)}
+                            title="Track whether the vendor has shipped this line"
+                          >
+                            {it.direct_fulfilled_at ? 'Undo vendor shipped' : 'Vendor shipped'}
+                          </Button>
+                        )}
                       </span>
                     </div>
                     {compingId === it.id && (
