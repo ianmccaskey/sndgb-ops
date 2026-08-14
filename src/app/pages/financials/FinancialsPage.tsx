@@ -78,7 +78,7 @@ export function FinancialsPage() {
     try {
       const targets = wallets.filter(w => w.active && (w.chain === 'eth' || w.chain === 'sol') && w.address);
       if (targets.length === 0) throw new Error('No active ETH/SOL wallets with addresses (Settings).');
-      const owed = rows<OwedRow>(await fetchOwed({ group_buy_id: groupBuyId }));
+      const owed = rows<OwedRow>(await fetchOwed({}));
       const balances: CovBalance[] = [];
       // sequential on purpose — the same providers rate-limit bursts
       for (const w of targets) {
@@ -254,7 +254,7 @@ export function FinancialsPage() {
             <Button size="sm" onClick={runCoverage} disabled={covRunning}>
               <RefreshCw className={`w-3.5 h-3.5 mr-1 ${covRunning ? 'animate-spin' : ''}`} /> Compare now
             </Button>
-            <span className="text-xs text-muted-foreground">Live ETH + SOL wallet stablecoins vs what non-COA products still owe vendors.</span>
+            <span className="text-xs text-muted-foreground">Live ETH + SOL wallet stablecoins vs what non-COA products still owe vendors (all campaigns).</span>
           </div>
           {covError && <p className="text-sm text-red-600">{covError}</p>}
           {covBalances && (
@@ -292,7 +292,8 @@ export function FinancialsPage() {
           )}
           <p className="text-xs text-muted-foreground">
             Counts USDC/USDT/PYUSD in active ETH and SOL wallets (native ETH/SOL excluded — no live USD pricing).
-            Owed = non-COA product cost + those products' freight, minus vendor payments (COA-attributed payments excluded), clamped per vendor.
+            Owed = non-COA product cost + those products' freight, minus vendor payments (COA-attributed payments excluded),
+            clamped per vendor and summed across ALL campaigns — the wallets are one pool, so they're compared to everything the pool must cover.
           </p>
         </CardContent>
       </Card>
