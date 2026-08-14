@@ -47,8 +47,10 @@ export type ParsedOrder = {
   tip: number;
   adminFee: number;
   shippingFee: number;
-  /** ordering-app shipping_insurance_fee; the paste layout has no column for it */
-  shippingInsurance: number;
+  /** ordering-app shipping_insurance_fee. null = the source doesn't know
+   * (paste layout has no insurance column) — the DB keeps its current value
+   * so a paste re-import can never erase pulled insurance. */
+  shippingInsurance: number | null;
   total: number;
   placedAt: string | null; // ISO
   items: ParsedItem[];
@@ -237,7 +239,7 @@ export function parseOrderPaste(text: string): ParseResult {
       tip: parseMoney(row['tip']),
       adminFee: parseMoney(row['admin fee']),
       shippingFee: parseMoney(row['shipping fee']),
-      shippingInsurance: 0,
+      shippingInsurance: null,
       total: parseMoney(row['total']),
       placedAt: isNaN(placedMs) ? null : new Date(placedMs).toISOString(),
       items,

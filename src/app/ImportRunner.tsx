@@ -143,7 +143,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // Cash-rail totals include the payment-processor gross-up; make the fee
     // explicit. Insurance is part of the known fees — without it the
     // derivation would mislabel insurance dollars as processor gross-up.
-    const base = o.subtotal + o.tip + o.adminFee + o.shippingFee + o.shippingInsurance;
+    const base = o.subtotal + o.tip + o.adminFee + o.shippingFee + (o.shippingInsurance ?? 0);
     const processorFee = o.paymentRail === 'cash' && o.total > base ? +(o.total - base).toFixed(2) : 0;
 
     // Items are written one row per product: UI Bakery's action layer rejects
@@ -188,7 +188,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       tip_usd: o.tip,
       admin_fee_usd: o.adminFee,
       shipping_fee_usd: o.shippingFee,
-      shipping_insurance_usd: o.shippingInsurance,
+      shipping_insurance_usd: o.shippingInsurance === null ? '' : String(o.shippingInsurance),
       processor_fee_usd: processorFee,
       total_usd: o.total,
       placed_at: o.placedAt || '',

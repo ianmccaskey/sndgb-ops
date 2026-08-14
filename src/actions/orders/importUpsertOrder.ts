@@ -70,7 +70,7 @@ function importUpsertOrder() {
         {{params.tip_usd}}::numeric,
         {{params.admin_fee_usd}}::numeric,
         {{params.shipping_fee_usd}}::numeric,
-        {{params.shipping_insurance_usd}}::numeric,
+        COALESCE(NULLIF({{params.shipping_insurance_usd}}::text, '')::numeric, 0),
         {{params.processor_fee_usd}}::numeric,
         {{params.total_usd}}::numeric,
         NULLIF({{params.placed_at}}::text, '')::timestamptz,
@@ -98,7 +98,10 @@ function importUpsertOrder() {
         tip_usd = EXCLUDED.tip_usd,
         admin_fee_usd = EXCLUDED.admin_fee_usd,
         shipping_fee_usd = EXCLUDED.shipping_fee_usd,
-        shipping_insurance_usd = EXCLUDED.shipping_insurance_usd,
+        -- blank = the source doesn't know insurance (paste layout has no
+        -- column): keep the stored value so a paste re-import can never
+        -- erase what a pull recorded
+        shipping_insurance_usd = COALESCE(NULLIF({{params.shipping_insurance_usd}}::text, '')::numeric, orders.shipping_insurance_usd),
         processor_fee_usd = EXCLUDED.processor_fee_usd,
         total_usd = EXCLUDED.total_usd,
         placed_at = EXCLUDED.placed_at,

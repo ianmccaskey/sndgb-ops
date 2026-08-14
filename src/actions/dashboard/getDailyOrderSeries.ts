@@ -11,14 +11,18 @@ function getDailyOrderSeries() {
     datasourceName: 'SND GB DB',
     query: `
       WITH daily AS (
-        SELECT placed_at::date AS day,
+        -- billed comes from the recon view (total + local items + fee-edit
+        -- deltas) so the chart agrees with every other billed figure;
+        -- adjustments attribute to the order's placement day
+        SELECT o.placed_at::date AS day,
                COUNT(*) AS orders,
-               ROUND(SUM(total_usd), 2) AS billed_usd
-        FROM orders
-        WHERE group_buy_id = {{params.group_buy_id}}::bigint
-          AND status NOT IN ('cancelled','refunded')
-          AND placed_at IS NOT NULL
-        GROUP BY placed_at::date
+               ROUND(SUM(r.billed_usd), 2) AS billed_usd
+        FROM orders o
+        JOIN v_order_reconciliation r ON r.order_id = o.id
+        WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
+          AND o.status NOT IN ('cancelled','refunded')
+          AND o.placed_at IS NOT NULL
+        GROUP BY o.placed_at::date
       ), span AS (
         SELECT MIN(day) AS lo, MAX(day) AS hi FROM daily
       )
