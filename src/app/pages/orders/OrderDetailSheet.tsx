@@ -17,6 +17,7 @@ import setOrderItemComp from '@/actions/orders/setOrderItemComp';
 import setOrderItemDirectShip from '@/actions/orders/setOrderItemDirectShip';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
+import setOrderFees from '@/actions/orders/setOrderFees';
 import deleteLocalOrderItem from '@/actions/orders/deleteLocalOrderItem';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import setOrderWriteoff from '@/actions/orders/setOrderWriteoff';
@@ -46,7 +47,9 @@ type OrderRow = {
   address_line1: string | null; address_line2: string | null; city: string | null;
   state_code: string | null; postal_code: string | null;
   subtotal_usd: string; tip_usd: string; admin_fee_usd: string; shipping_fee_usd: string;
-  processor_fee_usd: string; total_usd: string; placed_at: string | null;
+  shipping_insurance_usd: string; processor_fee_usd: string; total_usd: string; placed_at: string | null;
+  admin_fee_override_usd: string | null; shipping_fee_override_usd: string | null;
+  shipping_insurance_override_usd: string | null; tip_override_usd: string | null;
   customer_note: string | null; admin_note: string | null; hold_shipping: boolean;
   customer_name: string; customer_email: string | null;
   recon_status: string | null; received_usd: string | null; override_usd: string | null;
@@ -79,6 +82,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const items = rows<ItemRow>(rawItems);
   const campaignProducts = rows<{ sku_code: string; gb_price_usd: string; status: string }>(rawCampaignProducts)
     .filter(p => p.status === 'active');
+  const feeDeltaUsd = o
+    ? (Number(o.admin_fee_override_usd ?? o.admin_fee_usd) - Number(o.admin_fee_usd))
+      + (Number(o.shipping_fee_override_usd ?? o.shipping_fee_usd) - Number(o.shipping_fee_usd))
+      + (Number(o.shipping_insurance_override_usd ?? o.shipping_insurance_usd) - Number(o.shipping_insurance_usd))
+      + (Number(o.tip_override_usd ?? o.tip_usd) - Number(o.tip_usd))
+    : 0;
   const localItemsUsd = items.filter(i => i.item_source === 'local')
     .reduce((s, i) => s + Number(i.line_total_usd), 0);
   const payments = rows<PaymentRow>(rawPayments);
@@ -97,6 +106,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doSetDirectShip] = useMutateAction(setOrderItemDirectShip);
   const [doMarkDirectFulfilled] = useMutateAction(markOrderDirectFulfilled);
   const [doAddLocalItem] = useMutateAction(addLocalOrderItem);
+  const [doSetFees] = useMutateAction(setOrderFees);
   const [doDeleteLocalItem] = useMutateAction(deleteLocalOrderItem);
   const [doSetWriteoff] = useMutateAction(setOrderWriteoff);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
@@ -129,6 +139,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [addSku, setAddSku] = useState('');
   const [addQty, setAddQty] = useState('');
   const [addMsg, setAddMsg] = useState('');
+  const [editingFees, setEditingFees] = useState(false);
+  const [feeAdmin, setFeeAdmin] = useState('');
+  const [feeShipping, setFeeShipping] = useState('');
+  const [feeInsurance, setFeeInsurance] = useState('');
+  const [feeTip, setFeeTip] = useState('');
+  const [feeMsg, setFeeMsg] = useState('');
   const [compQty, setCompQty] = useState('');
   const [compReason, setCompReason] = useState('');
   const [compMsg, setCompMsg] = useState('');
@@ -513,6 +529,38 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       reloadItems(); reloadOrder();
     } catch (e: unknown) {
       setAddMsg(e instanceof Error ? e.message : 'Failed to remove item');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Fee overrides: blank = follow the ordering app; a value wins over every
+  // future pull. Recon bills the delta, so edits move what the customer owes.
+  const eff = (override: string | null, base: string) => override != null ? Number(override) : Number(base);
+  const openFeeEditor = () => {
+    if (!o) return;
+    setFeeAdmin(o.admin_fee_override_usd ?? '');
+    setFeeShipping(o.shipping_fee_override_usd ?? '');
+    setFeeInsurance(o.shipping_insurance_override_usd ?? '');
+    setFeeTip(o.tip_override_usd ?? '');
+    setFeeMsg(''); setEditingFees(true);
+  };
+  const saveFees = async () => {
+    if (!o) return;
+    for (const [label, v] of [['Admin fee', feeAdmin], ['Shipping fee', feeShipping], ['Insurance', feeInsurance], ['Tip', feeTip]] as const) {
+      if (v.trim() !== '' && !/^\d+(?:\.\d{1,2})?$/.test(v.trim())) { setFeeMsg(`${label} must be a dollar amount with at most 2 decimals (blank = ordering app's value).`); return; }
+    }
+    setSaving(true); setFeeMsg('');
+    try {
+      const res = await doSetFees({
+        order_id: o.id, admin_fee: feeAdmin.trim(), shipping_fee: feeShipping.trim(),
+        insurance: feeInsurance.trim(), tip: feeTip.trim(), actor: userName,
+      }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setFeeMsg('Refused — check the values (cancelled orders cannot be edited).');
+      else setEditingFees(false);
+      reloadOrder();
+    } catch (e: unknown) {
+      setFeeMsg(e instanceof Error ? e.message : 'Failed to save fees');
     } finally {
       setSaving(false);
     }
@@ -977,17 +1025,41 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 <Separator className="my-2" />
                 <div className="space-y-0.5 text-muted-foreground">
                   <div className="flex justify-between"><span>Subtotal</span><span>{fmtUSD(o.subtotal_usd)}</span></div>
-                  {Number(o.tip_usd) > 0 && <div className="flex justify-between"><span>Tip</span><span>{fmtUSD(o.tip_usd)}</span></div>}
-                  <div className="flex justify-between"><span>Admin fee</span><span>{fmtUSD(o.admin_fee_usd)}</span></div>
-                  <div className="flex justify-between"><span>Shipping fee</span><span>{fmtUSD(o.shipping_fee_usd)}</span></div>
+                  {(eff(o.tip_override_usd, o.tip_usd) > 0 || o.tip_override_usd != null) && (
+                    <div className="flex justify-between"><span>Tip{o.tip_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.tip_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.tip_override_usd, o.tip_usd))}</span></div>
+                  )}
+                  <div className="flex justify-between"><span>Admin fee{o.admin_fee_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.admin_fee_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.admin_fee_override_usd, o.admin_fee_usd))}</span></div>
+                  <div className="flex justify-between"><span>Shipping fee{o.shipping_fee_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.shipping_fee_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.shipping_fee_override_usd, o.shipping_fee_usd))}</span></div>
+                  {(eff(o.shipping_insurance_override_usd, o.shipping_insurance_usd) > 0 || o.shipping_insurance_override_usd != null) && (
+                    <div className="flex justify-between"><span>Shipping insurance{o.shipping_insurance_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.shipping_insurance_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.shipping_insurance_override_usd, o.shipping_insurance_usd))}</span></div>
+                  )}
                   {Number(o.processor_fee_usd) > 0 && <div className="flex justify-between"><span>Processor fee</span><span>{fmtUSD(o.processor_fee_usd)}</span></div>}
                   <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{fmtUSD(o.total_usd)}</span></div>
-                  {localItemsUsd > 0 && (
+                  {(localItemsUsd > 0 || feeDeltaUsd !== 0) && (
                     <>
-                      <div className="flex justify-between text-amber-700"><span>Added in this app</span><span>+{fmtUSD(localItemsUsd)}</span></div>
-                      <div className="flex justify-between font-semibold text-foreground"><span>Expected with additions</span><span>{fmtUSD(Number(o.total_usd) + localItemsUsd)}</span></div>
+                      {localItemsUsd > 0 && <div className="flex justify-between text-amber-700"><span>Added in this app</span><span>+{fmtUSD(localItemsUsd)}</span></div>}
+                      {feeDeltaUsd !== 0 && <div className="flex justify-between text-amber-700"><span>Fee edits</span><span>{feeDeltaUsd > 0 ? '+' : '−'}{fmtUSD(Math.abs(feeDeltaUsd))}</span></div>}
+                      <div className="flex justify-between font-semibold text-foreground"><span>Expected total</span><span>{fmtUSD(Number(o.total_usd) + localItemsUsd + feeDeltaUsd)}</span></div>
                     </>
                   )}
+                  <div className="pt-1">
+                    {!editingFees ? (
+                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={openFeeEditor}>Edit fees</Button>
+                    ) : (
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap gap-1.5">
+                          <Input placeholder={`Admin (${Number(o.admin_fee_usd)})`} value={feeAdmin} onChange={e => setFeeAdmin(e.target.value)} className="h-7 w-24 text-xs" />
+                          <Input placeholder={`Shipping (${Number(o.shipping_fee_usd)})`} value={feeShipping} onChange={e => setFeeShipping(e.target.value)} className="h-7 w-24 text-xs" />
+                          <Input placeholder={`Insurance (${Number(o.shipping_insurance_usd)})`} value={feeInsurance} onChange={e => setFeeInsurance(e.target.value)} className="h-7 w-24 text-xs" />
+                          <Input placeholder={`Tip (${Number(o.tip_usd)})`} value={feeTip} onChange={e => setFeeTip(e.target.value)} className="h-7 w-24 text-xs" />
+                          <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={saveFees}>Save</Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingFees(false)}>Cancel</Button>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">Blank = follow the ordering app. A value wins over every pull; billing shifts by the difference.</p>
+                        {feeMsg && <p className="text-xs text-red-600">{feeMsg}</p>}
+                      </div>
+                    )}
+                  </div>
                   {Number(o.comp_usd) > 0 && (
                     <div className="flex justify-between text-green-700"><span>Comped items</span><span>−{fmtUSD(o.comp_usd)}</span></div>
                   )}

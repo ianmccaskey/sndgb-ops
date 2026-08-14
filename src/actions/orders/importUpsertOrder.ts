@@ -47,7 +47,7 @@ function importUpsertOrder() {
         external_id, order_number, group_buy_id, customer_id, status, payment_rail,
         contact_name, contact_email, contact_phone, discord_username,
         address_line1, address_line2, city, state_code, postal_code,
-        subtotal_usd, tip_usd, admin_fee_usd, shipping_fee_usd, processor_fee_usd, total_usd,
+        subtotal_usd, tip_usd, admin_fee_usd, shipping_fee_usd, shipping_insurance_usd, processor_fee_usd, total_usd,
         placed_at, customer_note, raw_import
       )
       SELECT
@@ -70,6 +70,7 @@ function importUpsertOrder() {
         {{params.tip_usd}}::numeric,
         {{params.admin_fee_usd}}::numeric,
         {{params.shipping_fee_usd}}::numeric,
+        {{params.shipping_insurance_usd}}::numeric,
         {{params.processor_fee_usd}}::numeric,
         {{params.total_usd}}::numeric,
         NULLIF({{params.placed_at}}::text, '')::timestamptz,
@@ -97,6 +98,7 @@ function importUpsertOrder() {
         tip_usd = EXCLUDED.tip_usd,
         admin_fee_usd = EXCLUDED.admin_fee_usd,
         shipping_fee_usd = EXCLUDED.shipping_fee_usd,
+        shipping_insurance_usd = EXCLUDED.shipping_insurance_usd,
         processor_fee_usd = EXCLUDED.processor_fee_usd,
         total_usd = EXCLUDED.total_usd,
         placed_at = EXCLUDED.placed_at,

@@ -47,6 +47,8 @@ export type ParsedOrder = {
   tip: number;
   adminFee: number;
   shippingFee: number;
+  /** ordering-app shipping_insurance_fee; the paste layout has no column for it */
+  shippingInsurance: number;
   total: number;
   placedAt: string | null; // ISO
   items: ParsedItem[];
@@ -235,6 +237,7 @@ export function parseOrderPaste(text: string): ParseResult {
       tip: parseMoney(row['tip']),
       adminFee: parseMoney(row['admin fee']),
       shippingFee: parseMoney(row['shipping fee']),
+      shippingInsurance: 0,
       total: parseMoney(row['total']),
       placedAt: isNaN(placedMs) ? null : new Date(placedMs).toISOString(),
       items,

@@ -167,7 +167,7 @@ export function RailBars({ rails }: { rails: RailRow[] }) {
 
 export type PnlData = {
   product_revenue_usd: string; admin_fee_revenue_usd: string; shipping_fee_revenue_usd: string;
-  tip_revenue_usd: string; total_revenue_usd: string; expenses_usd: string; label_costs_usd: string;
+  insurance_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string; expenses_usd: string; label_costs_usd: string;
   comps_usd: string; writeoffs_usd: string; adj_both_usd: string; net_profit_usd: string;
   splits: { party: string; pct: string }[] | null;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
@@ -179,6 +179,7 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
     { name: 'Product', value: Number(pnl.product_revenue_usd), color: C_BILLED },
     { name: 'Admin fees', value: Number(pnl.admin_fee_revenue_usd), color: C_RECEIVED },
     { name: 'Shipping fees', value: Number(pnl.shipping_fee_revenue_usd), color: 'var(--chart-4)' },
+    { name: 'Insurance', value: Number(pnl.insurance_revenue_usd), color: 'var(--chart-5)' },
     { name: 'Tips', value: Number(pnl.tip_revenue_usd), color: 'var(--chart-1)' },
   ].filter(p => p.value > 0);
   const total = Number(pnl.total_revenue_usd);

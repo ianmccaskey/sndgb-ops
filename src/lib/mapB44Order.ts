@@ -122,6 +122,7 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
     tip: Number(o.tip ?? 0),
     adminFee: Number(o.admin_fee ?? 0),
     shippingFee: Number(o.shipping_fee ?? 0),
+    shippingInsurance: Number(o.shipping_insurance_fee ?? 0),
     total: Number(o.total ?? 0),
     placedAt: isNaN(placedMs) ? null : new Date(placedMs).toISOString(),
     items,

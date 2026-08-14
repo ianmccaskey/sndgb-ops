@@ -21,7 +21,7 @@ import { BarChart3, RefreshCw } from 'lucide-react';
 
 type Pnl = {
   product_revenue_usd: string; order_count: string; admin_fee_revenue_usd: string;
-  shipping_fee_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string;
+  shipping_fee_revenue_usd: string; insurance_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string;
   product_profit_usd: string; expenses_usd: string; label_costs_usd: string; net_profit_usd: string;
   comps_usd: string; writeoffs_usd: string; adj_both_usd: string;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
@@ -171,6 +171,9 @@ export function FinancialsPage() {
             <div className="flex justify-between"><span className="text-muted-foreground">Product revenue (expected)</span><span>{fmtUSD(pnl?.product_revenue_usd)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Admin fees ({pnl?.order_count || 0} orders)</span><span>{fmtUSD(pnl?.admin_fee_revenue_usd)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Shipping fees</span><span>{fmtUSD(pnl?.shipping_fee_revenue_usd)}</span></div>
+            {Number(pnl?.insurance_revenue_usd) > 0 && (
+              <div className="flex justify-between"><span className="text-muted-foreground">Shipping insurance</span><span>{fmtUSD(pnl?.insurance_revenue_usd)}</span></div>
+            )}
             <div className="flex justify-between"><span className="text-muted-foreground">Tips</span><span>{fmtUSD(pnl?.tip_revenue_usd)}</span></div>
             {Number(pnl?.comps_usd) > 0 && (
               <div className="flex justify-between"><span className="text-muted-foreground">Comped product (free to customers)</span><span className="text-red-600">−{fmtUSD(pnl?.comps_usd)}</span></div>
