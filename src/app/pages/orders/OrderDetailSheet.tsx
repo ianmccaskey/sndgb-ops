@@ -618,6 +618,19 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
             setAddMsg('Upstream total left as-is — do NOT pull until it is fixed, or the fee edits will retire against the wrong total.');
             return;
           }
+          // same discipline as the main push: the confirm is an unbounded
+          // wait — re-read and abort on any drift in what this PUT reads or
+          // overwrites before touching upstream
+          const freshR = await getB44Order(cfg, o.external_id);
+          const repairDrifted = JSON.stringify(freshR.items || []) !== JSON.stringify(b44.items || [])
+            || Number(freshR.subtotal || 0) !== Number(b44.subtotal || 0)
+            || Number(freshR.total || 0) !== Number(b44.total || 0)
+            || String(freshR.notes || '') !== String(b44.notes || '')
+            || FEE_PUSH_MAP.some(f => Number(freshR[f.field] ?? 0) !== Number(b44[f.field] ?? 0));
+          if (repairDrifted) {
+            setAddMsg('The ordering app order changed while you were confirming — nothing was repaired. Re-check the order and retry.');
+            return;
+          }
           const expectedSubtotal = Math.round((Number(o.subtotal_usd) + pushedItemsValue) * 100) / 100;
           const repairLine = `${ts} repairing the ordering app's total: ${fmtUSD(Number(b44.total || 0))} → ${fmtUSD(expectedTotal)} (items/fees already matched).`;
           const repairRes = await doAppendNote({
@@ -626,11 +639,26 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           }) as { admin_note: string }[] | { admin_note: string };
           setAdminNote(prev => (Array.isArray(repairRes) ? repairRes[0]?.admin_note : repairRes?.admin_note) ?? (prev ? `${prev}\n${repairLine}` : repairLine));
           const upRepairLine = `${ts} total corrected to $${expectedTotal.toFixed(2)} by SND GB Ops.`;
-          await updateB44Order(cfg, o.external_id, {
-            subtotal: expectedSubtotal,
-            total: expectedTotal,
-            notes: b44.notes ? `${b44.notes}\n${upRepairLine}` : upRepairLine,
-          });
+          try {
+            await updateB44Order(cfg, o.external_id, {
+              subtotal: expectedSubtotal,
+              total: expectedTotal,
+              notes: b44.notes ? `${b44.notes}\n${upRepairLine}` : upRepairLine,
+            });
+          } catch (repErr: unknown) {
+            let landed = false;
+            try {
+              const after = await getB44Order(cfg, o.external_id);
+              landed = Math.round(Number(after.total || 0) * 100) === Math.round(expectedTotal * 100)
+                && String(after.notes || '').includes(upRepairLine);
+            } catch { /* keep false */ }
+            const failLine = `${ts} total repair error (${repErr instanceof Error ? repErr.message : 'unknown error'}) — ${landed ? 'it LANDED despite the error' : 'upstream unverified; check before pulling'}.`;
+            try {
+              const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ total_repair_error: true, landed }) }) as { admin_note: string }[] | { admin_note: string };
+              setAdminNote(prev => (Array.isArray(failRes) ? failRes[0]?.admin_note : failRes?.admin_note) ?? (prev ? `${prev}\n${failLine}` : failLine));
+            } catch { /* surfaced below */ }
+            if (!landed) { setAddMsg('Total repair failed — check the ordering app and do NOT pull until its total is fixed.'); return; }
+          }
           setAddMsg('Upstream total repaired. Run a pull — badges and edit markers clear automatically.');
           return;
         }
