@@ -86,7 +86,7 @@ function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>
       errors.push({ line: index + 1, text: orderNumber, reason: `Quantity ${it.quantity} for '${it.product_name || pid}' has more than 2 decimal places — cannot store exactly` });
       return null;
     }
-    items.push({ sku, qty });
+    items.push({ sku, qty, directShip: it.wants_direct_ship === true });
   }
 
   const { payments } = parseHashBlob(o.transaction_hashtags);

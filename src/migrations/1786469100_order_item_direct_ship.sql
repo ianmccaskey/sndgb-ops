@@ -1,0 +1,12 @@
+-- Per-item direct-ship-from-vendor flag, pulled from the ordering app's
+-- wants_direct_ship item field (and editable locally). direct_ship_source
+-- records who set it: 'upstream' rows are refreshed by every pull, 'manual'
+-- rows are operator overrides that imports must never clobber.
+--
+-- No backfill: the campaign is live and every pull re-upserts all items,
+-- so the first pull after deploy populates the flags from upstream.
+
+ALTER TABLE order_items ADD COLUMN direct_ship BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE order_items ADD COLUMN direct_ship_source TEXT NOT NULL DEFAULT 'upstream'
+  CHECK (direct_ship_source IN ('upstream', 'manual'));

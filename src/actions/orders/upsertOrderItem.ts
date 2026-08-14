@@ -40,8 +40,9 @@ function upsertOrderItem() {
           AND (SELECT COUNT(*) FROM lck) >= 0
         FOR UPDATE OF oi
       ), ins AS (
-        INSERT INTO order_items (order_id, group_buy_product_id, qty, unit_price_usd)
-        SELECT {{params.order_id}}::bigint, gbp.id, {{params.qty}}::numeric, gbp.gb_price_usd
+        INSERT INTO order_items (order_id, group_buy_product_id, qty, unit_price_usd, direct_ship)
+        SELECT {{params.order_id}}::bigint, gbp.id, {{params.qty}}::numeric, gbp.gb_price_usd,
+               COALESCE(NULLIF({{params.direct_ship}}::text, '')::boolean, false)
         FROM products p
         JOIN group_buy_products gbp ON gbp.product_id = p.id
           AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
@@ -52,7 +53,19 @@ function upsertOrderItem() {
         ON CONFLICT (order_id, group_buy_product_id) DO UPDATE SET
           qty = EXCLUDED.qty,
           unit_price_usd = EXCLUDED.unit_price_usd,
-          comp_qty = LEAST(order_items.comp_qty, EXCLUDED.qty)
+          comp_qty = LEAST(order_items.comp_qty, EXCLUDED.qty),
+          -- direct-ship refreshes from the source only when the source
+          -- actually knows (non-blank param — the paste path sends '') and
+          -- the row hasn't been manually overridden by an operator. The
+          -- NULLIF-before-cast is load-bearing: a raw ''::boolean cast can
+          -- fail at plan time regardless of CASE branching (same trap as
+          -- addVendorPayment's kits/freight params).
+          direct_ship = CASE
+            WHEN NULLIF({{params.direct_ship}}::text, '')::boolean IS NOT NULL
+                 AND order_items.direct_ship_source = 'upstream'
+              THEN NULLIF({{params.direct_ship}}::text, '')::boolean
+            ELSE order_items.direct_ship
+          END
         RETURNING id, comp_qty, unit_price_usd
       ), wo_clear AS (
         -- comp-value inputs changed (clamped comp or repriced line) — due

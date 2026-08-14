@@ -14,6 +14,7 @@ import undoPaymentRejection from '@/actions/payments/undoPaymentRejection';
 import recordChainVerification from '@/actions/payments/recordChainVerification';
 import { lookupTxPayment } from '@/lib/verifyPayment';
 import setOrderItemComp from '@/actions/orders/setOrderItemComp';
+import setOrderItemDirectShip from '@/actions/orders/setOrderItemDirectShip';
 import setOrderWriteoff from '@/actions/orders/setOrderWriteoff';
 import updateOrderRail from '@/actions/orders/updateOrderRail';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
@@ -53,6 +54,7 @@ type OrderRow = {
 type ItemRow = {
   id: number; qty: string; unit_price_usd: string; line_total_usd: string;
   comp_qty: string; comp_reason: string | null; comp_value_usd: string;
+  direct_ship: boolean; direct_ship_source: string;
   sku_code: string; product_name: string;
 };
 type PaymentRow = {
@@ -82,6 +84,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doUndoRejection] = useMutateAction(undoPaymentRejection);
   const [doRecordVerification] = useMutateAction(recordChainVerification);
   const [doSetComp] = useMutateAction(setOrderItemComp);
+  const [doSetDirectShip] = useMutateAction(setOrderItemDirectShip);
   const [doSetWriteoff] = useMutateAction(setOrderWriteoff);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
 
@@ -442,6 +445,24 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     }
   };
 
+  // Direct-ship toggle: fulfillment routing only, no money — the manual
+  // source sticks so imports never overwrite an operator's decision.
+  const toggleDirectShip = async (it: ItemRow) => {
+    if (!o) return;
+    setSaving(true); setCompMsg('');
+    try {
+      const res = await doSetDirectShip({
+        item_id: it.id, order_id: o.id, direct_ship: !it.direct_ship, actor: userName,
+      }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Direct-ship change refused.');
+      reloadItems();
+    } catch (e: unknown) {
+      setCompMsg(e instanceof Error ? e.message : 'Failed to change direct-ship');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const recordCashPayment = async () => {
     if (!o) return;
     const amt = Number(cashAmt);
@@ -677,6 +698,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             comp {Number(it.comp_qty)} · −{fmtUSD(it.comp_value_usd)}
                           </span>
                         )}
+                        {it.direct_ship && (
+                          <span
+                            className="rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                            title={it.direct_ship_source === 'manual' ? 'Set manually here' : 'From the ordering app'}
+                          >
+                            direct ship
+                          </span>
+                        )}
                       </span>
                       <span className="flex items-center gap-2 shrink-0">
                         <span>{fmtUSD(it.line_total_usd)}</span>
@@ -688,6 +717,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             {Number(it.comp_qty) > 0 ? 'Edit comp' : 'Comp'}
                           </Button>
                         )}
+                        <Button
+                          size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
+                          disabled={saving} onClick={() => toggleDirectShip(it)}
+                          title="Who ships this line to the customer"
+                        >
+                          {it.direct_ship ? 'From us' : 'Direct ship'}
+                        </Button>
                       </span>
                     </div>
                     {compingId === it.id && (

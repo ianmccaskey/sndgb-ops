@@ -178,9 +178,18 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // Summed in integer hundredths: quantities are 2-decimal values and the
     // write boundary rejects finer precision, so float addition (0.1 + 0.2 =
     // 0.30000000000000004) must never reach the qty param.
-    const qtyBySku = new Map<string, number>();
-    for (const it of o.items) qtyBySku.set(it.sku, (qtyBySku.get(it.sku) || 0) + Math.round(it.qty * 100));
-    const mergedItems = [...qtyBySku.entries()].map(([sku, cents]) => ({ sku, qty: cents / 100 }));
+    const qtyBySku = new Map<string, { cents: number; directShip: boolean | undefined }>();
+    for (const it of o.items) {
+      const cur = qtyBySku.get(it.sku);
+      qtyBySku.set(it.sku, {
+        cents: (cur?.cents || 0) + Math.round(it.qty * 100),
+        // merged duplicate-SKU lines reduce with OR: if ANY source line is
+        // direct-shipped the merged row is; undefined only when no line knows
+        directShip: cur?.directShip === undefined && it.directShip === undefined
+          ? undefined : (cur?.directShip || it.directShip || false),
+      });
+    }
+    const mergedItems = [...qtyBySku.entries()].map(([sku, v]) => ({ sku, qty: v.cents / 100, directShip: v.directShip }));
 
     // Upsert every row FIRST and prove the whole replacement set is writable;
     // only then prune items removed upstream. A mid-loop failure leaves stale
@@ -188,7 +197,11 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // destructively pruned partial state.
     let itemsWritten = 0;
     for (const it of mergedItems) {
-      const res = await withRetry(() => doUpsertItem({ order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty, actor: userName })) as unknown[] | null;
+      const res = await withRetry(() => doUpsertItem({
+        order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty,
+        direct_ship: it.directShip === undefined ? '' : String(it.directShip),
+        actor: userName,
+      })) as unknown[] | null;
       if (Array.isArray(res) ? res.length > 0 : !!res) itemsWritten++;
     }
     if (itemsWritten !== mergedItems.length) {

@@ -14,7 +14,13 @@
 
 import { parseMoney } from '@/lib/fmt';
 
-export type ParsedItem = { sku: string; qty: number };
+export type ParsedItem = {
+  sku: string;
+  qty: number;
+  /** vendor ships this line to the customer directly. undefined = the source
+   * doesn't know (paste imports) — the DB keeps whatever it already has. */
+  directShip?: boolean;
+};
 
 export type ParsedPayment = {
   /** 'eth' | 'sol' | 'base' rail hashes, or a receipt reference for P2P rails */

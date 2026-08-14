@@ -345,7 +345,7 @@ export function ImportPage() {
                         <TableCell>{o.customerName}</TableCell>
                         <TableCell>{o.paymentRail}</TableCell>
                         <TableCell className="text-xs max-w-[220px] truncate">
-                          {o.items.map(i => `${i.sku} (${i.qty})`).join('; ')}
+                          {o.items.map(i => `${i.sku} (${i.qty})${i.directShip ? ' · direct' : ''}`).join('; ')}
                         </TableCell>
                         <TableCell className="text-right">{fmtUSD(o.total)}</TableCell>
                         <TableCell className="text-center">{o.payments.length}</TableCell>

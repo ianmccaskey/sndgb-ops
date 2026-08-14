@@ -20,6 +20,7 @@ type QueueRow = {
   state_code: string | null; postal_code: string | null;
   hold_shipping: boolean; customer_note: string | null; admin_note: string | null;
   recon_status: string | null; items_summary: string; item_count: string;
+  direct_items_summary: string; all_direct: boolean;
   shipment_id: number | null; shipment_status: string | null; carrier: string | null;
   tracking_number: string | null; label_cost_usd: string | null; box: string | null;
 };
@@ -84,6 +85,7 @@ export function FulfillmentPage() {
       <Tabs value={stage} onValueChange={setStage}>
         <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="ready">Ready to pack</TabsTrigger>
+          <TabsTrigger value="direct">Direct ship</TabsTrigger>
           <TabsTrigger value="packed">Packed</TabsTrigger>
           <TabsTrigger value="shipped">Shipped</TabsTrigger>
           <TabsTrigger value="held">On hold</TabsTrigger>
@@ -120,7 +122,19 @@ export function FulfillmentPage() {
                   {r.address_line1}{r.address_line2 ? `, ${r.address_line2}` : ''}<br />
                   {r.city}, {r.state_code} {r.postal_code}
                 </TableCell>
-                <TableCell className="text-xs max-w-[220px] truncate" title={r.items_summary}>{r.items_summary}</TableCell>
+                <TableCell className="text-xs max-w-[220px]">
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="truncate" title={r.items_summary}>{r.all_direct ? r.direct_items_summary : r.items_summary}</span>
+                    {!r.all_direct && r.direct_items_summary && (
+                      <span
+                        className="rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                        title={`Vendor ships directly: ${r.direct_items_summary}`}
+                      >
+                        + direct
+                      </span>
+                    )}
+                  </span>
+                </TableCell>
                 <TableCell><StatusPill value={r.recon_status || 'awaiting'} /></TableCell>
                 <TableCell><StatusPill value={r.shipment_status || 'pending'} /></TableCell>
                 <TableCell className="text-xs font-mono">{r.tracking_number || '—'}</TableCell>
