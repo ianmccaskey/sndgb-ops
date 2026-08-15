@@ -29,8 +29,19 @@ function setOrderItemDirectShip() {
             WHEN {{params.direct_ship}}::boolean AND NOT oi.direct_ship THEN NULL
             ELSE oi.direct_fulfilled_at
           END
+        FROM orders o
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
+          AND o.id = oi.order_id
+          -- routing changes obey the same invariants as every item mutation:
+          -- active order, line not removed, order still in the pack flow
+          AND o.status NOT IN ('cancelled', 'refunded')
+          AND oi.removed_at IS NULL
+          AND COALESCE((
+            SELECT sh.status::text FROM shipments sh
+            WHERE sh.order_id = oi.order_id
+            ORDER BY sh.created_at DESC LIMIT 1
+          ), 'pending') = 'pending'
         RETURNING oi.id, oi.direct_ship
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

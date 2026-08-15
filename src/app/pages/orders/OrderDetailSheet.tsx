@@ -1188,14 +1188,16 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             {Number(it.comp_qty) > 0 ? 'Edit comp' : 'Comp'}
                           </Button>
                         )}
-                        <Button
-                          size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
-                          disabled={saving} onClick={() => toggleDirectShip(it)}
-                          title="Who ships this line to the customer"
-                        >
-                          {it.direct_ship ? 'From us' : 'Direct ship'}
-                        </Button>
-                        {it.direct_ship && (
+                        {!it.removed_at && (
+                          <Button
+                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
+                            disabled={saving} onClick={() => toggleDirectShip(it)}
+                            title="Who ships this line to the customer"
+                          >
+                            {it.direct_ship ? 'From us' : 'Direct ship'}
+                          </Button>
+                        )}
+                        {it.direct_ship && !it.removed_at && (
                           <Button
                             size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
                             disabled={saving} onClick={() => markLineDirectFulfilled(it, !it.direct_fulfilled_at)}
