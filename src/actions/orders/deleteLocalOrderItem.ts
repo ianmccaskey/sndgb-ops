@@ -22,6 +22,13 @@ function deleteLocalOrderItem() {
           -- on a hidden (cancelled/refunded) order must not change silently
           AND o.status NOT IN ('cancelled', 'refunded')
           AND oi.item_source = 'local'
+          -- never delete the LAST active line (another line may be locally
+          -- removed and not count): a zero-item order is a cancellation,
+          -- same invariant as removeOrderItem
+          AND EXISTS (
+            SELECT 1 FROM order_items oj
+            WHERE oj.order_id = oi.order_id AND oj.id <> oi.id AND oj.removed_at IS NULL
+          )
           -- same pack-flow gate as the add path, in reverse: once the order
           -- packed/shipped, removing an item would drop billed/due while the
           -- box may already contain it — reopen the shipment first

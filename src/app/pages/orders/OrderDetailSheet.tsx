@@ -538,7 +538,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     setSaving(true); setAddMsg('');
     try {
       const res = await doDeleteLocalItem({ order_id: o.id, item_id: it.id, actor: userName }) as unknown[] | null;
-      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setAddMsg('Refused — only items added in this app can be removed, and only while the order has not packed/shipped (reopen its shipment to pending first).');
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setAddMsg('Refused — only items added in this app can be removed, only while the order has not packed/shipped, and never the last active line (cancel the order instead).');
       reloadItems(); reloadOrder();
     } catch (e: unknown) {
       setAddMsg(e instanceof Error ? e.message : 'Failed to remove item');
