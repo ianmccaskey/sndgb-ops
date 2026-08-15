@@ -723,6 +723,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           }) as { admin_note: string }[] | { admin_note: string };
           setAdminNote(prev => (Array.isArray(repairRes) ? repairRes[0]?.admin_note : repairRes?.admin_note) ?? (prev ? `${prev}\n${repairLine}` : repairLine));
           const upRepairLine = `${ts} total corrected to $${expectedTotal.toFixed(2)} by SND GB Ops.`;
+          let repErrMsg: string | null = null;
           try {
             await updateB44Order(cfg, o.external_id, {
               subtotal: expectedSubtotal,
@@ -730,20 +731,26 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
               notes: b44.notes ? `${b44.notes}\n${upRepairLine}` : upRepairLine,
             });
           } catch (repErr: unknown) {
-            let landed = false;
+            repErrMsg = repErr instanceof Error ? repErr.message : 'unknown error';
+          }
+          // verify on EVERY outcome, not just thrown errors
+          let repLanded = false;
+          try {
+            const after = await getB44Order(cfg, o.external_id);
+            repLanded = Math.round(Number(after.total || 0) * 100) === Math.round(expectedTotal * 100)
+              && Math.round(Number(after.subtotal || 0) * 100) === Math.round(expectedSubtotal * 100)
+              && String(after.notes || '').includes(upRepairLine);
+          } catch { /* keep false */ }
+          if (!repLanded) {
+            const failLine = `${ts} total repair ${repErrMsg ? `error (${repErrMsg})` : 'did not verify after an apparently-successful write'} — check the ordering app and do NOT pull until its total is fixed.`;
             try {
-              const after = await getB44Order(cfg, o.external_id);
-              landed = Math.round(Number(after.total || 0) * 100) === Math.round(expectedTotal * 100)
-                && String(after.notes || '').includes(upRepairLine);
-            } catch { /* keep false */ }
-            const failLine = `${ts} total repair error (${repErr instanceof Error ? repErr.message : 'unknown error'}) — ${landed ? 'it LANDED despite the error' : 'upstream unverified; check before pulling'}.`;
-            try {
-              const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ total_repair_error: true, landed }) }) as { admin_note: string }[] | { admin_note: string };
+              const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ total_repair_error: true, landed: false, push_error: repErrMsg }) }) as { admin_note: string }[] | { admin_note: string };
               setAdminNote(prev => (Array.isArray(failRes) ? failRes[0]?.admin_note : failRes?.admin_note) ?? (prev ? `${prev}\n${failLine}` : failLine));
             } catch { /* surfaced below */ }
-            if (!landed) { setAddMsg('Total repair failed — check the ordering app and do NOT pull until its total is fixed.'); return; }
+            setAddMsg('Total repair failed or did not verify — check the ordering app and do NOT pull until its total is fixed.');
+            return;
           }
-          setAddMsg('Upstream total repaired. Run a pull — badges and edit markers clear automatically.');
+          setAddMsg('Upstream total repaired and verified. Run a pull — badges and edit markers clear automatically.');
           return;
         }
         setAddMsg('The ordering app already matches — run a pull and the badges/edit markers will clear automatically.');
@@ -828,6 +835,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       const newSubtotal = Math.round((Number(b44.subtotal || 0) + productDelta) * 100) / 100;
       const newTotal = Math.round((Number(b44.total || 0) + totalDelta) * 100) / 100;
       const feeFields = Object.fromEntries(feeChanges.map(f => [f.field, f.value]));
+      let pushErrMsg: string | null = null;
       try {
         await updateB44Order(cfg, o.external_id, {
           items: newItems,
@@ -837,37 +845,45 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           notes: b44.notes ? `${b44.notes}\n${upLine}` : upLine,
         });
       } catch (pushErr: unknown) {
-        // verify the FULL intended postcondition before claiming anything
-        let landed = false;
-        let outcome = 'outcome UNKNOWN — check the ordering app before retrying';
-        try {
-          const after = await getB44Order(cfg, o.external_id);
-          const afterIds = new Set((after.items || []).map(x => String(x.product_id || '')));
-          const afterQty = new Map((after.items || []).map(x => [String(x.product_id || ''), Number(x.quantity ?? 0)]));
-          const itemsOk = toAdd.every(i => afterIds.has(String(i.product_external_id)))
-            && qtyEdits.every(i => Math.round((afterQty.get(String(i.product_external_id)) || 0) * 100) === Math.round(Number(i.qty_override) * 100))
-            && removals.every(i => !afterIds.has(String(i.product_external_id)));
-          const feesOk = feeChanges.every(f => Math.round(Number(after[f.field] ?? 0) * 100) === Math.round(f.value! * 100));
-          const noteOk = String(after.notes || '').includes(upLine);
-          // the totals ARE the money invariant: changes landing without the
-          // adjusted subtotal/total would converge on the next pull against
-          // a stale total and misbill — never call that landed
-          const totalsOk = Math.round(Number(after.subtotal || 0) * 100) === Math.round(newSubtotal * 100)
-            && Math.round(Number(after.total || 0) * 100) === Math.round(newTotal * 100);
-          landed = itemsOk && feesOk && noteOk && totalsOk;
-          outcome = landed ? 'it LANDED upstream (items + fees + totals + note) despite the error'
-            : (itemsOk && feesOk && !totalsOk) ? `PARTIAL: items/fees are upstream but subtotal/total do NOT match the intended ${fmtUSD(newSubtotal)}/${fmtUSD(newTotal)} — fix the totals upstream manually BEFORE the next pull, or it will import a wrong total`
-            : (itemsOk && feesOk) ? 'PARTIAL: items, fees, and totals are upstream but the note is missing — add the note upstream manually'
-            : 'upstream is unchanged or partially changed — check the ordering app, then retry the push';
-        } catch { /* keep UNKNOWN */ }
-        const failLine = `${ts} changes push error (${pushErr instanceof Error ? pushErr.message : 'unknown error'}) — ${outcome}.`;
-        try {
-          const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ changes_push_error: true, landed }) }) as { admin_note: string }[] | { admin_note: string };
-          setAdminNote(prev => (Array.isArray(failRes) ? failRes[0]?.admin_note : failRes?.admin_note) ?? (prev ? `${prev}\n${failLine}` : failLine));
-        } catch { /* surfaced below */ }
-        if (!landed) { setAddMsg(`Ordering app push failed (${outcome}).`); return; }
+        pushErrMsg = pushErr instanceof Error ? pushErr.message : 'unknown error';
       }
-      setAddMsg('Pushed to the ordering app. Run a pull — added items adopt, qty and fee edits retire, and removed lines clear automatically.');
+      // verify the FULL intended postcondition on EVERY outcome — a 2xx that
+      // partially applied or normalized fields away must never read as
+      // success and send the operator to a pull that retires markers wrongly
+      let landed = false;
+      let outcome = 'outcome UNKNOWN — check the ordering app before retrying';
+      try {
+        const after = await getB44Order(cfg, o.external_id);
+        const afterIds = new Set((after.items || []).map(x => String(x.product_id || '')));
+        const afterQty = new Map((after.items || []).map(x => [String(x.product_id || ''), Number(x.quantity ?? 0)]));
+        const itemsOk = toAdd.every(i => afterIds.has(String(i.product_external_id)))
+          && qtyEdits.every(i => Math.round((afterQty.get(String(i.product_external_id)) || 0) * 100) === Math.round(Number(i.qty_override) * 100))
+          && removals.every(i => !afterIds.has(String(i.product_external_id)));
+        const feesOk = feeChanges.every(f => Math.round(Number(after[f.field] ?? 0) * 100) === Math.round(f.value! * 100));
+        const noteOk = String(after.notes || '').includes(upLine);
+        // the totals ARE the money invariant: changes landing without the
+        // adjusted subtotal/total would converge on the next pull against
+        // a stale total and misbill — never call that landed
+        const totalsOk = Math.round(Number(after.subtotal || 0) * 100) === Math.round(newSubtotal * 100)
+          && Math.round(Number(after.total || 0) * 100) === Math.round(newTotal * 100);
+        landed = itemsOk && feesOk && noteOk && totalsOk;
+        outcome = landed ? 'verified upstream (items + fees + totals + note)'
+          : (itemsOk && feesOk && !totalsOk) ? `PARTIAL: items/fees are upstream but subtotal/total do NOT match the intended ${fmtUSD(newSubtotal)}/${fmtUSD(newTotal)} — fix the totals upstream manually BEFORE the next pull, or it will import a wrong total`
+          : (itemsOk && feesOk) ? 'PARTIAL: items, fees, and totals are upstream but the note is missing — add the note upstream manually'
+          : 'upstream is unchanged or partially changed — check the ordering app, then retry the push';
+      } catch { /* keep UNKNOWN */ }
+      if (!landed) {
+        const failLine = `${ts} changes push ${pushErrMsg ? `error (${pushErrMsg})` : 'verification failed after an apparently-successful write'} — ${outcome}.`;
+        let noted = false;
+        try {
+          const failRes = await doAppendNote({ order_id: o.id, note: failLine, actor: userName, detail: JSON.stringify({ changes_push_error: true, landed, push_error: pushErrMsg }) }) as { admin_note: string }[] | { admin_note: string };
+          setAdminNote(prev => (Array.isArray(failRes) ? failRes[0]?.admin_note : failRes?.admin_note) ?? (prev ? `${prev}\n${failLine}` : failLine));
+          noted = true;
+        } catch { /* surfaced below */ }
+        setAddMsg(`Ordering app push ${pushErrMsg ? 'failed' : 'did not verify'} (${outcome}).${noted ? '' : ' The audit note ALSO failed to write — record this manually.'}`);
+        return;
+      }
+      setAddMsg('Pushed and verified. Run a pull — added items adopt, qty and fee edits retire, and removed lines clear automatically.');
     } catch (e: unknown) {
       setAddMsg(e instanceof Error ? e.message : 'Failed to push changes');
     } finally {

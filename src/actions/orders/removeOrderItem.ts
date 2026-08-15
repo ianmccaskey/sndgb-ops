@@ -20,13 +20,19 @@ function removeOrderItem() {
       WITH lck AS (
         SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
       ), prev AS (
-        SELECT oi.id, oi.removed_at
+        SELECT oi.id, oi.removed_at, oi.comp_qty
         FROM lck, order_items oi
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
+        FOR UPDATE OF oi
       ), upd AS (
         UPDATE order_items oi SET
-          removed_at = CASE WHEN {{params.removed}}::boolean THEN now() ELSE NULL END
+          removed_at = CASE WHEN {{params.removed}}::boolean THEN now() ELSE NULL END,
+          -- removing a comped line CLEARS the comp persistently: restoring
+          -- the line later must not silently resurrect forgiven revenue —
+          -- a comp is always a fresh audited decision
+          comp_qty = CASE WHEN {{params.removed}}::boolean THEN 0 ELSE oi.comp_qty END,
+          comp_reason = CASE WHEN {{params.removed}}::boolean THEN NULL ELSE oi.comp_reason END
         FROM lck, orders o
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
@@ -40,7 +46,16 @@ function removeOrderItem() {
             WHERE sh.order_id = oi.order_id
             ORDER BY sh.created_at DESC LIMIT 1
           ), 'pending') = 'pending'
-        RETURNING oi.id, oi.qty, oi.qty_override, oi.removed_at
+        RETURNING oi.id, oi.qty, oi.qty_override, oi.removed_at, oi.comp_qty
+      ), comp_clear_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', upd.id::text, 'comp_cleared_on_removal', {{params.actor}},
+               jsonb_build_object('order_id', {{params.order_id}}::bigint,
+                                  'old_comp_qty', prev.comp_qty)
+        FROM upd
+        JOIN prev ON prev.id = upd.id
+        WHERE {{params.removed}}::boolean AND prev.comp_qty > 0
+        RETURNING row_pk
       ), wo_clear AS (
         DELETE FROM order_writeoffs w
         USING upd
