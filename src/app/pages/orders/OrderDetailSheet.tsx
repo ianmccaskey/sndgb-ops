@@ -665,12 +665,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         // Items and fees match upstream — but a PARTIAL earlier push (or a
         // hand-edit of the fee fields upstream) can leave the TOTAL stale,
         // and a pull would then retire the overrides against a wrong total.
-        // Cross-check against the locally-expected figure and offer a
-        // totals-only repair before pointing at the pull.
-        const pushedItemsValue = Math.round(locals
-          .filter(i => !i.removed_at && upstreamIds.has(String(i.product_external_id)))
-          .reduce((s, i) => s + effQty(i) * Number(i.unit_price_usd), 0) * 100) / 100;
-        const expectedTotal = Math.round((Number(o.total_usd) + pushedItemsValue + feeDeltaUsd + itemDeltaUsd) * 100) / 100;
+        // The expected figure is rebuilt from the upstream snapshot ITSELF
+        // (items × upstream prices + upstream fees + the locally-known cash
+        // processor gross-up), so it is internally consistent with the
+        // upstream arrays by construction — local prices can never skew it.
+        const expectedSubtotal = Math.round((b44.items || [])
+          .reduce((s, x) => s + Number(x.quantity ?? 0) * Number(x.price ?? 0), 0) * 100) / 100;
+        const upstreamFees = FEE_PUSH_MAP.reduce((s, f) => s + Number(b44[f.field] ?? 0), 0);
+        const expectedTotal = Math.round((expectedSubtotal + upstreamFees + Number(o.processor_fee_usd || 0)) * 100) / 100;
         if (Math.round(Number(b44.total || 0) * 100) !== Math.round(expectedTotal * 100)) {
           if (!window.confirm(`The ordering app's items and fees match, but its TOTAL is ${fmtUSD(Number(b44.total || 0))} where ${fmtUSD(expectedTotal)} is expected (a partial earlier push, or an upstream edit).\n\nRepair the upstream total to ${fmtUSD(expectedTotal)}?`)) {
             setAddMsg('Upstream total left as-is — do NOT pull until it is fixed, or the fee edits will retire against the wrong total.');
@@ -689,7 +691,6 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
             setAddMsg('The ordering app order changed while you were confirming — nothing was repaired. Re-check the order and retry.');
             return;
           }
-          const expectedSubtotal = Math.round((Number(o.subtotal_usd) + pushedItemsValue) * 100) / 100;
           const repairLine = `${ts} repairing the ordering app's total: ${fmtUSD(Number(b44.total || 0))} → ${fmtUSD(expectedTotal)} (items/fees already matched).`;
           const repairRes = await doAppendNote({
             order_id: o.id, note: repairLine, actor: userName,

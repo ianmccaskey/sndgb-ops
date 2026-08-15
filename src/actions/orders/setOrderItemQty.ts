@@ -23,13 +23,19 @@ function setOrderItemQty() {
       WITH lck AS (
         SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
       ), prev AS (
-        SELECT oi.id, COALESCE(oi.qty_override, oi.qty) AS eff_qty
+        SELECT oi.id, COALESCE(oi.qty_override, oi.qty) AS eff_qty, oi.comp_qty
         FROM lck, order_items oi
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
+        FOR UPDATE OF oi
       ), upd AS (
         UPDATE order_items oi SET
-          qty_override = NULLIF({{params.qty}}::text, '')::numeric
+          qty_override = NULLIF({{params.qty}}::text, '')::numeric,
+          -- same persistent-clamp invariant as imports: a comp must never
+          -- exceed the effective quantity, and a later qty increase must
+          -- never silently re-expand a clamped comp — growing a comp is a
+          -- fresh audited decision
+          comp_qty = LEAST(oi.comp_qty, COALESCE(NULLIF({{params.qty}}::text, '')::numeric, oi.qty))
         FROM lck, orders o
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
@@ -42,13 +48,24 @@ function setOrderItemQty() {
             WHERE sh.order_id = oi.order_id
             ORDER BY sh.created_at DESC LIMIT 1
           ), 'pending') = 'pending'
-        RETURNING oi.id, oi.qty, oi.qty_override, COALESCE(oi.qty_override, oi.qty) AS eff_qty
+        RETURNING oi.id, oi.qty, oi.qty_override, COALESCE(oi.qty_override, oi.qty) AS eff_qty, oi.comp_qty
+      ), comp_clamp_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', upd.id::text, 'comp_clamped_on_qty_edit', {{params.actor}},
+               jsonb_build_object('order_id', {{params.order_id}}::bigint,
+                                  'old_comp_qty', prev.comp_qty, 'new_comp_qty', upd.comp_qty,
+                                  'new_effective_qty', upd.eff_qty)
+        FROM upd
+        JOIN prev ON prev.id = upd.id
+        WHERE upd.comp_qty < prev.comp_qty
+        RETURNING row_pk
       ), wo_clear AS (
         DELETE FROM order_writeoffs w
         USING upd, prev
         WHERE w.order_id = {{params.order_id}}::bigint
           AND prev.id = upd.id
-          AND prev.eff_qty IS DISTINCT FROM upd.eff_qty
+          AND (prev.eff_qty IS DISTINCT FROM upd.eff_qty
+               OR prev.comp_qty IS DISTINCT FROM upd.comp_qty)
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
