@@ -23,15 +23,26 @@ function markOrderDirectFulfilled() {
   return action('markOrderDirectFulfilled', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH inp AS (
+      WITH lck AS (
+        -- same write boundary as every item mutation: serializes with
+        -- imports/edits/shipment transitions on this order
+        SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
+      ), inp AS (
         SELECT NULLIF({{params.item_id}}::text, '')::bigint AS item_id,
                string_to_array(NULLIF({{params.expected_ids}}::text, ''), ',')::bigint[] AS exp_ids,
                {{params.fulfilled}}::boolean AS fulfilled
+        FROM lck
       ), upd AS (
         UPDATE order_items oi SET
           direct_fulfilled_at = CASE WHEN inp.fulfilled THEN now() ELSE NULL END
-        FROM inp
+        FROM inp, orders o
         WHERE oi.order_id = {{params.order_id}}::bigint
+          AND o.id = oi.order_id
+          -- active orders only. DELIBERATE EXCEPTION to the pack-flow gate:
+          -- vendor completion is independent of the local box by design — a
+          -- mixed order's local half packs/ships while the vendor half is
+          -- still owed, so this action must stay usable after local shipping
+          AND o.status NOT IN ('cancelled', 'refunded')
           AND oi.direct_ship
           AND oi.removed_at IS NULL
           AND ((inp.fulfilled AND oi.direct_fulfilled_at IS NULL)
