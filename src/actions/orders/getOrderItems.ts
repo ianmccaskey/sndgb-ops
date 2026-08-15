@@ -6,7 +6,7 @@ function getOrderItems() {
     query: `
       SELECT oi.id, oi.qty, oi.unit_price_usd, (oi.qty * oi.unit_price_usd) AS line_total_usd,
              oi.comp_qty, oi.comp_reason,
-             (LEAST(oi.comp_qty, oi.qty) * oi.unit_price_usd) AS comp_value_usd,
+             (LEAST(oi.comp_qty, CASE WHEN oi.removed_at IS NULL THEN COALESCE(oi.qty_override, oi.qty) ELSE 0 END) * oi.unit_price_usd) AS comp_value_usd,
              oi.direct_ship, oi.direct_ship_source, oi.direct_fulfilled_at, oi.item_source,
              oi.qty_override, oi.removed_at,
              p.sku_code, p.name AS product_name, p.mass_label, p.external_id AS product_external_id

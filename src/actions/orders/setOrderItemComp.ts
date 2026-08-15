@@ -33,7 +33,10 @@ function setOrderItemComp() {
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
           AND ({{params.comp_qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
-          AND ({{params.comp_qty}})::numeric <= oi.qty
+          -- cap at the EFFECTIVE quantity (edited/removed lines), so a
+          -- stored comp can never exceed what the customer actually gets —
+          -- a removed line only accepts 0 (clearing)
+          AND ({{params.comp_qty}})::numeric <= (CASE WHEN oi.removed_at IS NULL THEN COALESCE(oi.qty_override, oi.qty) ELSE 0 END)
           AND (({{params.comp_qty}})::numeric = 0 OR LENGTH(TRIM({{params.reason}})) > 0)
         RETURNING oi.id, oi.comp_qty, oi.qty
       ), audit AS (

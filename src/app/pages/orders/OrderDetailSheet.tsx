@@ -116,6 +116,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doSetFees] = useMutateAction(setOrderFees);
   const [doSetItemQty] = useMutateAction(setOrderItemQty);
   const [doRemoveItem] = useMutateAction(removeOrderItem);
+  const [fetchFreshOrder] = useMutateAction(getOrder);
+  const [fetchFreshItems] = useMutateAction(getOrderItems);
   const [doDeleteLocalItem] = useMutateAction(deleteLocalOrderItem);
   const [doSetWriteoff] = useMutateAction(setOrderWriteoff);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
@@ -470,7 +472,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     if (!o) return;
     const clearing = Number(qtyStr) === 0;
     if (!/^\d+(?:\.\d{1,2})?$/.test(qtyStr.trim())) { setCompMsg('Comp qty must be a number with at most 2 decimals.'); return; }
-    if (Number(qtyStr) > Number(it.qty)) { setCompMsg(`Can't comp more than the ${it.qty} ordered.`); return; }
+    if (Number(qtyStr) > effQty(it)) { setCompMsg(`Can't comp more than the ${effQty(it)} the customer is getting.`); return; }
     if (!clearing && !reason.trim()) { setCompMsg('A reason is required — comps are audited money.'); return; }
     setSaving(true); setCompMsg('');
     try {
@@ -625,6 +627,24 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     { field: 'shipping_insurance_fee', label: 'insurance', override: 'shipping_insurance_override_usd' },
     { field: 'tip', label: 'tip', override: 'tip_override_usd' },
   ] as const;
+  // the push builds from this sheet's React state, which can be stale when
+  // the OTHER admin edits the same order: after every confirm, the local DB
+  // state is re-read and compared on exactly the fields the push consumes —
+  // any mismatch aborts, mirroring the upstream drift check on the local side
+  const localItemsProj = (list: ItemRow[]) => JSON.stringify(list
+    .map(i => [i.id, i.item_source, Number(i.qty), i.qty_override, i.removed_at ? 1 : 0, i.product_external_id, Number(i.unit_price_usd), i.direct_ship ? 1 : 0])
+    .sort((a, b) => Number(a[0]) - Number(b[0])));
+  const localOrderProj = (x: OrderRow) => JSON.stringify([
+    x.admin_fee_override_usd, x.shipping_fee_override_usd, x.shipping_insurance_override_usd,
+    x.tip_override_usd, x.total_usd, x.subtotal_usd, x.processor_fee_usd, x.external_id,
+  ]);
+  const localStateFresh = async () => {
+    if (!o) return false;
+    const freshItems = rows<ItemRow>(await fetchFreshItems({ order_id: o.id }) as unknown[]);
+    const freshOrder = firstRow<OrderRow>(await fetchFreshOrder({ order_id: o.id }) as unknown[]);
+    return !!freshOrder && localItemsProj(freshItems) === localItemsProj(items) && localOrderProj(freshOrder) === localOrderProj(o);
+  };
+
   const pushChanges = async () => {
     if (!o || !o.external_id) return;
     const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
@@ -679,8 +699,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
             return;
           }
           // same discipline as the main push: the confirm is an unbounded
-          // wait — re-read and abort on any drift in what this PUT reads or
-          // overwrites before touching upstream
+          // wait — re-read BOTH sides and abort on any drift in what this
+          // PUT reads or overwrites before touching upstream
+          if (!(await localStateFresh())) {
+            setAddMsg('This order changed in this app while you were confirming — nothing was repaired. Review the refreshed order and retry.');
+            reloadItems(); reloadOrder();
+            return;
+          }
           const freshR = await getB44Order(cfg, o.external_id);
           const repairDrifted = JSON.stringify(freshR.items || []) !== JSON.stringify(b44.items || [])
             || Number(freshR.subtotal || 0) !== Number(b44.subtotal || 0)
@@ -754,9 +779,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
 
       // The confirm dialog is an unbounded wait between read and write — a
       // PUT built on a stale snapshot would silently erase any upstream
-      // change made meanwhile. Re-read AFTER the confirm and abort on any
-      // drift in the fields this push overwrites; the PUT then follows the
-      // verified read within milliseconds instead of minutes.
+      // change made meanwhile. Re-read BOTH sides after the confirm: the
+      // local DB (the other admin may have changed the very edits this push
+      // carries) and the upstream order; abort on any drift.
+      if (!(await localStateFresh())) {
+        setAddMsg('This order changed in this app while you were confirming — nothing was pushed. Review the refreshed order and retry.');
+        reloadItems(); reloadOrder();
+        return;
+      }
       const fresh = await getB44Order(cfg, o.external_id);
       const drifted = JSON.stringify(fresh.items || []) !== JSON.stringify(b44.items || [])
         || Number(fresh.subtotal || 0) !== Number(b44.subtotal || 0)
@@ -1129,7 +1159,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       </span>
                       <span className="flex items-center gap-2 shrink-0">
                         <span className={it.removed_at ? 'line-through text-muted-foreground' : ''}>{fmtUSD(effQty(it) * Number(it.unit_price_usd))}</span>
-                        {compingId !== it.id && (
+                        {compingId !== it.id && !it.removed_at && (
                           <Button
                             size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
                             onClick={() => { setCompingId(it.id); setCompQty(String(Number(it.comp_qty) || '')); setCompReason(it.comp_reason || ''); setCompMsg(''); }}
@@ -1189,7 +1219,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     )}
                     {compingId === it.id && (
                       <div className="flex flex-wrap gap-2 mt-1 items-center">
-                        <Input placeholder={`Free units (max ${it.qty})`} value={compQty} onChange={e => setCompQty(e.target.value)} className="h-7 w-32 text-xs" />
+                        <Input placeholder={`Free units (max ${effQty(it)})`} value={compQty} onChange={e => setCompQty(e.target.value)} className="h-7 w-32 text-xs" />
                         <Input placeholder="Why is this free? (audited)" value={compReason} onChange={e => setCompReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
                         <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveComp(it, compQty || '0', compReason)}>Save</Button>
                         {Number(it.comp_qty) > 0 && (
