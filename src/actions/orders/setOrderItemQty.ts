@@ -23,7 +23,7 @@ function setOrderItemQty() {
       WITH lck AS (
         SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
       ), prev AS (
-        SELECT oi.id, COALESCE(oi.qty_override, oi.qty) AS eff_qty, oi.comp_qty
+        SELECT oi.id, COALESCE(oi.qty_override, oi.qty) AS eff_qty, oi.comp_qty, oi.direct_fulfilled_at
         FROM lck, order_items oi
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
@@ -35,7 +35,17 @@ function setOrderItemQty() {
           -- exceed the effective quantity, and a later qty increase must
           -- never silently re-expand a clamped comp — growing a comp is a
           -- fresh audited decision
-          comp_qty = LEAST(oi.comp_qty, COALESCE(NULLIF({{params.qty}}::text, '')::numeric, oi.qty))
+          comp_qty = LEAST(oi.comp_qty, COALESCE(NULLIF({{params.qty}}::text, '')::numeric, oi.qty)),
+          -- same staleness rule as imports: a recorded vendor fulfillment
+          -- goes stale when the obligation's quantity changes — the line
+          -- re-enters the Direct ship queue instead of hiding real work
+          direct_fulfilled_at = CASE
+            WHEN oi.direct_ship AND oi.direct_fulfilled_at IS NOT NULL
+                 AND COALESCE(NULLIF({{params.qty}}::text, '')::numeric, oi.qty)
+                     IS DISTINCT FROM COALESCE(oi.qty_override, oi.qty)
+              THEN NULL
+            ELSE oi.direct_fulfilled_at
+          END
         FROM lck, orders o
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
@@ -48,7 +58,7 @@ function setOrderItemQty() {
             WHERE sh.order_id = oi.order_id
             ORDER BY sh.created_at DESC LIMIT 1
           ), 'pending') = 'pending'
-        RETURNING oi.id, oi.qty, oi.qty_override, COALESCE(oi.qty_override, oi.qty) AS eff_qty, oi.comp_qty
+        RETURNING oi.id, oi.qty, oi.qty_override, COALESCE(oi.qty_override, oi.qty) AS eff_qty, oi.comp_qty, oi.direct_fulfilled_at
       ), comp_clamp_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'order_items', upd.id::text, 'comp_clamped_on_qty_edit', {{params.actor}},
@@ -80,7 +90,9 @@ function setOrderItemQty() {
                                   'imported_qty', upd.qty,
                                   'qty_override', upd.qty_override,
                                   'old_effective_qty', (SELECT eff_qty FROM prev),
-                                  'new_effective_qty', upd.eff_qty)
+                                  'new_effective_qty', upd.eff_qty,
+                                  'direct_fulfillment_reset',
+                                    ((SELECT direct_fulfilled_at FROM prev) IS NOT NULL AND upd.direct_fulfilled_at IS NULL))
         FROM upd
         RETURNING row_pk
       )
