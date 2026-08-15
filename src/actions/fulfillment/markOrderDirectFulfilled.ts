@@ -33,6 +33,7 @@ function markOrderDirectFulfilled() {
         FROM inp
         WHERE oi.order_id = {{params.order_id}}::bigint
           AND oi.direct_ship
+          AND oi.removed_at IS NULL
           AND ((inp.fulfilled AND oi.direct_fulfilled_at IS NULL)
                OR (NOT inp.fulfilled AND oi.direct_fulfilled_at IS NOT NULL))
           AND (
@@ -49,6 +50,7 @@ function markOrderDirectFulfilled() {
                   SELECT 1 FROM order_items oj
                   WHERE oj.order_id = {{params.order_id}}::bigint
                     AND oj.direct_ship AND oj.direct_fulfilled_at IS NULL
+                    AND oj.removed_at IS NULL
                     AND NOT (oj.id = ANY(inp.exp_ids))
                 ))
             -- bulk undo: every fulfilled line (adds work back — safe)

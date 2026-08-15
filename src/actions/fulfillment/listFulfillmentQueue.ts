@@ -23,23 +23,25 @@ function listFulfillmentQueue() {
       JOIN customers c ON c.id = o.customer_id
       LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
       LEFT JOIN (
+        -- all packing math uses the EFFECTIVE quantity, and locally-removed
+        -- lines vanish from fulfillment entirely
         SELECT oi.order_id,
-               string_agg(p.sku_code || ' (' || oi.qty || ')', '; ' ORDER BY p.sku_code)
-                 FILTER (WHERE NOT oi.direct_ship) AS items_summary,
-               COALESCE(SUM(oi.qty) FILTER (WHERE NOT oi.direct_ship), 0) AS item_count,
-               string_agg(p.sku_code || ' (' || oi.qty || ')', '; ' ORDER BY p.sku_code)
-                 FILTER (WHERE oi.direct_ship) AS direct_items_summary,
+               string_agg(p.sku_code || ' (' || COALESCE(oi.qty_override, oi.qty) || ')', '; ' ORDER BY p.sku_code)
+                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL) AS items_summary,
+               COALESCE(SUM(COALESCE(oi.qty_override, oi.qty)) FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL), 0) AS item_count,
+               string_agg(p.sku_code || ' (' || COALESCE(oi.qty_override, oi.qty) || ')', '; ' ORDER BY p.sku_code)
+                 FILTER (WHERE oi.direct_ship AND oi.removed_at IS NULL) AS direct_items_summary,
                -- what the vendor STILL owes — the direct tab's row text and
                -- the bulk button's confirm show this, so the confirmation
                -- lists exactly the lines the bulk action will stamp
-               string_agg(p.sku_code || ' (' || oi.qty || ')', '; ' ORDER BY p.sku_code)
-                 FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL) AS direct_outstanding_summary,
+               string_agg(p.sku_code || ' (' || COALESCE(oi.qty_override, oi.qty) || ')', '; ' ORDER BY p.sku_code)
+                 FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL) AS direct_outstanding_summary,
                -- the ids behind that summary — the bulk button passes them
                -- back so the stamp is anchored to exactly what was confirmed
                string_agg(oi.id::text, ',' ORDER BY oi.id)
-                 FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL) AS direct_outstanding_ids,
-               bool_and(oi.direct_ship) AS all_direct,
-               bool_or(oi.direct_ship AND oi.direct_fulfilled_at IS NULL) AS direct_outstanding
+                 FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL) AS direct_outstanding_ids,
+               bool_and(oi.direct_ship) FILTER (WHERE oi.removed_at IS NULL) AS all_direct,
+               bool_or(oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL) AS direct_outstanding
         FROM order_items oi
         JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
         JOIN products p ON p.id = gbp.product_id

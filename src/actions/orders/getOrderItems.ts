@@ -8,6 +8,7 @@ function getOrderItems() {
              oi.comp_qty, oi.comp_reason,
              (LEAST(oi.comp_qty, oi.qty) * oi.unit_price_usd) AS comp_value_usd,
              oi.direct_ship, oi.direct_ship_source, oi.direct_fulfilled_at, oi.item_source,
+             oi.qty_override, oi.removed_at,
              p.sku_code, p.name AS product_name, p.mass_label, p.external_id AS product_external_id
       FROM order_items oi
       JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id

@@ -18,6 +18,8 @@ import setOrderItemDirectShip from '@/actions/orders/setOrderItemDirectShip';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
 import setOrderFees from '@/actions/orders/setOrderFees';
+import setOrderItemQty from '@/actions/orders/setOrderItemQty';
+import removeOrderItem from '@/actions/orders/removeOrderItem';
 import deleteLocalOrderItem from '@/actions/orders/deleteLocalOrderItem';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import setOrderWriteoff from '@/actions/orders/setOrderWriteoff';
@@ -63,6 +65,7 @@ type ItemRow = {
   comp_qty: string; comp_reason: string | null; comp_value_usd: string;
   direct_ship: boolean; direct_ship_source: string; direct_fulfilled_at: string | null;
   item_source: string; product_external_id: string | null;
+  qty_override: string | null; removed_at: string | null;
   sku_code: string; product_name: string;
 };
 type PaymentRow = {
@@ -88,8 +91,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       + (Number(o.shipping_insurance_override_usd ?? o.shipping_insurance_usd) - Number(o.shipping_insurance_usd))
       + (Number(o.tip_override_usd ?? o.tip_usd) - Number(o.tip_usd))
     : 0;
-  const localItemsUsd = items.filter(i => i.item_source === 'local')
-    .reduce((s, i) => s + Number(i.line_total_usd), 0);
+  const effQty = (i: ItemRow) => i.removed_at ? 0 : Number(i.qty_override ?? i.qty);
+  const localItemsUsd = Math.round(items.filter(i => i.item_source === 'local')
+    .reduce((s, i) => s + effQty(i) * Number(i.unit_price_usd), 0) * 100) / 100;
+  // imported rows: billed delta from qty edits / removals (negative when reduced)
+  const itemDeltaUsd = Math.round(items.filter(i => i.item_source === 'import')
+    .reduce((s, i) => s + (effQty(i) - Number(i.qty)) * Number(i.unit_price_usd), 0) * 100) / 100;
   const payments = rows<PaymentRow>(rawPayments);
 
   const [doUpdate] = useMutateAction(updateOrderAdmin);
@@ -107,6 +114,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doMarkDirectFulfilled] = useMutateAction(markOrderDirectFulfilled);
   const [doAddLocalItem] = useMutateAction(addLocalOrderItem);
   const [doSetFees] = useMutateAction(setOrderFees);
+  const [doSetItemQty] = useMutateAction(setOrderItemQty);
+  const [doRemoveItem] = useMutateAction(removeOrderItem);
   const [doDeleteLocalItem] = useMutateAction(deleteLocalOrderItem);
   const [doSetWriteoff] = useMutateAction(setOrderWriteoff);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
@@ -139,6 +148,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [addSku, setAddSku] = useState('');
   const [addQty, setAddQty] = useState('');
   const [addMsg, setAddMsg] = useState('');
+  const [qtyEditId, setQtyEditId] = useState<number | null>(null);
+  const [qtyEditVal, setQtyEditVal] = useState('');
   const [editingFees, setEditingFees] = useState(false);
   const [feeAdmin, setFeeAdmin] = useState('');
   const [feeShipping, setFeeShipping] = useState('');
@@ -534,6 +545,40 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     }
   };
 
+  // Item qty edits and removals (imported rows): overrides that survive
+  // pulls; billing/demand/fulfillment follow the effective quantity. Local
+  // rows keep their hard-delete path.
+  const saveItemQty = async (it: ItemRow) => {
+    if (!o) return;
+    const v = qtyEditVal.trim();
+    if (v !== '' && (!/^\d+(?:\.\d{1,2})?$/.test(v) || !(Number(v) > 0))) { setCompMsg('Qty must be positive with at most 2 decimals (blank = ordering app\'s qty).'); return; }
+    setSaving(true); setCompMsg('');
+    try {
+      const res = await doSetItemQty({ item_id: it.id, order_id: o.id, qty: v, actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Qty edit refused — the order may have packed/shipped (reopen its shipment first), or the line is removed.');
+      else { setQtyEditId(null); setQtyEditVal(''); }
+      reloadItems(); reloadOrder();
+    } catch (e: unknown) {
+      setCompMsg(e instanceof Error ? e.message : 'Failed to edit qty');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const toggleRemoved = async (it: ItemRow) => {
+    if (!o) return;
+    if (!it.removed_at && !window.confirm(`Remove ${it.sku_code} × ${Number(it.qty)} from ${o.order_number}?\n\nBilling, demand, and fulfillment drop it immediately; push the change to the ordering app when ready.`)) return;
+    setSaving(true); setCompMsg('');
+    try {
+      const res = await doRemoveItem({ item_id: it.id, order_id: o.id, removed: !it.removed_at, actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Refused — the order may have packed/shipped (reopen its shipment first).');
+      reloadItems(); reloadOrder();
+    } catch (e: unknown) {
+      setCompMsg(e instanceof Error ? e.message : 'Failed to change the line');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Fee overrides: blank = follow the ordering app; a value wins over every
   // future pull. Recon bills the delta, so edits move what the customer owes.
   const eff = (override: string | null, base: string) => override != null ? Number(override) : Number(base);
@@ -594,13 +639,26 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       const cfg = { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' };
       const b44 = await getB44Order(cfg, o.external_id);
       const upstreamIds = new Set((b44.items || []).map(x => String(x.product_id || '')));
-      const toAdd = locals.filter(i => !upstreamIds.has(String(i.product_external_id)));
+      const upstreamQty = new Map((b44.items || []).map(x => [String(x.product_id || ''), Number(x.quantity ?? 0)]));
+      const upstreamPrice = new Map((b44.items || []).map(x => [String(x.product_id || ''), Number(x.price ?? 0)]));
+      const toAdd = locals.filter(i => !i.removed_at && !upstreamIds.has(String(i.product_external_id)));
+      // qty edits on imported rows where upstream still disagrees; deltas
+      // priced at the UPSTREAM item's own price so its totals stay internally
+      // consistent
+      const qtyEdits = items.filter(i => i.item_source === 'import' && !i.removed_at && i.qty_override != null
+        && i.product_external_id && upstreamIds.has(String(i.product_external_id))
+        && Math.round(Number(i.qty_override) * 100) !== Math.round((upstreamQty.get(String(i.product_external_id)) || 0) * 100));
+      // locally-removed rows the ordering app still carries
+      const removals = items.filter(i => i.removed_at != null
+        && i.product_external_id && upstreamIds.has(String(i.product_external_id)));
       // fee overrides that differ from what upstream currently says
       const feeChanges = FEE_PUSH_MAP
         .map(f => ({ ...f, value: o[f.override] != null ? Number(o[f.override]) : null, current: Number(b44[f.field] ?? 0) }))
         .filter(f => f.value != null && Math.round(f.value * 100) !== Math.round(f.current * 100));
-      if (toAdd.length === 0 && feeChanges.length === 0) {
-        if (locals.length === 0 && !FEE_PUSH_MAP.some(f => o[f.override] != null)) {
+      if (toAdd.length === 0 && feeChanges.length === 0 && qtyEdits.length === 0 && removals.length === 0) {
+        const hasAnyLocalState = locals.length > 0 || FEE_PUSH_MAP.some(f => o[f.override] != null)
+          || items.some(i => i.qty_override != null || i.removed_at != null);
+        if (!hasAnyLocalState) {
           setAddMsg('Nothing to push.');
           return;
         }
@@ -610,9 +668,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         // Cross-check against the locally-expected figure and offer a
         // totals-only repair before pointing at the pull.
         const pushedItemsValue = Math.round(locals
-          .filter(i => upstreamIds.has(String(i.product_external_id)))
-          .reduce((s, i) => s + Number(i.qty) * Number(i.unit_price_usd), 0) * 100) / 100;
-        const expectedTotal = Math.round((Number(o.total_usd) + pushedItemsValue + feeDeltaUsd) * 100) / 100;
+          .filter(i => !i.removed_at && upstreamIds.has(String(i.product_external_id)))
+          .reduce((s, i) => s + effQty(i) * Number(i.unit_price_usd), 0) * 100) / 100;
+        const expectedTotal = Math.round((Number(o.total_usd) + pushedItemsValue + feeDeltaUsd + itemDeltaUsd) * 100) / 100;
         if (Math.round(Number(b44.total || 0) * 100) !== Math.round(expectedTotal * 100)) {
           if (!window.confirm(`The ordering app's items and fees match, but its TOTAL is ${fmtUSD(Number(b44.total || 0))} where ${fmtUSD(expectedTotal)} is expected (a partial earlier push, or an upstream edit).\n\nRepair the upstream total to ${fmtUSD(expectedTotal)}?`)) {
             setAddMsg('Upstream total left as-is — do NOT pull until it is fixed, or the fee edits will retire against the wrong total.');
@@ -665,12 +723,32 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         setAddMsg('The ordering app already matches — run a pull and the badges/edit markers will clear automatically.');
         return;
       }
-      const addValue = Math.round(toAdd.reduce((s, i) => s + Number(i.qty) * Number(i.unit_price_usd), 0) * 100) / 100;
+      const addValue = Math.round(toAdd.reduce((s, i) => s + effQty(i) * Number(i.unit_price_usd), 0) * 100) / 100;
+      const editsDelta = Math.round(qtyEdits.reduce((s, i) => {
+        const pid = String(i.product_external_id);
+        return s + (Number(i.qty_override) - (upstreamQty.get(pid) || 0)) * (upstreamPrice.get(pid) || 0);
+      }, 0) * 100) / 100;
+      const removalsDelta = Math.round(removals.reduce((s, i) => {
+        const pid = String(i.product_external_id);
+        return s - (upstreamQty.get(pid) || 0) * (upstreamPrice.get(pid) || 0);
+      }, 0) * 100) / 100;
       const feeDelta = Math.round(feeChanges.reduce((s, f) => s + (f.value! - f.current), 0) * 100) / 100;
-      const itemsSummary = toAdd.map(i => `${i.sku_code} × ${Number(i.qty)}`).join(', ');
+      const itemsSummary = [
+        toAdd.map(i => `add ${i.sku_code} × ${effQty(i)}`).join(', '),
+        qtyEdits.map(i => `${i.sku_code} qty ${upstreamQty.get(String(i.product_external_id))} → ${Number(i.qty_override)}`).join(', '),
+        removals.map(i => `remove ${i.sku_code} × ${upstreamQty.get(String(i.product_external_id))}`).join(', '),
+      ].filter(Boolean).join('; ');
       const feesSummary = feeChanges.map(f => `${f.label} ${fmtUSD(f.current)} → ${fmtUSD(f.value!)}`).join(', ');
       const summary = [itemsSummary, feesSummary].filter(Boolean).join('; ');
-      const totalDelta = Math.round((addValue + feeDelta) * 100) / 100;
+      const productDelta = Math.round((addValue + editsDelta + removalsDelta) * 100) / 100;
+      const totalDelta = Math.round((productDelta + feeDelta) * 100) / 100;
+      // an order can't exist upstream with zero items — removing everything
+      // is a cancellation, which has its own flow
+      const removedIds = new Set(removals.map(i => String(i.product_external_id)));
+      if ((b44.items || []).every(x => removedIds.has(String(x.product_id || ''))) && toAdd.length === 0) {
+        setAddMsg('This would remove every item from the upstream order — cancel the order instead of pushing an empty item list.');
+        return;
+      }
       if (!window.confirm(`Push to the ordering app order ${o.order_number}?\n\n${summary}\n\nUpstream total ${totalDelta >= 0 ? 'increases' : 'decreases'} by ${fmtUSD(Math.abs(totalDelta))}.`)) return;
 
       // The confirm dialog is an unbounded wait between read and write — a
@@ -696,13 +774,18 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       }) as { admin_note: string }[] | { admin_note: string };
       setAdminNote(prev => (Array.isArray(pushingRes) ? pushingRes[0]?.admin_note : pushingRes?.admin_note) ?? (prev ? `${prev}\n${pushingLine}` : pushingLine));
 
-      const newItems = toAdd.length === 0 ? (b44.items || []) : [
-        ...(b44.items || []),
+      const editedQtyByPid = new Map(qtyEdits.map(i => [String(i.product_external_id), Number(i.qty_override)]));
+      const newItems = [
+        ...(b44.items || [])
+          .filter(x => !removedIds.has(String(x.product_id || '')))
+          .map(x => editedQtyByPid.has(String(x.product_id || ''))
+            ? { ...x, quantity: editedQtyByPid.get(String(x.product_id || '')) }
+            : x),
         ...toAdd.map(i => ({
           product_id: i.product_external_id,
           product_name: i.product_name || i.sku_code,
           price: Number(i.unit_price_usd),
-          quantity: Number(i.qty),
+          quantity: effQty(i),
           shipped_date: null,
           vendor_paid: false,
           coa_link: null,
@@ -711,8 +794,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         })),
       ];
       const upLine = `${ts} order updated by SND GB Ops (ordering closed): ${summary} (total ${totalDelta >= 0 ? '+' : '−'}$${Math.abs(totalDelta).toFixed(2)}).`;
-      const newSubtotal = Math.round((Number(b44.subtotal || 0) + addValue) * 100) / 100;
-      const newTotal = Math.round((Number(b44.total || 0) + addValue + feeDelta) * 100) / 100;
+      const newSubtotal = Math.round((Number(b44.subtotal || 0) + productDelta) * 100) / 100;
+      const newTotal = Math.round((Number(b44.total || 0) + totalDelta) * 100) / 100;
       const feeFields = Object.fromEntries(feeChanges.map(f => [f.field, f.value]));
       try {
         await updateB44Order(cfg, o.external_id, {
@@ -729,7 +812,10 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         try {
           const after = await getB44Order(cfg, o.external_id);
           const afterIds = new Set((after.items || []).map(x => String(x.product_id || '')));
-          const itemsOk = toAdd.every(i => afterIds.has(String(i.product_external_id)));
+          const afterQty = new Map((after.items || []).map(x => [String(x.product_id || ''), Number(x.quantity ?? 0)]));
+          const itemsOk = toAdd.every(i => afterIds.has(String(i.product_external_id)))
+            && qtyEdits.every(i => Math.round((afterQty.get(String(i.product_external_id)) || 0) * 100) === Math.round(Number(i.qty_override) * 100))
+            && removals.every(i => !afterIds.has(String(i.product_external_id)));
           const feesOk = feeChanges.every(f => Math.round(Number(after[f.field] ?? 0) * 100) === Math.round(f.value! * 100));
           const noteOk = String(after.notes || '').includes(upLine);
           // the totals ARE the money invariant: changes landing without the
@@ -750,7 +836,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         } catch { /* surfaced below */ }
         if (!landed) { setAddMsg(`Ordering app push failed (${outcome}).`); return; }
       }
-      setAddMsg('Pushed to the ordering app. Run a pull — added items are adopted and matching fee edits retire automatically.');
+      setAddMsg('Pushed to the ordering app. Run a pull — added items adopt, qty and fee edits retire, and removed lines clear automatically.');
     } catch (e: unknown) {
       setAddMsg(e instanceof Error ? e.message : 'Failed to push changes');
     } finally {
@@ -1003,7 +1089,18 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   <div key={it.id} className="py-0.5">
                     <div className="flex justify-between items-center gap-2">
                       <span className="flex items-center gap-1.5 min-w-0">
-                        <span className="truncate">{it.sku_code} × {it.qty}</span>
+                        <span className={`truncate ${it.removed_at ? 'line-through text-muted-foreground' : ''}`}>
+                          {it.sku_code} × {effQty(it) || Number(it.qty)}
+                          {it.qty_override != null && !it.removed_at && (
+                            <span className="text-amber-700" title={`Ordering app: ${Number(it.qty)}`}> (edited)</span>
+                          )}
+                        </span>
+                        {it.removed_at && (
+                          <span className="rounded bg-red-100 text-red-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                            title="Removed in this app — the ordering app still carries it until you push">
+                            removed
+                          </span>
+                        )}
                         {Number(it.comp_qty) > 0 && (
                           <span
                             className="rounded bg-green-100 text-green-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
@@ -1030,7 +1127,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         )}
                       </span>
                       <span className="flex items-center gap-2 shrink-0">
-                        <span>{fmtUSD(it.line_total_usd)}</span>
+                        <span className={it.removed_at ? 'line-through text-muted-foreground' : ''}>{fmtUSD(effQty(it) * Number(it.unit_price_usd))}</span>
                         {compingId !== it.id && (
                           <Button
                             size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
@@ -1055,16 +1152,40 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             {it.direct_fulfilled_at ? 'Undo vendor shipped' : 'Vendor shipped'}
                           </Button>
                         )}
-                        {it.item_source === 'local' && (
+                        {!it.removed_at && (
+                          <Button
+                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
+                            disabled={saving}
+                            onClick={() => { setQtyEditId(it.id); setQtyEditVal(it.qty_override ?? ''); setCompMsg(''); }}
+                          >
+                            Edit qty
+                          </Button>
+                        )}
+                        {it.item_source === 'local' ? (
                           <Button
                             size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-red-600"
                             disabled={saving} onClick={() => removeLocalItem(it)}
                           >
                             Remove
                           </Button>
+                        ) : (
+                          <Button
+                            size="sm" variant="ghost" className={`h-5 px-1.5 text-[11px] ${it.removed_at ? 'text-muted-foreground' : 'text-red-600'}`}
+                            disabled={saving} onClick={() => toggleRemoved(it)}
+                          >
+                            {it.removed_at ? 'Restore' : 'Remove'}
+                          </Button>
                         )}
                       </span>
                     </div>
+                    {qtyEditId === it.id && (
+                      <div className="flex flex-wrap gap-2 mt-1 items-center">
+                        <Input placeholder={`Qty (ordering app: ${Number(it.qty)})`} value={qtyEditVal} onChange={e => setQtyEditVal(e.target.value)} className="h-7 w-40 text-xs" />
+                        <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveItemQty(it)}>Save</Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setQtyEditId(null); setCompMsg(''); }}>Cancel</Button>
+                        <span className="text-[11px] text-muted-foreground">Blank = follow the ordering app. Billing and demand shift by the difference.</span>
+                      </div>
+                    )}
                     {compingId === it.id && (
                       <div className="flex flex-wrap gap-2 mt-1 items-center">
                         <Input placeholder={`Free units (max ${it.qty})`} value={compQty} onChange={e => setCompQty(e.target.value)} className="h-7 w-32 text-xs" />
@@ -1090,7 +1211,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   </Select>
                   <Input placeholder="Qty" value={addQty} onChange={e => setAddQty(e.target.value)} className="h-7 w-16 text-xs" />
                   <Button size="sm" className="h-7 text-xs" disabled={saving || !addSku} onClick={addItem}>Add</Button>
-                  {(localItemsUsd > 0 || feeDeltaUsd !== 0) && o.external_id && (
+                  {(localItemsUsd > 0 || feeDeltaUsd !== 0 || itemDeltaUsd !== 0) && o.external_id && (
                     <Button size="sm" variant="outline" className="h-7 text-xs" disabled={saving} onClick={pushChanges}
                       title="Write added items and fee edits into the ordering app's order (works even while ordering is closed) and adjust its total to match">
                       Push changes to ordering app
@@ -1114,11 +1235,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   )}
                   {Number(o.processor_fee_usd) > 0 && <div className="flex justify-between"><span>Processor fee</span><span>{fmtUSD(o.processor_fee_usd)}</span></div>}
                   <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{fmtUSD(o.total_usd)}</span></div>
-                  {(localItemsUsd > 0 || feeDeltaUsd !== 0) && (
+                  {(localItemsUsd > 0 || feeDeltaUsd !== 0 || itemDeltaUsd !== 0) && (
                     <>
                       {localItemsUsd > 0 && <div className="flex justify-between text-amber-700"><span>Added in this app</span><span>+{fmtUSD(localItemsUsd)}</span></div>}
+                      {itemDeltaUsd !== 0 && <div className="flex justify-between text-amber-700"><span>Item edits</span><span>{itemDeltaUsd > 0 ? '+' : '−'}{fmtUSD(Math.abs(itemDeltaUsd))}</span></div>}
                       {feeDeltaUsd !== 0 && <div className="flex justify-between text-amber-700"><span>Fee edits</span><span>{feeDeltaUsd > 0 ? '+' : '−'}{fmtUSD(Math.abs(feeDeltaUsd))}</span></div>}
-                      <div className="flex justify-between font-semibold text-foreground"><span>Expected total</span><span>{fmtUSD(Number(o.total_usd) + localItemsUsd + feeDeltaUsd)}</span></div>
+                      <div className="flex justify-between font-semibold text-foreground"><span>Expected total</span><span>{fmtUSD(Number(o.total_usd) + localItemsUsd + feeDeltaUsd + itemDeltaUsd)}</span></div>
                     </>
                   )}
                   <div className="pt-1">

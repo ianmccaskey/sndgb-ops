@@ -160,6 +160,58 @@ function importUpsertOrder() {
                jsonb_build_object('order_id', (SELECT id FROM up))
         FROM adopt
         RETURNING row_pk
+      ), retire_qty AS (
+        -- a qty override RETIRES when upstream's incoming qty equals it AND
+        -- the header total moved in this same pull — a partial push (qty
+        -- landed, total stuck) keeps the override and its billed delta alive
+        -- until the totals repair runs (same gate as the fee overrides)
+        UPDATE order_items oi SET qty_override = NULL
+        FROM up, prev,
+             jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)
+             JOIN products p2 ON p2.sku_code = x.sku
+             JOIN group_buy_products gbp2 ON gbp2.product_id = p2.id
+               AND gbp2.group_buy_id = {{params.group_buy_id}}::bigint
+        WHERE oi.order_id = up.id
+          AND prev.id = up.id
+          AND oi.group_buy_product_id = gbp2.id
+          AND oi.qty_override IS NOT NULL
+          AND x.qty = oi.qty_override
+          AND prev.total_usd IS DISTINCT FROM up.total_usd
+        RETURNING oi.id
+      ), retire_qty_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', retire_qty.id::text, 'item_qty_override_retired', 'import',
+               jsonb_build_object('order_id', (SELECT id FROM up))
+        FROM retire_qty
+        RETURNING row_pk
+      ), retire_removed AS (
+        -- a locally-removed line truly deletes only when upstream dropped
+        -- the product AND the total moved in the same pull; the ungated
+        -- prune skips removed rows, so a partial push (item gone upstream,
+        -- total stuck) keeps the marker and the billed deduction intact
+        DELETE FROM order_items oi
+        USING up, prev
+        WHERE oi.order_id = up.id
+          AND prev.id = up.id
+          AND oi.removed_at IS NOT NULL
+          AND prev.total_usd IS DISTINCT FROM up.total_usd
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)
+            JOIN products p3 ON p3.sku_code = x.sku
+            JOIN group_buy_products gbp3 ON gbp3.product_id = p3.id
+              AND gbp3.group_buy_id = {{params.group_buy_id}}::bigint
+            WHERE gbp3.id = oi.group_buy_product_id
+          )
+        RETURNING oi.id, oi.group_buy_product_id, oi.qty, oi.unit_price_usd
+      ), retire_removed_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', retire_removed.id::text, 'removed_item_retired_by_import', 'import',
+               jsonb_build_object('order_id', (SELECT id FROM up),
+                                  'group_buy_product_id', retire_removed.group_buy_product_id,
+                                  'qty', retire_removed.qty, 'unit_price_usd', retire_removed.unit_price_usd)
+        FROM retire_removed
+        RETURNING row_pk
       ), wo_clear AS (
         -- a CHANGED billed total invalidates a standing write-off (the
         -- forgiven shortfall was computed against the old total): auto-clear
