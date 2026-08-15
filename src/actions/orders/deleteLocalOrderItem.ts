@@ -14,9 +14,13 @@ function deleteLocalOrderItem() {
         SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
       ), del AS (
         DELETE FROM order_items oi
-        USING lck
+        USING lck, orders o
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
+          AND o.id = oi.order_id
+          -- same active-order guard as every item mutation: dormant billing
+          -- on a hidden (cancelled/refunded) order must not change silently
+          AND o.status NOT IN ('cancelled', 'refunded')
           AND oi.item_source = 'local'
           -- same pack-flow gate as the add path, in reverse: once the order
           -- packed/shipped, removing an item would drop billed/due while the
