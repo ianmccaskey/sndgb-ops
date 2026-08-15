@@ -14,9 +14,14 @@ function setOrderItemDirectShip() {
   return action('setOrderItemDirectShip', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH prev AS (
+      WITH lck AS (
+        -- 42001: not for money — for the pack-flow gate below. saveShipment
+        -- serializes status transitions under this lock, so reading the
+        -- latest shipment status without it could race a concurrent pack.
+        SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
+      ), prev AS (
         SELECT oi.id, oi.direct_ship, oi.direct_ship_source
-        FROM order_items oi
+        FROM lck, order_items oi
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
       ), upd AS (
@@ -29,7 +34,7 @@ function setOrderItemDirectShip() {
             WHEN {{params.direct_ship}}::boolean AND NOT oi.direct_ship THEN NULL
             ELSE oi.direct_fulfilled_at
           END
-        FROM orders o
+        FROM lck, orders o
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
           AND o.id = oi.order_id

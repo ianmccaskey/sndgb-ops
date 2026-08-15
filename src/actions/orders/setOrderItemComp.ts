@@ -29,9 +29,20 @@ function setOrderItemComp() {
         UPDATE order_items oi SET
           comp_qty = ({{params.comp_qty}})::numeric,
           comp_reason = CASE WHEN ({{params.comp_qty}})::numeric > 0 THEN TRIM({{params.reason}}) ELSE NULL END
-        FROM lck
+        FROM lck, orders o
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
+          AND o.id = oi.order_id
+          -- same authoritative guards as every item mutation: recon hides
+          -- cancelled orders (dormant money), and a comp change after the
+          -- box packed/shipped alters closed books — reopen the shipment
+          -- to pending first
+          AND o.status NOT IN ('cancelled', 'refunded')
+          AND COALESCE((
+            SELECT sh.status::text FROM shipments sh
+            WHERE sh.order_id = oi.order_id
+            ORDER BY sh.created_at DESC LIMIT 1
+          ), 'pending') = 'pending'
           AND ({{params.comp_qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           -- cap at the EFFECTIVE quantity (edited/removed lines), so a
           -- stored comp can never exceed what the customer actually gets —
