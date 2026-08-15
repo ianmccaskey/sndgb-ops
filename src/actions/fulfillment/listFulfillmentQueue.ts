@@ -60,7 +60,11 @@ function listFulfillmentQueue() {
           -- shipping. Fully-direct orders leave the pack list — they are the
           -- 'direct' stage.
           OR ({{params.stage}} = 'ready' AND COALESCE(s.status::text,'pending') = 'pending' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over') AND r.pending_payment_count = 0
-              AND NOT COALESCE(it.all_direct, false))
+              AND NOT COALESCE(it.all_direct, false)
+              -- there must be packable work: an order whose every line was
+              -- locally removed (or that somehow has no active items) must
+              -- never present as ready to pack
+              AND COALESCE(it.item_count, 0) > 0)
           -- same money gates as ready, but for VENDOR-shipped lines: any order
           -- (fully direct or mixed) with a direct line the vendor hasn't
           -- shipped yet. Deliberately NOT gated on the local shipment row —

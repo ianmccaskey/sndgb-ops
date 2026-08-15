@@ -572,7 +572,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     setSaving(true); setCompMsg('');
     try {
       const res = await doRemoveItem({ item_id: it.id, order_id: o.id, removed: !it.removed_at, actor: userName }) as unknown[] | null;
-      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Refused — the order may have packed/shipped (reopen its shipment first).');
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Refused — the order may have packed/shipped (reopen its shipment first), or this is the last active line (cancel the order instead of emptying it).');
       reloadItems(); reloadOrder();
     } catch (e: unknown) {
       setCompMsg(e instanceof Error ? e.message : 'Failed to change the line');
@@ -856,7 +856,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         const after = await getB44Order(cfg, o.external_id);
         const afterIds = new Set((after.items || []).map(x => String(x.product_id || '')));
         const afterQty = new Map((after.items || []).map(x => [String(x.product_id || ''), Number(x.quantity ?? 0)]));
-        const itemsOk = toAdd.every(i => afterIds.has(String(i.product_external_id)))
+        const afterPrice = new Map((after.items || []).map(x => [String(x.product_id || ''), Number(x.price ?? 0)]));
+        // added rows verify qty AND price — an upstream normalization that
+        // kept the row but changed either would adopt wrong demand/money
+        const itemsOk = toAdd.every(i => afterIds.has(String(i.product_external_id))
+            && Math.round((afterQty.get(String(i.product_external_id)) || 0) * 100) === Math.round(effQty(i) * 100)
+            && Math.round((afterPrice.get(String(i.product_external_id)) || 0) * 100) === Math.round(Number(i.unit_price_usd) * 100))
           && qtyEdits.every(i => Math.round((afterQty.get(String(i.product_external_id)) || 0) * 100) === Math.round(Number(i.qty_override) * 100))
           && removals.every(i => !afterIds.has(String(i.product_external_id)));
         const feesOk = feeChanges.every(f => Math.round(Number(after[f.field] ?? 0) * 100) === Math.round(f.value! * 100));

@@ -41,6 +41,13 @@ function removeOrderItem() {
           AND oi.item_source = 'import'
           AND (({{params.removed}}::boolean AND oi.removed_at IS NULL)
                OR (NOT {{params.removed}}::boolean AND oi.removed_at IS NOT NULL))
+          -- never remove the LAST active line: an order with zero effective
+          -- items is a cancellation, which has its own flow — this mirrors
+          -- the push's full-wipe refusal
+          AND (NOT {{params.removed}}::boolean OR EXISTS (
+            SELECT 1 FROM order_items oj
+            WHERE oj.order_id = oi.order_id AND oj.id <> oi.id AND oj.removed_at IS NULL
+          ))
           AND COALESCE((
             SELECT sh.status::text FROM shipments sh
             WHERE sh.order_id = oi.order_id
