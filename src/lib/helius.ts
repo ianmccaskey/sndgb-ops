@@ -56,7 +56,9 @@ export async function getSolTxTransfers(heliusKey: string, signature: string): P
     nativeTransfers?: { fromUserAccount?: string; toUserAccount?: string; amount?: number }[];
   }>;
   const tx = Array.isArray(arr) ? arr[0] : undefined;
-  if (!tx) throw new Error('Transaction not found on Solana — check the signature.');
+  // Helius indexes moments behind the chain, so a signature already visible
+  // on the explorer can briefly come back empty — say so
+  if (!tx) throw new Error('Transaction not indexed yet — if Solscan already shows it, wait a minute and click Verify again (the signature stays saved). If it is not on Solscan either, check the signature and the network.');
   if (tx.transactionError) throw new Error('Transaction failed on-chain.');
   const at = tx.timestamp ? new Date(tx.timestamp * 1000).toISOString() : null;
 

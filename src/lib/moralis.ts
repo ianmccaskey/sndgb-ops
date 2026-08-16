@@ -42,6 +42,9 @@ async function get(apiKey: string, url: string): Promise<unknown> {
   if (!res.ok) {
     if (res.status === 429) throw new Error('Moralis is rate-limiting (429) — wait a few seconds and retry.');
     const body = await res.json().catch(() => null) as { message?: string } | null;
+    // a bare 404 must still read as "not found" so the tx-lookup caller can
+    // recognize it and explain indexing lag
+    if (res.status === 404) throw new Error(body?.message || 'Not found (HTTP 404).');
     throw new Error(body?.message || `Moralis request failed (HTTP ${res.status}).`);
   }
   return res.json();
@@ -60,11 +63,24 @@ export type ChainTransfer = {
  * The caller matches `to` against the receiving wallet and sums amounts.
  */
 export async function getEvmTxTransfers(apiKey: string, chain: EvmChain, txHash: string): Promise<ChainTransfer[]> {
-  const d = await get(apiKey, `${EVM_BASE}/transaction/${txHash}?chain=${chain}`) as {
+  let d: {
     to_address?: string; from_address?: string; value?: string; block_timestamp?: string;
     receipt_status?: string;
     logs?: { address?: string; topic0?: string; topic1?: string; topic2?: string; data?: string }[];
   };
+  try {
+    d = await get(apiKey, `${EVM_BASE}/transaction/${txHash}?chain=${chain}`) as typeof d;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Moralis indexes a few minutes behind the chain head, so a tx that is
+    // already visible on the block explorer can still 404 here — say so
+    // instead of the misleading "no transaction found"
+    if (/not found|no transaction/i.test(msg)) {
+      const explorer = chain === 'base' ? 'Basescan' : 'Etherscan';
+      throw new Error(`Transaction not indexed yet — Moralis runs a few minutes behind the chain. If ${explorer} already shows it, wait a minute and click Verify again (the hash stays saved). If it is not on ${explorer} either, check the hash and the network.`);
+    }
+    throw e;
+  }
   if (d.receipt_status !== undefined && String(d.receipt_status) !== '1') {
     throw new Error('Transaction failed on-chain (receipt status 0).');
   }
