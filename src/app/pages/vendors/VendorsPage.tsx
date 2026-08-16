@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { StatusPill } from '@/components/StatusPill';
+import { Switch } from '@/components/ui/switch';
 import { Store, AlertTriangle } from 'lucide-react';
 
 type Vendor = { id: number; code: string; name: string; active: boolean };
@@ -75,6 +76,17 @@ export function VendorsPage() {
   const [nvError, setNvError] = useState('');
 
   const overpaid = balances.filter(b => b.pay_status === 'OVERPAID');
+
+  // a COA vendor's campaign products are ALL COA-prefixed (the same SKU
+  // convention the wallet-coverage math scopes by); a vendor with any real
+  // product line stays in the product section
+  const [showCoaLines, setShowCoaLines] = useState(false);
+  const isCoaVendor = (code: string) => {
+    const pps = productProgress.filter(pp => pp.vendor_code === code);
+    return pps.length > 0 && pps.every(pp => /^coa/i.test(pp.sku_code));
+  };
+  const productBalances = balances.filter(b => !isCoaVendor(b.vendor_code));
+  const coaBalances = balances.filter(b => isCoaVendor(b.vendor_code));
 
   const vendorCode = vendors.find(v => String(v.id) === pVendor)?.code || '';
   const vendorProducts = productProgress.filter(pp => pp.vendor_code === vendorCode);
@@ -231,58 +243,79 @@ export function VendorsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {balances.map(b => (
-              <React.Fragment key={b.vendor_id}>
-              <TableRow>
-                <TableCell className="font-medium">{b.vendor_code}</TableCell>
-                <TableCell className="text-right">{fmtUSD(b.owed_usd)}</TableCell>
-                <TableCell className="text-right">{fmtUSD(b.paid_usd)}</TableCell>
-                <TableCell className={`text-right font-medium ${parseFloat(b.balance_usd) < 0 ? 'text-red-600' : ''}`}>{fmtUSD(b.balance_usd)}</TableCell>
-                <TableCell className="text-right">
-                  {(() => {
-                    const left = Number(b.kits_demand) - Number(b.kits_paid);
-                    return (
-                      <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
-                        {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
-                        <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(b.kits_paid)}/{fmtNum(b.kits_demand)} paid</span>
-                      </span>
-                    );
-                  })()}
-                </TableCell>
-                <TableCell className="text-right">
-                  {(() => {
-                    const left = Number(b.freight_demand_usd) - Number(b.freight_paid_usd);
-                    return (
-                      <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
-                        {left < 0 ? `over by ${fmtUSD(-left)}` : fmtUSD(left)}
-                        <span className="block text-[10px] text-muted-foreground font-normal">{fmtUSD(b.freight_paid_usd)}/{fmtUSD(b.freight_demand_usd)} paid</span>
-                      </span>
-                    );
-                  })()}
-                </TableCell>
-                <TableCell><StatusPill value={b.pay_status} /></TableCell>
-              </TableRow>
-              {productProgress.filter(pp => pp.vendor_code === b.vendor_code).map(pp => {
-                const left = Number(pp.kits_demand) - Number(pp.kits_paid);
-                return (
-                  <TableRow key={`pp-${pp.group_buy_product_id}`} className="bg-muted/30 hover:bg-muted/40">
-                    <TableCell className="pl-8 text-sm text-muted-foreground">↳ {pp.sku_code}</TableCell>
-                    <TableCell className="text-right text-sm text-muted-foreground">{fmtUSD(pp.vendor_order_value_usd, { cents: false })}</TableCell>
-                    <TableCell />
-                    <TableCell />
-                    <TableCell className="text-right text-sm">
-                      <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
-                        {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
-                        <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(pp.kits_paid)}/{fmtNum(pp.kits_demand)} paid</span>
-                      </span>
-                    </TableCell>
-                    <TableCell />
-                    <TableCell />
-                  </TableRow>
-                );
-              })}
-              </React.Fragment>
-            ))}
+            {(() => {
+              const vendorRows = (b: Balance, withLines: boolean) => (
+                <React.Fragment key={b.vendor_id}>
+                <TableRow>
+                  <TableCell className="font-medium">{b.vendor_code}</TableCell>
+                  <TableCell className="text-right">{fmtUSD(b.owed_usd)}</TableCell>
+                  <TableCell className="text-right">{fmtUSD(b.paid_usd)}</TableCell>
+                  <TableCell className={`text-right font-medium ${parseFloat(b.balance_usd) < 0 ? 'text-red-600' : ''}`}>{fmtUSD(b.balance_usd)}</TableCell>
+                  <TableCell className="text-right">
+                    {(() => {
+                      const left = Number(b.kits_demand) - Number(b.kits_paid);
+                      return (
+                        <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
+                          {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
+                          <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(b.kits_paid)}/{fmtNum(b.kits_demand)} paid</span>
+                        </span>
+                      );
+                    })()}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {(() => {
+                      const left = Number(b.freight_demand_usd) - Number(b.freight_paid_usd);
+                      return (
+                        <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
+                          {left < 0 ? `over by ${fmtUSD(-left)}` : fmtUSD(left)}
+                          <span className="block text-[10px] text-muted-foreground font-normal">{fmtUSD(b.freight_paid_usd)}/{fmtUSD(b.freight_demand_usd)} paid</span>
+                        </span>
+                      );
+                    })()}
+                  </TableCell>
+                  <TableCell><StatusPill value={b.pay_status} /></TableCell>
+                </TableRow>
+                {withLines && productProgress.filter(pp => pp.vendor_code === b.vendor_code).map(pp => {
+                  const left = Number(pp.kits_demand) - Number(pp.kits_paid);
+                  return (
+                    <TableRow key={`pp-${pp.group_buy_product_id}`} className="bg-muted/30 hover:bg-muted/40">
+                      <TableCell className="pl-8 text-sm text-muted-foreground">↳ {pp.sku_code}</TableCell>
+                      <TableCell className="text-right text-sm text-muted-foreground">{fmtUSD(pp.vendor_order_value_usd, { cents: false })}</TableCell>
+                      <TableCell />
+                      <TableCell />
+                      <TableCell className="text-right text-sm">
+                        <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
+                          {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
+                          <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(pp.kits_paid)}/{fmtNum(pp.kits_demand)} paid</span>
+                        </span>
+                      </TableCell>
+                      <TableCell />
+                      <TableCell />
+                    </TableRow>
+                  );
+                })}
+                </React.Fragment>
+              );
+              return (
+                <>
+                  {productBalances.map(b => vendorRows(b, true))}
+                  {coaBalances.length > 0 && (
+                    <TableRow className="bg-muted/50 hover:bg-muted/50">
+                      <TableCell colSpan={7} className="py-1.5">
+                        <span className="flex items-center gap-3 text-xs font-semibold uppercase text-muted-foreground">
+                          COA vendors
+                          <span className="flex items-center gap-1.5 font-normal normal-case">
+                            <Switch checked={showCoaLines} onCheckedChange={setShowCoaLines} className="scale-75" />
+                            show product lines
+                          </span>
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {coaBalances.map(b => vendorRows(b, showCoaLines))}
+                </>
+              );
+            })()}
             {balances.length === 0 && (
               <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-6">No campaign products yet — vendor balances appear once products are configured.</TableCell></TableRow>
             )}
