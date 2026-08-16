@@ -21,9 +21,12 @@ function addVendorPayment() {
                NULLIF({{params.confirmed_owed}}::text, '')::numeric AS confirmed_owed
       ), cur AS (
         -- kits still owed for the chosen product, read AFTER the advisory
-        -- lock so it reflects every payment that committed before this one
+        -- lock so it reflects every payment that committed before this one.
+        -- ordered_kits, not final_count: the vendor sells WHOLE kits, so
+        -- half-kit demand (0.5) is owed as 1 kit and a 1-kit payment must
+        -- pass without the over-buy override
         SELECT (
-          SELECT m.final_count - COALESCE((
+          SELECT m.ordered_kits - COALESCE((
             SELECT SUM(COALESCE(vp2.kits_qty, 0))
             FROM vendor_payments vp2
             WHERE vp2.group_buy_product_id = inp.gbp_id
