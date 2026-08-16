@@ -43,6 +43,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
@@ -1235,7 +1236,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 {items.map(it => (
                   <div key={it.id} className="py-0.5">
                     <div className="flex justify-between items-center gap-2">
-                      <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
                         <span className={`truncate ${it.removed_at ? 'line-through text-muted-foreground' : ''}`}>
                           {it.sku_code} × {effQty(it) || Number(it.qty)}
                           {it.qty_override != null && !it.removed_at && (
@@ -1273,58 +1274,48 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                           </span>
                         )}
                       </span>
-                      <span className="flex items-center gap-2 shrink-0">
+                      <span className="flex items-center gap-1.5 shrink-0">
                         <span className={it.removed_at ? 'line-through text-muted-foreground' : ''}>{fmtUSD(effQty(it) * Number(it.unit_price_usd))}</span>
-                        {compingId !== it.id && !it.removed_at && (
-                          <Button
-                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
-                            onClick={() => { setCompingId(it.id); setCompQty(String(Number(it.comp_qty) || '')); setCompReason(it.comp_reason || ''); setCompMsg(''); }}
-                          >
-                            {Number(it.comp_qty) > 0 ? 'Edit comp' : 'Comp'}
-                          </Button>
-                        )}
-                        {!it.removed_at && (
-                          <Button
-                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
-                            disabled={saving} onClick={() => toggleDirectShip(it)}
-                            title="Who ships this line to the customer"
-                          >
-                            {it.direct_ship ? 'From us' : 'Direct ship'}
-                          </Button>
-                        )}
-                        {it.direct_ship && !it.removed_at && (
-                          <Button
-                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
-                            disabled={saving} onClick={() => markLineDirectFulfilled(it, !it.direct_fulfilled_at)}
-                            title="Track whether the vendor has shipped this line"
-                          >
-                            {it.direct_fulfilled_at ? 'Undo vendor shipped' : 'Vendor shipped'}
-                          </Button>
-                        )}
-                        {!it.removed_at && (
-                          <Button
-                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-muted-foreground"
-                            disabled={saving}
-                            onClick={() => { setQtyEditId(it.id); setQtyEditVal(it.qty_override ?? ''); setCompMsg(''); }}
-                          >
-                            Edit qty
-                          </Button>
-                        )}
-                        {it.item_source === 'local' ? (
-                          <Button
-                            size="sm" variant="ghost" className="h-5 px-1.5 text-[11px] text-red-600"
-                            disabled={saving} onClick={() => removeLocalItem(it)}
-                          >
-                            Remove
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm" variant="ghost" className={`h-5 px-1.5 text-[11px] ${it.removed_at ? 'text-muted-foreground' : 'text-red-600'}`}
-                            disabled={saving} onClick={() => toggleRemoved(it)}
-                          >
-                            {it.removed_at ? 'Restore' : 'Remove'}
-                          </Button>
-                        )}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="sm" variant="outline" className="h-6 w-6 p-0 text-muted-foreground" disabled={saving} title="Line actions">⋯</Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="text-xs">
+                            {!it.removed_at && (
+                              <DropdownMenuItem onClick={() => { setCompingId(it.id); setCompQty(String(Number(it.comp_qty) || '')); setCompReason(it.comp_reason || ''); setCompMsg(''); }}>
+                                {Number(it.comp_qty) > 0 ? 'Edit comp' : 'Comp'}
+                              </DropdownMenuItem>
+                            )}
+                            {!it.removed_at && (
+                              <DropdownMenuItem onClick={() => { setQtyEditId(it.id); setQtyEditVal(it.qty_override ?? ''); setCompMsg(''); }}>
+                                Edit qty
+                              </DropdownMenuItem>
+                            )}
+                            {!it.removed_at && (
+                              <DropdownMenuItem onClick={() => toggleDirectShip(it)} title="Who ships this line to the customer">
+                                {it.direct_ship ? 'Ships from us' : 'Direct ship from vendor'}
+                              </DropdownMenuItem>
+                            )}
+                            {it.direct_ship && !it.removed_at && (
+                              <DropdownMenuItem onClick={() => markLineDirectFulfilled(it, !it.direct_fulfilled_at)} title="Track whether the vendor has shipped this line">
+                                {it.direct_fulfilled_at ? 'Undo vendor shipped' : 'Vendor shipped'}
+                              </DropdownMenuItem>
+                            )}
+                            {it.item_source === 'local' ? (
+                              <DropdownMenuItem className="text-red-600" onClick={() => removeLocalItem(it)}>
+                                Remove
+                              </DropdownMenuItem>
+                            ) : it.removed_at ? (
+                              <DropdownMenuItem onClick={() => toggleRemoved(it)}>
+                                Restore
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem className="text-red-600" onClick={() => toggleRemoved(it)}>
+                                Remove
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </span>
                     </div>
                     {qtyEditId === it.id && (
@@ -1394,7 +1385,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   )}
                   <div className="pt-1">
                     {!editingFees ? (
-                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={openFeeEditor}>Edit fees</Button>
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={openFeeEditor}>Edit fees</Button>
                     ) : (
                       <div className="space-y-1">
                         <div className="flex flex-wrap gap-1.5">
@@ -1442,14 +1433,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   ))}
                   <div className="flex flex-wrap gap-2 mt-1">
                     {!addingCredit && (
-                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={() => { setAddingCredit(true); setAddingRefund(false); setCrMsg(''); }}>Add credit</Button>
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => { setAddingCredit(true); setAddingRefund(false); setCrMsg(''); }}>Add credit</Button>
                     )}
                     {/* post-clear overpay: recording a refund auto-clears a standing
                         write-off, which raises due by writeoff_usd — offer/prefill
                         the amount that will still be over AFTER that clear (matches
                         the server cap) */}
                     {!addingRefund && Number(o.diff_usd) + Number(o.writeoff_usd || 0) < -0.005 && (
-                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground"
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] text-amber-700 border-amber-300"
                         onClick={() => {
                           setAddingRefund(true); setAddingCredit(false);
                           setRefundAmt(String(-(Number(o.diff_usd) + Number(o.writeoff_usd || 0))));
