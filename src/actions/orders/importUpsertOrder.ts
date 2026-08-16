@@ -136,24 +136,49 @@ function importUpsertOrder() {
         raw_import = EXCLUDED.raw_import
       WHERE orders.group_buy_id = EXCLUDED.group_buy_id
       RETURNING id, total_usd
-      ), adopt AS (
-        -- ATOMIC with the total update: the incoming item list carries the
-        -- SKUs upstream now knows, so any matching LOCALLY-ADDED row flips
-        -- to 'import' in the same statement the header total lands — a
-        -- partial import failure between this call and the per-item upserts
-        -- can never leave a product billed twice (once inside the new total
-        -- and again as a local add-on). The later item upsert then just
-        -- refreshes qty on an already-imported row.
-        UPDATE order_items oi SET item_source = 'import'
+      ), targets AS (
+        -- classify every existing row matched by the incoming item list
+        -- BEFORE mutating: adoption, override retirement, and the split-fee
+        -- snapshot may all touch the SAME row, and Postgres forbids two CTEs
+        -- of one statement updating one row — so a single UPDATE below
+        -- applies all three from this pre-computed classification
+        SELECT oi.id,
+               (oi.item_source = 'local') AS was_local,
+               (oi.qty_override IS NOT NULL AND x.qty = oi.qty_override
+                AND (SELECT prev.total_usd FROM prev) IS DISTINCT FROM (SELECT up.total_usd FROM up)) AS retire_override,
+               (oi.qty IS DISTINCT FROM x.qty) AS qty_changing,
+               CASE WHEN x.qty % 1 <> 0 THEN gbp.split_fee_usd ELSE 0 END AS new_split_fee
         FROM up,
              jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)
              JOIN products p ON p.sku_code = x.sku
              JOIN group_buy_products gbp ON gbp.product_id = p.id
-               AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
+               AND gbp.group_buy_id = {{params.group_buy_id}}::bigint,
+             order_items oi
         WHERE oi.order_id = up.id
           AND oi.group_buy_product_id = gbp.id
-          AND oi.item_source = 'local'
+      ), item_sync AS (
+        -- ATOMIC with the total update:
+        --  * adoption — a locally-added row upstream now knows flips to
+        --    'import' in the same statement the header total lands, so a
+        --    partial import can never leave a product billed twice;
+        --  * qty-override retirement — retires when upstream's incoming qty
+        --    equals it AND the total moved in this same pull (a partial push
+        --    keeps the override and its billed delta alive);
+        --  * split-fee snapshot — the incoming total already carries (or no
+        --    longer carries) the fee, so the per-line snapshot moves with it:
+        --    rows whose UPSTREAM qty is changing re-snapshot at the current
+        --    rate (fractional) or 0 (whole); the later per-item upsert then
+        --    writes the identical value idempotently.
+        UPDATE order_items oi SET
+          item_source = CASE WHEN t.was_local THEN 'import' ELSE oi.item_source END,
+          qty_override = CASE WHEN t.retire_override THEN NULL ELSE oi.qty_override END,
+          split_fee_usd = CASE WHEN t.qty_changing THEN t.new_split_fee ELSE oi.split_fee_usd END
+        FROM targets t
+        WHERE oi.id = t.id
+          AND (t.was_local OR t.retire_override OR t.qty_changing)
         RETURNING oi.id
+      ), adopt AS (
+        SELECT t.id FROM targets t JOIN item_sync s ON s.id = t.id WHERE t.was_local
       ), adopt_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'order_items', adopt.id::text, 'local_item_adopted_by_import', 'import',
@@ -161,23 +186,7 @@ function importUpsertOrder() {
         FROM adopt
         RETURNING row_pk
       ), retire_qty AS (
-        -- a qty override RETIRES when upstream's incoming qty equals it AND
-        -- the header total moved in this same pull — a partial push (qty
-        -- landed, total stuck) keeps the override and its billed delta alive
-        -- until the totals repair runs (same gate as the fee overrides)
-        UPDATE order_items oi SET qty_override = NULL
-        FROM up, prev,
-             jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)
-             JOIN products p2 ON p2.sku_code = x.sku
-             JOIN group_buy_products gbp2 ON gbp2.product_id = p2.id
-               AND gbp2.group_buy_id = {{params.group_buy_id}}::bigint
-        WHERE oi.order_id = up.id
-          AND prev.id = up.id
-          AND oi.group_buy_product_id = gbp2.id
-          AND oi.qty_override IS NOT NULL
-          AND x.qty = oi.qty_override
-          AND prev.total_usd IS DISTINCT FROM up.total_usd
-        RETURNING oi.id
+        SELECT t.id FROM targets t JOIN item_sync s ON s.id = t.id WHERE t.retire_override
       ), retire_qty_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'order_items', retire_qty.id::text, 'item_qty_override_retired', 'import',
