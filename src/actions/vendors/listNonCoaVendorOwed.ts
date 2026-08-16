@@ -27,6 +27,12 @@ function listNonCoaVendorOwed() {
                  FILTER (WHERE pp.sku_code NOT ILIKE 'COA%'), 0) AS noncoa_demand_usd
         FROM v_product_profit pp
         GROUP BY pp.vendor_code, pp.group_buy_id
+      ), dfr AS (
+        -- direct-ship freight (per-box, internal) is vendor money too
+        SELECT vendor_code, group_buy_id, SUM(direct_freight_usd) AS direct_usd
+        FROM v_direct_freight
+        WHERE sku_code NOT ILIKE 'COA%'
+        GROUP BY vendor_code, group_buy_id
       ), pay AS (
         SELECT v.code AS vendor_code, vp.group_buy_id,
                COALESCE(SUM(vp.amount_usd), 0) AS paid_usd,
@@ -38,11 +44,12 @@ function listNonCoaVendorOwed() {
         GROUP BY v.code, vp.group_buy_id
       ), per AS (
         SELECT prod.vendor_code,
-               prod.noncoa_demand_usd,
+               prod.noncoa_demand_usd + COALESCE(dfr.direct_usd, 0) AS noncoa_demand_usd,
                COALESCE(pay.paid_usd, 0) - COALESCE(pay.paid_coa_usd, 0) AS noncoa_paid_usd,
-               GREATEST(prod.noncoa_demand_usd - (COALESCE(pay.paid_usd, 0) - COALESCE(pay.paid_coa_usd, 0)), 0) AS owed_usd
+               GREATEST(prod.noncoa_demand_usd + COALESCE(dfr.direct_usd, 0) - (COALESCE(pay.paid_usd, 0) - COALESCE(pay.paid_coa_usd, 0)), 0) AS owed_usd
         FROM prod
         LEFT JOIN pay ON pay.vendor_code = prod.vendor_code AND pay.group_buy_id = prod.group_buy_id
+        LEFT JOIN dfr ON dfr.vendor_code = prod.vendor_code AND dfr.group_buy_id = prod.group_buy_id
       )
       SELECT vendor_code,
              ROUND(SUM(noncoa_demand_usd), 2) AS demand_usd,

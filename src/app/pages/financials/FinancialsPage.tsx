@@ -7,6 +7,7 @@ import deleteExpense from '@/actions/financials/deleteExpense';
 import listWallets from '@/actions/financials/listWallets';
 import addWalletSnapshot from '@/actions/financials/addWalletSnapshot';
 import listNonCoaVendorOwed from '@/actions/vendors/listNonCoaVendorOwed';
+import listFreightByVendor from '@/actions/financials/listFreightByVendor';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
@@ -23,6 +24,7 @@ type Pnl = {
   product_revenue_usd: string; order_count: string; admin_fee_revenue_usd: string;
   shipping_fee_revenue_usd: string; insurance_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string;
   product_profit_usd: string; expenses_usd: string; label_costs_usd: string; net_profit_usd: string;
+  direct_freight_usd: string;
   comps_usd: string; credits_usd: string; writeoffs_usd: string; adj_both_usd: string;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
   splits: { party: string; pct: string }[] | null;
@@ -40,12 +42,14 @@ export function FinancialsPage() {
   const { groupBuyId, settings } = useApp();
   const enabled = groupBuyId != null;
   const [rawPnl, , , reloadPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawFreight] = useLoadAction(listFreightByVendor, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawExpenses, , , reloadExpenses] = useLoadAction(listExpenses, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
 
   const pnl = firstRow<Pnl>(rawPnl);
   const expenses = rows<Expense>(rawExpenses);
   const wallets = rows<Wallet>(rawWallets);
+  const freightByVendor = rows<{ vendor_code: string; kit_freight_usd: string; direct_freight_usd: string; boxes: string; total_freight_usd: string }>(rawFreight);
 
   const [doAddExpense] = useMutateAction(addExpense);
   const [doDelExpense] = useMutateAction(deleteExpense);
@@ -196,6 +200,24 @@ export function FinancialsPage() {
             <div className="flex justify-between mt-2"><span className="text-muted-foreground">Product profit</span><span>{fmtUSD(pnl?.product_profit_usd)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Expenses (supplies, shipping, testing…)</span><span className="text-red-600">−{fmtUSD(pnl?.expenses_usd)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Label costs (from shipments)</span><span className="text-red-600">−{fmtUSD(pnl?.label_costs_usd)}</span></div>
+            {Number(pnl?.direct_freight_usd) > 0 && (
+              <div className="flex justify-between"><span className="text-muted-foreground">Direct-ship freight (internal, to vendors)</span><span className="text-red-600">−{fmtUSD(pnl?.direct_freight_usd)}</span></div>
+            )}
+            {freightByVendor.length > 0 && (
+              <div className="rounded bg-muted/50 px-2 py-1 space-y-0.5">
+                <div className="text-[11px] font-semibold text-muted-foreground uppercase">Freight by vendor</div>
+                {freightByVendor.map(f => (
+                  <div key={f.vendor_code} className="flex justify-between text-xs text-muted-foreground">
+                    <span>
+                      {f.vendor_code}
+                      {Number(f.kit_freight_usd) > 0 && ` · ${fmtUSD(f.kit_freight_usd)} per-kit (in product profit)`}
+                      {Number(f.direct_freight_usd) > 0 && ` · ${fmtUSD(f.direct_freight_usd)} direct (${Number(f.boxes)} boxes)`}
+                    </span>
+                    <span>{fmtUSD(f.total_freight_usd)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex justify-between font-semibold text-base border-t pt-1">
               <span>Net profit</span><span className={netProfit >= 0 ? 'text-green-700' : 'text-red-600'}>{fmtUSD(netProfit)}</span>
             </div>
