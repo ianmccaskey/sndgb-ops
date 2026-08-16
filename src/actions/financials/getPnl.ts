@@ -21,6 +21,8 @@ function getPnl() {
           SELECT gbp.group_buy_id, a.beneficiary, SUM(a.qty * gbp.gb_price_usd) AS value_usd, COUNT(*) AS cnt
           FROM admin_adjustments a
           JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
+          -- at-cost rows are margin-waived sales, not payout adjustments
+          WHERE a.pricing = 'gb'
           GROUP BY gbp.group_buy_id, a.beneficiary
         ) t
         GROUP BY t.group_buy_id

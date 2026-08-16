@@ -10,29 +10,48 @@ import { action } from '@uibakery/data';
  * profit before the split) or a profit_splits.party name (value comes out of
  * that person's payout). Validated against profit_splits here — party names
  * are data, not an enum.
+ *
+ * pricing 'cost' = an AT-COST sale to a customer outside the group buy:
+ * kits join vendor demand but P&L waives their margin (net zero — the
+ * customer pays vendor cost + per-kit freight, snapshotted as expected_usd,
+ * the receivable). Guards for cost rows: qty POSITIVE (you can't un-sell at
+ * cost), product NOT tiered (incremental vendor cost of a tiered line is
+ * not qty × unit_cost, so exact P&L neutrality can't be guaranteed);
+ * beneficiary is stored 'both' but excluded from all payout math by
+ * pricing filters.
  */
 function addAdjustment() {
   return action('addAdjustment', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      INSERT INTO admin_adjustments (group_buy_product_id, qty, reason, created_by, beneficiary)
+      INSERT INTO admin_adjustments (group_buy_product_id, qty, reason, created_by, beneficiary, pricing, expected_usd)
       SELECT
-        {{params.group_buy_product_id}}::bigint,
+        gbp.id,
         ({{params.qty}})::numeric,
         {{params.reason}},
         {{params.created_by}},
-        {{params.beneficiary}}
-      WHERE ({{params.qty}})::text ~ '^-?[0-9]+(\\.[0-9]{1,2})?$'
+        CASE WHEN COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost' THEN 'both' ELSE {{params.beneficiary}} END,
+        COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb'),
+        CASE WHEN COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
+             THEN ROUND(({{params.qty}})::numeric * (gbp.unit_cost_usd + gbp.freight_usd), 2)
+             ELSE NULL END
+      FROM group_buy_products gbp
+      WHERE gbp.id = {{params.group_buy_product_id}}::bigint
+        AND ({{params.qty}})::text ~ '^-?[0-9]+(\\.[0-9]{1,2})?$'
         AND ({{params.qty}})::numeric <> 0
-        AND ({{params.beneficiary}} = 'both'
+        AND COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') IN ('gb', 'cost')
+        AND (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'gb'
+             -- at-cost rows: positive qty, flat-cost product only
+             OR (({{params.qty}})::numeric > 0 AND gbp.cost_tier_qty IS NULL))
+        AND (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
+             OR {{params.beneficiary}} = 'both'
              -- party must have a split in THE GROUP BUY BEING ADJUSTED —
              -- a party from another campaign would be aggregated by getPnl
              -- but deducted from no one's payout (phantom profit returns)
              OR EXISTS (
                SELECT 1
-               FROM group_buy_products gbp
-               JOIN profit_splits ps ON ps.group_buy_id = gbp.group_buy_id
-               WHERE gbp.id = {{params.group_buy_product_id}}::bigint
+               FROM profit_splits ps
+               WHERE ps.group_buy_id = gbp.group_buy_id
                  AND ps.party = {{params.beneficiary}}
              ))
       RETURNING id

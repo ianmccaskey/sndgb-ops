@@ -24,7 +24,7 @@ type Pnl = {
   product_revenue_usd: string; order_count: string; admin_fee_revenue_usd: string;
   shipping_fee_revenue_usd: string; insurance_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string;
   product_profit_usd: string; expenses_usd: string; label_costs_usd: string; net_profit_usd: string;
-  direct_freight_usd: string; split_fees_usd: string;
+  direct_freight_usd: string; split_fees_usd: string; at_cost_margin_usd: string;
   comps_usd: string; credits_usd: string; writeoffs_usd: string; adj_both_usd: string;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
   splits: { party: string; pct: string }[] | null;
@@ -190,6 +190,9 @@ export function FinancialsPage() {
             )}
             {Number(pnl?.writeoffs_usd) > 0 && (
               <div className="flex justify-between"><span className="text-muted-foreground">Write-offs (forgiven shortfalls)</span><span className="text-red-600">−{fmtUSD(pnl?.writeoffs_usd)}</span></div>
+            )}
+            {Number(pnl?.at_cost_margin_usd) !== 0 && (
+              <div className="flex justify-between"><span className="text-muted-foreground" title="Kits sold to outside customers at vendor cost + freight — this waives their GB-price margin so the sale nets zero in P&L">At-cost sales (margin waived)</span><span className="text-red-600">−{fmtUSD(pnl?.at_cost_margin_usd)}</span></div>
             )}
             {Number(pnl?.adj_both_usd) !== 0 && (
               <div className="flex justify-between">

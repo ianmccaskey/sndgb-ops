@@ -9,11 +9,12 @@ import markOrderedFromVendor from '@/actions/campaign/markOrderedFromVendor';
 import listAdjustments from '@/actions/campaign/listAdjustments';
 import addAdjustment from '@/actions/campaign/addAdjustment';
 import deleteAdjustment from '@/actions/campaign/deleteAdjustment';
+import markAdjustmentReceived from '@/actions/campaign/markAdjustmentReceived';
 import getPnl from '@/actions/financials/getPnl';
 import { useApp } from '@/app/AppContext';
 import { OrderingAppSync } from '@/app/pages/products/OrderingAppSync';
 import { rows, firstRow } from '@/lib/rows';
-import { fmtUSD, fmtNum, fmtDateTime } from '@/lib/fmt';
+import { fmtUSD, fmtNum, fmtDate, fmtDateTime } from '@/lib/fmt';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -35,7 +36,10 @@ type CampaignProduct = {
   cost_tier_qty: string | null; cost_tier_price: string | null;
   direct_freight_usd: string; direct_box_kits: string; split_fee_usd: string;
 };
-type Adjustment = { id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string };
+type Adjustment = {
+  id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string;
+  pricing: string; expected_usd: string | null; received_at: string | null;
+};
 type SplitParty = { party: string; pct: string };
 
 export function ProductsPage() {
@@ -59,6 +63,7 @@ export function ProductsPage() {
   const [doMarkOrdered] = useMutateAction(markOrderedFromVendor);
   const [doAddAdj] = useMutateAction(addAdjustment);
   const [doDelAdj] = useMutateAction(deleteAdjustment);
+  const [doMarkReceived] = useMutateAction(markAdjustmentReceived);
 
   // add-to-campaign form
   const [cProduct, setCProduct] = useState('');
@@ -88,6 +93,7 @@ export function ProductsPage() {
   const [aQty, setAQty] = useState('');
   const [aReason, setAReason] = useState('');
   const [aFor, setAFor] = useState('both');
+  const [aPricing, setAPricing] = useState('gb'); // 'gb' | 'cost' (at-cost outside-GB sale)
   const [aError, setAError] = useState('');
 
   const saveCampaignProduct = async () => {
@@ -192,6 +198,12 @@ export function ProductsPage() {
     }
   };
 
+  // at-cost preview: what the outside customer owes (cost + freight per kit)
+  const aCostProduct = campaign.find(c => String(c.group_buy_product_id) === aProduct);
+  const aExpectedUsd = aPricing === 'cost' && aCostProduct && Number(aQty) > 0
+    ? Math.round(Number(aQty) * (Number(aCostProduct.unit_cost_usd) + Number(aCostProduct.freight_usd)) * 100) / 100
+    : null;
+
   const addAdj = async () => {
     const qty = Number(aQty);
     if (!aProduct || !qty || !aReason.trim()) {
@@ -204,16 +216,26 @@ export function ProductsPage() {
       setAError('Qty must have at most 2 decimal places (split kits use 0.5).');
       return;
     }
+    if (aPricing === 'cost') {
+      if (!(qty > 0)) { setAError('An at-cost sale needs a positive qty.'); return; }
+      if (aCostProduct?.cost_tier_price != null) {
+        setAError('At-cost sales are not supported on tiered-cost products — their incremental vendor cost is not qty × unit cost.');
+        return;
+      }
+    }
     setAError('');
     try {
       // The action refuses (returns no row) instead of letting Postgres
       // round an over-precision qty — surface that as an error, not success.
-      const res = await doAddAdj({ group_buy_product_id: Number(aProduct), qty, reason: aReason.trim(), created_by: userName, beneficiary: aFor });
+      const res = await doAddAdj({
+        group_buy_product_id: Number(aProduct), qty, reason: aReason.trim(), created_by: userName,
+        beneficiary: aFor, pricing: aPricing,
+      });
       // Mutate results can be an array of rows or a singleton object — treat
       // only an empty/absent result as refused (same handling as ImportPage).
       const wrote = Array.isArray(res) ? res.length > 0 : !!res;
-      if (!wrote) throw new Error('Adjustment refused: qty must be non-zero with at most 2 decimal places.');
-      setAQty(''); setAReason(''); setAFor('both');
+      if (!wrote) throw new Error('Adjustment refused: check qty (non-zero, max 2 decimals; positive and non-tiered product for at-cost).');
+      setAQty(''); setAReason(''); setAFor('both'); setAPricing('gb');
       reloadAdj(); reloadCampaign();
     } catch (e: unknown) {
       setAError(e instanceof Error ? e.message : 'Failed to add adjustment');
@@ -377,20 +399,36 @@ export function ProductsPage() {
                   </SelectContent>
                 </Select>
                 <Input placeholder="Qty (+/-)" value={aQty} onChange={e => setAQty(e.target.value)} className="h-9 w-24" />
-                <Select value={aFor} onValueChange={setAFor}>
-                  <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>
+                <Select value={aPricing} onValueChange={setAPricing}>
+                  <SelectTrigger className="h-9 w-44"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="both">Both</SelectItem>
-                    {splitParties.map(p => <SelectItem key={p.party} value={p.party}>{p.party}</SelectItem>)}
+                    <SelectItem value="gb">At GB price</SelectItem>
+                    <SelectItem value="cost">At vendor cost + freight</SelectItem>
                   </SelectContent>
                 </Select>
-                <Input placeholder="Reason (e.g. 'P&P personal x100')" value={aReason} onChange={e => setAReason(e.target.value)} className="h-9 flex-1 min-w-48" />
+                {aPricing === 'gb' && (
+                  <Select value={aFor} onValueChange={setAFor}>
+                    <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="both">Both</SelectItem>
+                      {splitParties.map(p => <SelectItem key={p.party} value={p.party}>{p.party}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                )}
+                <Input placeholder={aPricing === 'cost' ? 'Reason / customer (audited)' : "Reason (e.g. 'P&P personal x100')"} value={aReason} onChange={e => setAReason(e.target.value)} className="h-9 flex-1 min-w-48" />
                 <Button size="sm" onClick={addAdj}>Add</Button>
               </div>
               {aError && <p className="text-sm text-red-600">{aError}</p>}
-              <p className="text-xs text-muted-foreground">
-                "For" decides whose profit pays for these units at GB price: a person's adjustments come out of their split payout; "Both" comes out of total profit before the split.
-              </p>
+              {aPricing === 'gb' ? (
+                <p className="text-xs text-muted-foreground">
+                  "For" decides whose profit pays for these units at GB price: a person's adjustments come out of their split payout; "Both" comes out of total profit before the split.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  At-cost sale to a customer outside the group buy: the kits join what you order from the vendor, but P&L stays neutral — the customer owes vendor cost + per-kit freight
+                  {aExpectedUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(aExpectedUsd)}</span> for this line)</>}, tracked until you mark it received.
+                </p>
+              )}
             </CardContent>
           </Card>
           <div className="border rounded-lg overflow-x-auto">
@@ -412,8 +450,22 @@ export function ProductsPage() {
                   <TableRow key={a.id}>
                     <TableCell className="font-medium">{a.sku_code}</TableCell>
                     <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
-                    <TableCell>{a.beneficiary === 'both' ? 'Both' : a.beneficiary}</TableCell>
-                    <TableCell className="text-right">{fmtUSD(a.value_usd)}</TableCell>
+                    <TableCell>{a.pricing === 'cost' ? <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Sold at vendor cost + freight — P&L neutral">at cost</span> : a.beneficiary === 'both' ? 'Both' : a.beneficiary}</TableCell>
+                    <TableCell className="text-right">
+                      {a.pricing === 'cost' ? (
+                        a.received_at ? (
+                          <span className="text-green-700">{fmtUSD(a.expected_usd)}<span className="block text-[10px] font-normal">received {fmtDate(a.received_at)}</span></span>
+                        ) : (
+                          <span className="text-amber-700">
+                            awaiting {fmtUSD(a.expected_usd)}
+                            <Button size="sm" variant="outline" className="block h-6 px-1.5 mt-0.5 ml-auto text-[11px]"
+                              onClick={() => doMarkReceived({ adjustment_id: a.id, actor: userName }).then(() => reloadAdj())}>
+                              Mark received
+                            </Button>
+                          </span>
+                        )
+                      ) : fmtUSD(a.value_usd)}
+                    </TableCell>
                     <TableCell>{a.reason}</TableCell>
                     <TableCell>{a.created_by}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{fmtDateTime(a.created_at)}</TableCell>
