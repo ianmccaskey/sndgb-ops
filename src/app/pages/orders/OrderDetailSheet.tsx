@@ -1461,7 +1461,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   {addingRefund && (
                     <div className="flex flex-wrap gap-2 mt-1 items-center">
                       <Input placeholder="Refund $" value={refundAmt} onChange={e => setRefundAmt(e.target.value)} className="h-7 w-24 text-xs" />
-                      <Select value={refundMethod} onValueChange={setRefundMethod}>
+                      <Select value={refundMethod} onValueChange={v => { setRefundMethod(v); setRefundWallet(''); }}>
                         <SelectTrigger className="h-7 w-20 text-xs"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {['eth', 'sol', 'base', 'zelle', 'venmo', 'paypal', 'other'].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
@@ -1470,7 +1470,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       <Select value={refundWallet} onValueChange={setRefundWallet}>
                         <SelectTrigger className="h-7 w-36 text-xs"><SelectValue placeholder="From wallet (opt.)" /></SelectTrigger>
                         <SelectContent>
-                          {sheetWallets.filter(w => w.active).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                          {sheetWallets
+                            .filter(w => w.active && (['eth', 'sol', 'base'].includes(refundMethod) ? w.chain === refundMethod : w.chain === 'fiat'))
+                            .map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
                         </SelectContent>
                       </Select>
                       <Input placeholder="Tx ref (optional)" value={refundTxRef} onChange={e => setRefundTxRef(e.target.value)} className="h-7 flex-1 min-w-32 text-xs" />

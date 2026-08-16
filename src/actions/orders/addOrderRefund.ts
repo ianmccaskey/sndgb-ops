@@ -37,8 +37,16 @@ function addOrderRefund() {
           AND ({{params.amount_usd}})::numeric > 0
           AND ({{params.amount_usd}})::numeric <= cap.max_refund
           AND LENGTH(TRIM({{params.reason}})) > 0
+          -- the wallet (when given) must exist AND its chain must match the
+          -- refund method: rail cards attribute wallet-linked refunds by
+          -- wallet chain, so a mismatched wallet would move the outflow onto
+          -- the wrong rail card. Crypto methods need the same-chain wallet;
+          -- P2P/cash methods need a fiat wallet (or none).
           AND (NULLIF({{params.wallet_id}}::text, '') IS NULL OR EXISTS (
-            SELECT 1 FROM wallets w WHERE w.id = NULLIF({{params.wallet_id}}::text, '')::bigint
+            SELECT 1 FROM wallets w
+            WHERE w.id = NULLIF({{params.wallet_id}}::text, '')::bigint
+              AND ((({{params.method}})::text IN ('eth', 'sol', 'base') AND w.chain::text = ({{params.method}})::text)
+                   OR (({{params.method}})::text NOT IN ('eth', 'sol', 'base') AND w.chain = 'fiat'))
           ))
         RETURNING id, order_id, amount_usd, method, wallet_id, tx_ref, reason
       ), wo_clear AS (

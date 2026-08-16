@@ -18,14 +18,22 @@ function addOrderCredit() {
     query: `
       WITH lck AS (
         SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
+      ), cap AS (
+        -- a credit can never push due negative: an oversized credit would
+        -- manufacture synthetic overpay the refund path could then accept.
+        -- Read under the lock — every due writer serializes on 42001.
+        SELECT GREATEST(r.due_usd, 0) AS max_credit
+        FROM lck, v_order_reconciliation r
+        WHERE r.order_id = {{params.order_id}}::bigint
       ), ins AS (
         INSERT INTO order_credits (order_id, amount_usd, reason, created_by)
         SELECT o.id, {{params.amount_usd}}::numeric, TRIM({{params.reason}}), {{params.actor}}
-        FROM lck, orders o
+        FROM cap, orders o
         WHERE o.id = {{params.order_id}}::bigint
           AND o.status NOT IN ('cancelled', 'refunded')
           AND ({{params.amount_usd}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.amount_usd}})::numeric > 0
+          AND ({{params.amount_usd}})::numeric <= cap.max_credit
           AND LENGTH(TRIM({{params.reason}})) > 0
         RETURNING id, order_id, amount_usd, reason
       ), wo_clear AS (
@@ -42,7 +50,8 @@ function addOrderCredit() {
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
       SELECT 'order_credits', ins.id::text, 'order_credit_added', {{params.actor}},
-             jsonb_build_object('order_id', ins.order_id, 'amount_usd', ins.amount_usd, 'reason', ins.reason)
+             jsonb_build_object('order_id', ins.order_id, 'amount_usd', ins.amount_usd, 'reason', ins.reason,
+                                'max_credit_at_insert', (SELECT max_credit FROM cap))
       FROM ins
       RETURNING row_pk AS id
     `,
