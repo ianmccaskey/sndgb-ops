@@ -11,6 +11,13 @@
 -- v_product_profit.total_product_profit_usd. Testing cost stays flat per
 -- line (it is genuinely a one-time per-product lab fee).
 
+-- A negative freight rate multiplied by kit count would ERASE vendor
+-- liability at scale (a -4.25 typo on 742 kits hides $3,153.50 owed), so
+-- the rate is constrained non-negative at the table — every entry path
+-- (campaign form, direct SQL) fails loudly instead of storing it.
+ALTER TABLE group_buy_products
+  ADD CONSTRAINT group_buy_products_freight_nonneg CHECK (freight_usd >= 0);
+
 CREATE OR REPLACE VIEW v_product_profit AS
 SELECT m.group_buy_product_id,
   m.group_buy_id,
