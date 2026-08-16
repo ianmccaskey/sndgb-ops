@@ -9,13 +9,12 @@ function getOrder() {
              r.comp_usd, r.writeoff_usd, r.due_usd, r.pending_payment_count,
              r.credits_usd, r.refunds_usd,
              -- split-kit fee already inside total_usd (the ordering app adds
-             -- it): decomposed here so the fee box can show its own line
-             (SELECT COALESCE(SUM(gbp2.split_fee_usd), 0)
+             -- it): the ORDER-TIME SNAPSHOT on each line is summed here, so a
+             -- later campaign-config fee change never rewrites this order
+             (SELECT COALESCE(SUM(oi2.split_fee_usd), 0)
               FROM order_items oi2
-              JOIN group_buy_products gbp2 ON gbp2.id = oi2.group_buy_product_id
               WHERE oi2.order_id = o.id AND oi2.removed_at IS NULL
-                AND COALESCE(oi2.qty_override, oi2.qty) % 1 <> 0
-                AND gbp2.split_fee_usd > 0) AS split_fee_usd
+                AND oi2.split_fee_usd > 0) AS split_fee_usd
       FROM orders o
       JOIN customers c ON c.id = o.customer_id
       LEFT JOIN v_order_reconciliation r ON r.order_id = o.id

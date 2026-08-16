@@ -40,9 +40,14 @@ function upsertOrderItem() {
           AND (SELECT COUNT(*) FROM lck) >= 0
         FOR UPDATE OF oi
       ), ins AS (
-        INSERT INTO order_items (order_id, group_buy_product_id, qty, unit_price_usd, direct_ship)
+        INSERT INTO order_items (order_id, group_buy_product_id, qty, unit_price_usd, direct_ship, split_fee_usd)
         SELECT {{params.order_id}}::bigint, gbp.id, {{params.qty}}::numeric, gbp.gb_price_usd,
-               COALESCE(NULLIF({{params.direct_ship}}::text, '')::boolean, false)
+               COALESCE(NULLIF({{params.direct_ship}}::text, '')::boolean, false),
+               -- ORDER-TIME split-fee snapshot: a fractional upstream qty
+               -- means the ordering app charged the split fee at the current
+               -- rate; frozen on the line so later config edits can't
+               -- rewrite this order's money
+               CASE WHEN {{params.qty}}::numeric % 1 <> 0 THEN gbp.split_fee_usd ELSE 0 END
         FROM products p
         JOIN group_buy_products gbp ON gbp.product_id = p.id
           AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
@@ -58,6 +63,13 @@ function upsertOrderItem() {
           -- stops — the upstream header total carries the money from here)
           item_source = 'import',
           comp_qty = LEAST(order_items.comp_qty, EXCLUDED.qty),
+          -- the snapshot refreshes ONLY when the upstream qty actually
+          -- changed (a new charging event); an unchanged line keeps the fee
+          -- it was charged at, whatever the config says today
+          split_fee_usd = CASE
+            WHEN order_items.qty IS DISTINCT FROM EXCLUDED.qty THEN EXCLUDED.split_fee_usd
+            ELSE order_items.split_fee_usd
+          END,
           -- direct-ship refreshes from the source only when the source
           -- actually knows (non-blank param — the paste path sends '') and
           -- the row hasn't been manually overridden by an operator. The
