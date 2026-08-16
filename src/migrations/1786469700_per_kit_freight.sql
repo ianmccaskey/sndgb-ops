@@ -47,18 +47,18 @@ SELECT v.id AS vendor_id,
   v.code AS vendor_code,
   gb.id AS group_buy_id,
   gb.name AS group_buy_name,
-  SUM(pp.owed_to_vendor_usd) + SUM(pp.freight_usd * pp.final_count) AS owed_usd,
+  SUM(pp.owed_to_vendor_usd) + SUM(CASE WHEN pp.final_count > 0 THEN pp.freight_usd * pp.final_count ELSE 0 END) AS owed_usd,
   SUM(pp.owed_to_vendor_usd) AS product_owed_usd,
-  SUM(pp.freight_usd * pp.final_count) AS freight_demand_usd,
+  SUM(CASE WHEN pp.final_count > 0 THEN pp.freight_usd * pp.final_count ELSE 0 END) AS freight_demand_usd,
   SUM(pp.final_count) AS kits_demand,
   COALESCE(vp.paid_usd, 0) AS paid_usd,
   COALESCE(vp.kits_paid, 0) AS kits_paid,
   COALESCE(vp.freight_paid_usd, 0) AS freight_paid_usd,
-  SUM(pp.owed_to_vendor_usd) + SUM(pp.freight_usd * pp.final_count) - COALESCE(vp.paid_usd, 0) AS balance_usd,
+  SUM(pp.owed_to_vendor_usd) + SUM(CASE WHEN pp.final_count > 0 THEN pp.freight_usd * pp.final_count ELSE 0 END) - COALESCE(vp.paid_usd, 0) AS balance_usd,
   CASE
     WHEN COALESCE(vp.paid_usd, 0) = 0 THEN 'unpaid'
-    WHEN COALESCE(vp.paid_usd, 0) < (SUM(pp.owed_to_vendor_usd) + SUM(pp.freight_usd * pp.final_count)) THEN 'partial'
-    WHEN COALESCE(vp.paid_usd, 0) = (SUM(pp.owed_to_vendor_usd) + SUM(pp.freight_usd * pp.final_count)) THEN 'paid'
+    WHEN COALESCE(vp.paid_usd, 0) < (SUM(pp.owed_to_vendor_usd) + SUM(CASE WHEN pp.final_count > 0 THEN pp.freight_usd * pp.final_count ELSE 0 END)) THEN 'partial'
+    WHEN COALESCE(vp.paid_usd, 0) = (SUM(pp.owed_to_vendor_usd) + SUM(CASE WHEN pp.final_count > 0 THEN pp.freight_usd * pp.final_count ELSE 0 END)) THEN 'paid'
     ELSE 'OVERPAID'
   END AS pay_status
 FROM v_product_profit pp

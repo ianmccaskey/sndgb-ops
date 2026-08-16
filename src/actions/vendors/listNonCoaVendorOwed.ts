@@ -21,7 +21,9 @@ function listNonCoaVendorOwed() {
     query: `
       WITH prod AS (
         SELECT pp.vendor_code, pp.group_buy_id,
-               COALESCE(SUM(pp.owed_to_vendor_usd + pp.freight_usd * pp.final_count)
+               -- final_count can go negative via admin adjustments — a negative
+               -- count must contribute zero freight, never a negative liability
+               COALESCE(SUM(pp.owed_to_vendor_usd + CASE WHEN pp.final_count > 0 THEN pp.freight_usd * pp.final_count ELSE 0 END)
                  FILTER (WHERE pp.sku_code NOT ILIKE 'COA%'), 0) AS noncoa_demand_usd
         FROM v_product_profit pp
         GROUP BY pp.vendor_code, pp.group_buy_id
