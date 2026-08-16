@@ -1444,15 +1444,19 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     {!addingCredit && (
                       <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={() => { setAddingCredit(true); setAddingRefund(false); setCrMsg(''); }}>Add credit</Button>
                     )}
-                    {!addingRefund && Number(o.diff_usd) < -0.005 && (
+                    {/* post-clear overpay: recording a refund auto-clears a standing
+                        write-off, which raises due by writeoff_usd — offer/prefill
+                        the amount that will still be over AFTER that clear (matches
+                        the server cap) */}
+                    {!addingRefund && Number(o.diff_usd) + Number(o.writeoff_usd || 0) < -0.005 && (
                       <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground"
                         onClick={() => {
                           setAddingRefund(true); setAddingCredit(false);
-                          setRefundAmt(String(-Number(o.diff_usd)));
+                          setRefundAmt(String(-(Number(o.diff_usd) + Number(o.writeoff_usd || 0))));
                           setRefundMethod(['eth', 'sol', 'base'].includes(o.payment_rail || '') ? (o.payment_rail as string) : 'zelle');
                           setRefundWallet(''); setCrMsg('');
                         }}>
-                        Record refund (over by {fmtUSD(-Number(o.diff_usd))})
+                        Record refund (over by {fmtUSD(-(Number(o.diff_usd) + Number(o.writeoff_usd || 0)))})
                       </Button>
                     )}
                   </div>

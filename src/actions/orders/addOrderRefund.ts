@@ -20,8 +20,12 @@ function addOrderRefund() {
         SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
       ), cap AS (
         -- overpay under the lock: every due/received writer serializes on
-        -- 42001, so this figure cannot move before the insert commits
-        SELECT GREATEST(-r.diff_usd, 0) AS max_refund
+        -- 42001, so this figure cannot move before the insert commits.
+        -- POST-CLEAR overpay: this action auto-clears a standing write-off,
+        -- which raises due by writeoff_usd — capping on the pre-clear
+        -- diff_usd would let a refund through that leaves the order short
+        -- by the cleared write-off once the delete below commits
+        SELECT GREATEST(-(r.diff_usd + r.writeoff_usd), 0) AS max_refund
         FROM lck, v_order_reconciliation r
         WHERE r.order_id = {{params.order_id}}::bigint
       ), ins AS (

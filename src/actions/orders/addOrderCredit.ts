@@ -22,7 +22,10 @@ function addOrderCredit() {
         -- a credit can never push due negative: an oversized credit would
         -- manufacture synthetic overpay the refund path could then accept.
         -- Read under the lock — every due writer serializes on 42001.
-        SELECT GREATEST(r.due_usd, 0) AS max_credit
+        -- POST-CLEAR due: this action auto-clears a standing write-off,
+        -- which raises due by writeoff_usd — the cap must reflect the due
+        -- that exists after the delete below commits
+        SELECT GREATEST(r.due_usd + r.writeoff_usd, 0) AS max_credit
         FROM lck, v_order_reconciliation r
         WHERE r.order_id = {{params.order_id}}::bigint
       ), ins AS (
