@@ -18,7 +18,9 @@ function listFreightByVendor() {
              ROUND(COALESCE(k.kit_freight_usd, 0) + COALESCE(d.direct_freight_usd, 0), 2) AS total_freight_usd
       FROM (
         SELECT vendor_code,
-               SUM(CASE WHEN final_count > 0 THEN freight_usd * final_count ELSE 0 END) AS kit_freight_usd
+               -- freight is paid on whole kits BOUGHT (ordered_kits rounds
+               -- half-kit demand up), matching v_vendor_balances
+               SUM(CASE WHEN final_count > 0 THEN freight_usd * ordered_kits ELSE 0 END) AS kit_freight_usd
         FROM v_product_profit
         WHERE group_buy_id = {{params.group_buy_id}}::bigint
         GROUP BY vendor_code

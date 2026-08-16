@@ -33,7 +33,7 @@ type CampaignProduct = {
   ordered_from_vendor_at: string | null;
   qty_cap: string | null;
   cost_tier_qty: string | null; cost_tier_price: string | null;
-  direct_freight_usd: string; direct_box_kits: string;
+  direct_freight_usd: string; direct_box_kits: string; split_fee_usd: string;
 };
 type Adjustment = { id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string };
 type SplitParty = { party: string; pct: string };
@@ -70,6 +70,7 @@ export function ProductsPage() {
   const [cFreight, setCFreight] = useState('0');
   const [cDirectFreight, setCDirectFreight] = useState('0'); // $ per box, direct-ship lines only
   const [cDirectBox, setCDirectBox] = useState('30'); // kits per box
+  const [cSplitFee, setCSplitFee] = useState('0'); // $ per split (half) kit line
   const [cCap, setCCap] = useState(''); // optional max available; '' = uncapped
   const [cTierPrice, setCTierPrice] = useState(''); // optional tiered cost: $ per N units
   const [cTierQty, setCTierQty] = useState('');
@@ -127,6 +128,7 @@ export function ProductsPage() {
         unit_cost_usd: unitCost, margin_usd: margin, target_moq: Number(cMoq),
         testing_cost_usd: Number(cTesting || 0), freight_usd: Number(cFreight || 0),
         direct_freight_usd: cDirectFreight.trim(), direct_box_kits: cDirectBox.trim(),
+        split_fee_usd: cSplitFee.trim(),
         qty_cap: cCap.trim(),
         cost_tier_qty: tiered ? cTierQty.trim() : '',
         cost_tier_price: tiered ? cTierPrice.trim() : '',
@@ -148,7 +150,7 @@ export function ProductsPage() {
   const resetCampaignForm = () => {
     setCEditing(null);
     setCProduct(''); setCVendor(''); setCCost(''); setCPrice(''); setCMoq('');
-    setCTesting('225'); setCFreight('0'); setCDirectFreight('0'); setCDirectBox('30');
+    setCTesting('225'); setCFreight('0'); setCDirectFreight('0'); setCDirectBox('30'); setCSplitFee('0');
     setCCap(''); setCTierPrice(''); setCTierQty('');
     setCError('');
   };
@@ -171,6 +173,7 @@ export function ProductsPage() {
     setCFreight(String(Number(c.freight_usd)));
     setCDirectFreight(String(Number(c.direct_freight_usd)));
     setCDirectBox(String(Number(c.direct_box_kits)));
+    setCSplitFee(String(Number(c.split_fee_usd)));
     setCCap(c.qty_cap == null ? '' : String(Number(c.qty_cap)));
     setCTierQty(c.cost_tier_qty == null ? '' : String(Number(c.cost_tier_qty)));
     setCTierPrice(c.cost_tier_price == null ? '' : String(Number(c.cost_tier_price)));
@@ -342,6 +345,7 @@ export function ProductsPage() {
                 <Input placeholder="Freight $/kit" value={cFreight} onChange={e => setCFreight(e.target.value)} className="h-9 w-24" />
                 <Input placeholder="Direct freight $/box" value={cDirectFreight} onChange={e => setCDirectFreight(e.target.value)} className="h-9 w-32" title="Internal cost per box the vendor charges to ship a direct-ship line to the customer (0 = none)" />
                 <Input placeholder="Box size (kits)" value={cDirectBox} onChange={e => setCDirectBox(e.target.value)} className="h-9 w-28" title="Kits per box — a 40-kit direct line in one order needs 2 boxes of 30" />
+                <Input placeholder="Split fee $" value={cSplitFee} onChange={e => setCSplitFee(e.target.value)} className="h-9 w-24" title="Fee the ordering app charges a customer for a half kit (0 = halves not offered)" />
                 <Input placeholder="Max available (optional)" value={cCap} onChange={e => setCCap(e.target.value)} className="h-9 w-44" />
                 <Input placeholder="Cost tier $ (optional)" value={cTierPrice} onChange={e => setCTierPrice(e.target.value)} className="h-9 w-36" />
                 <Input placeholder="…per N units" value={cTierQty} onChange={e => setCTierQty(e.target.value)} className="h-9 w-28" />

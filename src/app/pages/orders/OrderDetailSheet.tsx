@@ -65,6 +65,7 @@ type OrderRow = {
   recon_status: string | null; received_usd: string | null; override_usd: string | null;
   effective_received_usd: string | null; diff_usd: string | null;
   comp_usd: string | null; writeoff_usd: string | null; due_usd: string | null;
+  split_fee_usd: string | null;
   credits_usd: string | null; refunds_usd: string | null;
   pending_payment_count: string | null;
 };
@@ -788,7 +789,10 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         const expectedSubtotal = Math.round((b44.items || [])
           .reduce((s, x) => s + Number(x.quantity ?? 0) * Number(x.price ?? 0), 0) * 100) / 100;
         const upstreamFees = FEE_PUSH_MAP.reduce((s, f) => s + Number(b44[f.field] ?? 0), 0);
-        const expectedTotal = Math.round((expectedSubtotal + upstreamFees + Number(o.processor_fee_usd || 0)) * 100) / 100;
+        // split-kit fees live inside the upstream total but NOT in its named
+        // fee fields — without this term a correct split-order total would
+        // read as drift and get "repaired" $5 low
+        const expectedTotal = Math.round((expectedSubtotal + upstreamFees + Number(o.processor_fee_usd || 0) + Number(o.split_fee_usd || 0)) * 100) / 100;
         if (Math.round(Number(b44.total || 0) * 100) !== Math.round(expectedTotal * 100)) {
           if (!window.confirm(`The ordering app's items and fees match, but its TOTAL is ${fmtUSD(Number(b44.total || 0))} where ${fmtUSD(expectedTotal)} is expected (a partial earlier push, or an upstream edit).\n\nRepair the upstream total to ${fmtUSD(expectedTotal)}?`)) {
             setAddMsg('Upstream total left as-is — do NOT pull until it is fixed, or the fee edits will retire against the wrong total.');
@@ -1265,6 +1269,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             added here
                           </span>
                         )}
+                        {effQty(it) % 1 !== 0 && (
+                          <span
+                            className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                            title="Half kit — billed at half the kit price plus the split kit fee (already in the order total)"
+                          >
+                            split kit
+                          </span>
+                        )}
                         {it.direct_ship && (
                           <span
                             className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${it.direct_fulfilled_at ? 'bg-green-100 text-green-900' : 'bg-violet-100 text-violet-900'}`}
@@ -1372,6 +1384,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   <div className="flex justify-between"><span>Shipping fee{o.shipping_fee_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.shipping_fee_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.shipping_fee_override_usd, o.shipping_fee_usd))}</span></div>
                   {(eff(o.shipping_insurance_override_usd, o.shipping_insurance_usd) > 0 || o.shipping_insurance_override_usd != null) && (
                     <div className="flex justify-between"><span>Shipping insurance{o.shipping_insurance_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.shipping_insurance_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.shipping_insurance_override_usd, o.shipping_insurance_usd))}</span></div>
+                  )}
+                  {Number(o.split_fee_usd) > 0 && (
+                    <div className="flex justify-between"><span title="Charged by the ordering app for splitting a kit — already inside the total">Split kit fee</span><span>{fmtUSD(o.split_fee_usd)}</span></div>
                   )}
                   {Number(o.processor_fee_usd) > 0 && <div className="flex justify-between"><span>Processor fee</span><span>{fmtUSD(o.processor_fee_usd)}</span></div>}
                   <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{fmtUSD(o.total_usd)}</span></div>
