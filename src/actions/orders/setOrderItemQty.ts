@@ -53,6 +53,13 @@ function setOrderItemQty() {
           AND o.status NOT IN ('cancelled', 'refunded')
           AND oi.removed_at IS NULL
           AND ({{params.qty}}::text = '' OR ({{params.qty}}::text ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND NULLIF({{params.qty}}::text, '')::numeric > 0))
+          -- a local edit must not CREATE or DESTROY a split: the split fee is
+          -- charged by the ordering app and snapshotted from the upstream
+          -- qty, so a whole<->half transition here would move real money
+          -- (+/- the fee) that neither billed math nor the push carries.
+          -- Half-to-half (0.5 -> 1.5) and whole-to-whole edits stay allowed.
+          AND ((COALESCE(NULLIF({{params.qty}}::text, '')::numeric, oi.qty) % 1 = 0)
+               = (oi.qty % 1 = 0))
           AND COALESCE((
             SELECT sh.status::text FROM shipments sh
             WHERE sh.order_id = oi.order_id

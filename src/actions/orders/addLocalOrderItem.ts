@@ -55,6 +55,10 @@ function addLocalOrderItem() {
           ), 'pending') = 'pending'
           AND ({{params.qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.qty}})::numeric > 0
+          -- whole kits only: a fractional local line would owe the split
+          -- fee, which is charged by the ordering app — local billing has
+          -- no fee term, so a local half kit would bill wrong
+          AND ({{params.qty}})::numeric % 1 = 0
           AND (SELECT COUNT(*) FROM lck) >= 0
           AND NOT EXISTS (
             SELECT 1 FROM order_items oi

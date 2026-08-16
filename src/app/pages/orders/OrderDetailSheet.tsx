@@ -75,7 +75,7 @@ type ItemRow = {
   comp_qty: string; comp_reason: string | null; comp_value_usd: string;
   direct_ship: boolean; direct_ship_source: string; direct_fulfilled_at: string | null;
   item_source: string; product_external_id: string | null;
-  qty_override: string | null; removed_at: string | null;
+  qty_override: string | null; removed_at: string | null; split_fee_usd: string;
   sku_code: string; product_name: string;
 };
 type PaymentRow = {
@@ -865,16 +865,21 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         const pid = String(i.product_external_id);
         return s - (upstreamQty.get(pid) || 0) * (upstreamPrice.get(pid) || 0);
       }, 0) * 100) / 100;
+      // removing a split (half-kit) line also releases its charged split
+      // fee: the fee lives in the upstream TOTAL (not the subtotal), so it
+      // gets its own delta term. Whole<->half transitions are refused
+      // locally, so removals are the only path that moves a fee.
+      const splitFeeDelta = Math.round(removals.reduce((s, i) => s - Number(i.split_fee_usd || 0), 0) * 100) / 100;
       const feeDelta = Math.round(feeChanges.reduce((s, f) => s + (f.value! - f.current), 0) * 100) / 100;
       const itemsSummary = [
         toAdd.map(i => `add ${i.sku_code} × ${effQty(i)}`).join(', '),
         qtyEdits.map(i => `${i.sku_code} qty ${upstreamQty.get(String(i.product_external_id))} → ${Number(i.qty_override)}`).join(', '),
-        removals.map(i => `remove ${i.sku_code} × ${upstreamQty.get(String(i.product_external_id))}`).join(', '),
+        removals.map(i => `remove ${i.sku_code} × ${upstreamQty.get(String(i.product_external_id))}${Number(i.split_fee_usd || 0) > 0 ? ` (releases ${fmtUSD(i.split_fee_usd)} split fee)` : ''}`).join(', '),
       ].filter(Boolean).join('; ');
       const feesSummary = feeChanges.map(f => `${f.label} ${fmtUSD(f.current)} → ${fmtUSD(f.value!)}`).join(', ');
       const summary = [itemsSummary, feesSummary].filter(Boolean).join('; ');
       const productDelta = Math.round((addValue + editsDelta + removalsDelta) * 100) / 100;
-      const totalDelta = Math.round((productDelta + feeDelta) * 100) / 100;
+      const totalDelta = Math.round((productDelta + feeDelta + splitFeeDelta) * 100) / 100;
       // an order can't exist upstream with zero items — removing everything
       // is a cancellation, which has its own flow
       const removedIds = new Set(removals.map(i => String(i.product_external_id)));
