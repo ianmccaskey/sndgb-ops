@@ -7,7 +7,7 @@ import { action } from '@uibakery/data';
  * pool is on the hook for, not just the campaign currently selected.
  * Per vendor and campaign:
  *   demand = non-COA product cost owed (final counts) + those products'
- *            freight (only once a product has kits to buy)
+ *            freight (a per-kit rate × final count)
  *   paid   = every payment to the vendor EXCEPT ones attributed to a COA
  *            product (freight/unattributed rows are vendor-level money and
  *            count here; COA-attributed payments belong to the COA ledger)
@@ -21,7 +21,7 @@ function listNonCoaVendorOwed() {
     query: `
       WITH prod AS (
         SELECT pp.vendor_code, pp.group_buy_id,
-               COALESCE(SUM(pp.owed_to_vendor_usd + CASE WHEN pp.final_count > 0 THEN pp.freight_usd ELSE 0 END)
+               COALESCE(SUM(pp.owed_to_vendor_usd + pp.freight_usd * pp.final_count)
                  FILTER (WHERE pp.sku_code NOT ILIKE 'COA%'), 0) AS noncoa_demand_usd
         FROM v_product_profit pp
         GROUP BY pp.vendor_code, pp.group_buy_id

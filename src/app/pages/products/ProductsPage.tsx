@@ -332,7 +332,7 @@ export function ProductsPage() {
                 <Input placeholder="GB price $ (to customer)" value={cPrice} onChange={e => setCPrice(e.target.value)} className="h-9 w-44" />
                 <Input placeholder="Target MOQ" value={cMoq} onChange={e => setCMoq(e.target.value)} className="h-9 w-28" />
                 <Input placeholder="Testing $" value={cTesting} onChange={e => setCTesting(e.target.value)} className="h-9 w-24" />
-                <Input placeholder="Freight $" value={cFreight} onChange={e => setCFreight(e.target.value)} className="h-9 w-24" />
+                <Input placeholder="Freight $/kit" value={cFreight} onChange={e => setCFreight(e.target.value)} className="h-9 w-24" />
                 <Input placeholder="Max available (optional)" value={cCap} onChange={e => setCCap(e.target.value)} className="h-9 w-44" />
                 <Input placeholder="Cost tier $ (optional)" value={cTierPrice} onChange={e => setCTierPrice(e.target.value)} className="h-9 w-36" />
                 <Input placeholder="…per N units" value={cTierQty} onChange={e => setCTierQty(e.target.value)} className="h-9 w-28" />
