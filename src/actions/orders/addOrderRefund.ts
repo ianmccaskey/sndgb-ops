@@ -37,6 +37,13 @@ function addOrderRefund() {
           AND ({{params.amount_usd}})::numeric > 0
           AND ({{params.amount_usd}})::numeric <= cap.max_refund
           AND LENGTH(TRIM({{params.reason}})) > 0
+          -- the refund rail must MATCH the order's rail: the recon view
+          -- subtracts refunds from received on the ORDER's rail while the
+          -- rail cards attribute wallet outflows by chain — a cross-rail
+          -- refund would reduce one card's received and show the outflow on
+          -- another, fabricating drift on both
+          AND ((({{params.method}})::text IN ('eth', 'sol', 'base') AND o.payment_rail::text = ({{params.method}})::text)
+               OR (({{params.method}})::text NOT IN ('eth', 'sol', 'base') AND o.payment_rail::text = 'cash'))
           -- the wallet (when given) must exist AND its chain must match the
           -- refund method: rail cards attribute wallet-linked refunds by
           -- wallet chain, so a mismatched wallet would move the outflow onto

@@ -1445,7 +1445,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={() => { setAddingCredit(true); setAddingRefund(false); setCrMsg(''); }}>Add credit</Button>
                     )}
                     {!addingRefund && Number(o.diff_usd) < -0.005 && (
-                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={() => { setAddingRefund(true); setAddingCredit(false); setRefundAmt(String(-Number(o.diff_usd))); setCrMsg(''); }}>
+                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground"
+                        onClick={() => {
+                          setAddingRefund(true); setAddingCredit(false);
+                          setRefundAmt(String(-Number(o.diff_usd)));
+                          setRefundMethod(['eth', 'sol', 'base'].includes(o.payment_rail || '') ? (o.payment_rail as string) : 'zelle');
+                          setRefundWallet(''); setCrMsg('');
+                        }}>
                         Record refund (over by {fmtUSD(-Number(o.diff_usd))})
                       </Button>
                     )}
@@ -1464,7 +1470,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       <Select value={refundMethod} onValueChange={v => { setRefundMethod(v); setRefundWallet(''); }}>
                         <SelectTrigger className="h-7 w-20 text-xs"><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          {['eth', 'sol', 'base', 'zelle', 'venmo', 'paypal', 'other'].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                          {/* the refund rail must match the order's rail (server-enforced) */}
+                          {(['eth', 'sol', 'base'].includes(o.payment_rail || '') ? [o.payment_rail as string] : ['zelle', 'venmo', 'paypal', 'other'])
+                            .map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
                         </SelectContent>
                       </Select>
                       <Select value={refundWallet} onValueChange={setRefundWallet}>
