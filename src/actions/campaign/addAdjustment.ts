@@ -47,7 +47,13 @@ function addAdjustment() {
              -- and receivable would use the raw fraction
              OR (({{params.qty}})::numeric > 0
                  AND ({{params.qty}})::numeric % 1 = 0
-                 AND gbp.cost_tier_qty IS NULL))
+                 AND gbp.cost_tier_qty IS NULL
+                 -- the product must ALREADY have positive demand: an at-cost
+                 -- row that flips final_count positive would drag the flat
+                 -- testing cost into P&L while the waiver covers only
+                 -- per-kit margin — neutrality would silently break
+                 AND (SELECT m.final_count FROM v_moq_progress m
+                      WHERE m.group_buy_product_id = gbp.id) > 0))
         AND (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
              OR {{params.beneficiary}} = 'both'
              -- party must have a split in THE GROUP BUY BEING ADJUSTED —
