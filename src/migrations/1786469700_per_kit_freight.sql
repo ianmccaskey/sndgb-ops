@@ -37,7 +37,10 @@ SELECT m.group_buy_product_id,
   CASE WHEN m.final_count > 0 THEN gbp.freight_usd ELSE 0 END AS freight_per_unit_usd,
   CASE WHEN m.final_count > 0 THEN ROUND((m.final_count * m.gb_price_usd - m.vendor_order_value_usd - gbp.testing_cost_usd - gbp.freight_usd * m.final_count) / m.final_count, 4) ELSE 0 END AS net_profit_per_unit_usd,
   CASE WHEN m.final_count > 0 THEN ROUND(m.final_count * m.gb_price_usd - m.vendor_order_value_usd - gbp.testing_cost_usd - gbp.freight_usd * m.final_count, 2) ELSE 0 END AS total_product_profit_usd,
-  m.vendor_order_value_usd AS owed_to_vendor_usd,
+  -- final_count can go negative via admin adjustments; a negative count
+  -- must never read as the vendor owing US product money — it would hide
+  -- real payable balances downstream (vendor cards, wallet coverage)
+  CASE WHEN m.final_count > 0 THEN m.vendor_order_value_usd ELSE 0 END AS owed_to_vendor_usd,
   ROUND(m.final_count * m.gb_price_usd, 2) AS expected_revenue_usd
 FROM v_moq_progress m
 JOIN group_buy_products gbp ON gbp.id = m.group_buy_product_id;
