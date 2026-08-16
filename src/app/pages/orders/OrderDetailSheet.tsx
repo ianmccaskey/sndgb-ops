@@ -107,9 +107,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const effQty = (i: ItemRow) => i.removed_at ? 0 : Number(i.qty_override ?? i.qty);
   const localItemsUsd = Math.round(items.filter(i => i.item_source === 'local')
     .reduce((s, i) => s + effQty(i) * Number(i.unit_price_usd), 0) * 100) / 100;
-  // imported rows: billed delta from qty edits / removals (negative when reduced)
+  // imported rows: billed delta from qty edits / removals (negative when
+  // reduced). A removed line also releases its charged split fee — same
+  // term as v_order_reconciliation's item delta and the push math, so the
+  // displayed Expected total never diverges from billed.
   const itemDeltaUsd = Math.round(items.filter(i => i.item_source === 'import')
-    .reduce((s, i) => s + (effQty(i) - Number(i.qty)) * Number(i.unit_price_usd), 0) * 100) / 100;
+    .reduce((s, i) => s + (effQty(i) - Number(i.qty)) * Number(i.unit_price_usd)
+      - (i.removed_at ? Number(i.split_fee_usd || 0) : 0), 0) * 100) / 100;
   const payments = rows<PaymentRow>(rawPayments);
 
   const [doUpdate] = useMutateAction(updateOrderAdmin);
