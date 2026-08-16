@@ -41,8 +41,13 @@ function addAdjustment() {
         AND ({{params.qty}})::numeric <> 0
         AND COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') IN ('gb', 'cost')
         AND (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'gb'
-             -- at-cost rows: positive qty, flat-cost product only
-             OR (({{params.qty}})::numeric > 0 AND gbp.cost_tier_qty IS NULL))
+             -- at-cost rows: positive WHOLE kits on a flat-cost product only.
+             -- Whole because a fractional at-cost qty would break neutrality:
+             -- vendor cost/freight follow CEIL(final_count) while the waiver
+             -- and receivable would use the raw fraction
+             OR (({{params.qty}})::numeric > 0
+                 AND ({{params.qty}})::numeric % 1 = 0
+                 AND gbp.cost_tier_qty IS NULL))
         AND (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
              OR {{params.beneficiary}} = 'both'
              -- party must have a split in THE GROUP BUY BEING ADJUSTED —

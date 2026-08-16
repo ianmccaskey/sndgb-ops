@@ -217,7 +217,7 @@ export function ProductsPage() {
       return;
     }
     if (aPricing === 'cost') {
-      if (!(qty > 0)) { setAError('An at-cost sale needs a positive qty.'); return; }
+      if (!(qty > 0) || qty % 1 !== 0) { setAError('An at-cost sale needs a positive WHOLE-kit qty (fractional kits would break the P&L-neutral math).'); return; }
       if (aCostProduct?.cost_tier_price != null) {
         setAError('At-cost sales are not supported on tiered-cost products — their incremental vendor cost is not qty × unit cost.');
         return;
