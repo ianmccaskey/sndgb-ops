@@ -6,7 +6,8 @@ function listRailRecon() {
     query: `
       SELECT rr.payment_rail, rr.order_count, rr.billed_usd, rr.received_usd, rr.gap_usd,
              ws.wallet_name, ws.wallet_balance_usd, ws.taken_at AS snapshot_at, ws.wallet_count,
-             vpo.vendor_paid_usd, vpo.vendor_paid_asof_usd
+             vpo.vendor_paid_usd, vpo.vendor_paid_asof_usd,
+             rfo.refunded_usd, rfo.refunded_asof_usd
       FROM v_rail_reconciliation rr
       -- ALL wallets on the rail, each at its latest snapshot, summed — the
       -- same scope as the payout sum below, so expected-vs-snapshot drift
@@ -67,6 +68,27 @@ function listRailRecon() {
           AND (w2.chain::text = rr.payment_rail::text
                OR (rr.payment_rail = 'cash' AND w2.chain = 'fiat'))
       ) vpo ON true
+      -- money RETURNED to customers out of this rail's wallet(s): same shape
+      -- and cutoff semantics as the vendor payouts above, so a refund never
+      -- reads as missing customer money on the wallet card. Only
+      -- wallet-linked refunds participate (a refund with no wallet has no
+      -- observable balance to explain).
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(orf.amount_usd), 0) AS refunded_usd,
+               COALESCE(SUM(orf.amount_usd) FILTER (WHERE rsnap.taken_at IS NOT NULL AND orf.created_at <= rsnap.taken_at), 0) AS refunded_asof_usd
+        FROM order_refunds orf
+        JOIN orders o3 ON o3.id = orf.order_id AND o3.group_buy_id = {{params.group_buy_id}}::bigint
+        JOIN wallets w3 ON w3.id = orf.wallet_id
+        LEFT JOIN LATERAL (
+          SELECT s.taken_at
+          FROM wallet_snapshots s
+          WHERE s.wallet_id = w3.id
+          ORDER BY s.taken_at DESC
+          LIMIT 1
+        ) rsnap ON true
+        WHERE (w3.chain::text = rr.payment_rail::text
+               OR (rr.payment_rail = 'cash' AND w3.chain = 'fiat'))
+      ) rfo ON true
       WHERE rr.group_buy_id = {{params.group_buy_id}}::bigint
       ORDER BY rr.payment_rail
     `,

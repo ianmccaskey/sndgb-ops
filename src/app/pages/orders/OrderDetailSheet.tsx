@@ -20,6 +20,13 @@ import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
 import setOrderFees from '@/actions/orders/setOrderFees';
 import setOrderItemQty from '@/actions/orders/setOrderItemQty';
 import removeOrderItem from '@/actions/orders/removeOrderItem';
+import addOrderCredit from '@/actions/orders/addOrderCredit';
+import deleteOrderCredit from '@/actions/orders/deleteOrderCredit';
+import addOrderRefund from '@/actions/orders/addOrderRefund';
+import deleteOrderRefund from '@/actions/orders/deleteOrderRefund';
+import listOrderCredits from '@/actions/orders/listOrderCredits';
+import listOrderRefunds from '@/actions/orders/listOrderRefunds';
+import listWallets from '@/actions/financials/listWallets';
 import deleteLocalOrderItem from '@/actions/orders/deleteLocalOrderItem';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import setOrderWriteoff from '@/actions/orders/setOrderWriteoff';
@@ -57,6 +64,7 @@ type OrderRow = {
   recon_status: string | null; received_usd: string | null; override_usd: string | null;
   effective_received_usd: string | null; diff_usd: string | null;
   comp_usd: string | null; writeoff_usd: string | null; due_usd: string | null;
+  credits_usd: string | null; refunds_usd: string | null;
   pending_payment_count: string | null;
 };
 
@@ -81,6 +89,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [rawItems, , , reloadItems] = useLoadAction(getOrderItems, [orderId], { order_id: orderId }, { enabled: open });
   const [rawPayments, , , reloadPayments] = useLoadAction(listOrderPayments, [orderId], { order_id: orderId }, { enabled: open });
   const [rawCampaignProducts] = useLoadAction(listCampaignProducts, [groupBuyId, open], { group_buy_id: groupBuyId }, { enabled: open && groupBuyId != null });
+  const [rawCredits, , , reloadCredits] = useLoadAction(listOrderCredits, [orderId], { order_id: orderId }, { enabled: open });
+  const [rawRefunds, , , reloadRefunds] = useLoadAction(listOrderRefunds, [orderId], { order_id: orderId }, { enabled: open });
+  const [rawSheetWallets] = useLoadAction(listWallets, [open], {}, { enabled: open });
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
   const campaignProducts = rows<{ sku_code: string; gb_price_usd: string; status: string }>(rawCampaignProducts)
@@ -118,6 +129,10 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doRemoveItem] = useMutateAction(removeOrderItem);
   const [fetchFreshOrder] = useMutateAction(getOrder);
   const [fetchFreshItems] = useMutateAction(getOrderItems);
+  const [doAddCredit] = useMutateAction(addOrderCredit);
+  const [doDelCredit] = useMutateAction(deleteOrderCredit);
+  const [doAddRefund] = useMutateAction(addOrderRefund);
+  const [doDelRefund] = useMutateAction(deleteOrderRefund);
   const [doDeleteLocalItem] = useMutateAction(deleteLocalOrderItem);
   const [doSetWriteoff] = useMutateAction(setOrderWriteoff);
   const [doUpdateRail] = useMutateAction(updateOrderRail);
@@ -152,6 +167,16 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [addMsg, setAddMsg] = useState('');
   const [qtyEditId, setQtyEditId] = useState<number | null>(null);
   const [qtyEditVal, setQtyEditVal] = useState('');
+  const [addingCredit, setAddingCredit] = useState(false);
+  const [creditAmt, setCreditAmt] = useState('');
+  const [creditReason, setCreditReason] = useState('');
+  const [addingRefund, setAddingRefund] = useState(false);
+  const [refundAmt, setRefundAmt] = useState('');
+  const [refundMethod, setRefundMethod] = useState('eth');
+  const [refundWallet, setRefundWallet] = useState('');
+  const [refundTxRef, setRefundTxRef] = useState('');
+  const [refundReason, setRefundReason] = useState('');
+  const [crMsg, setCrMsg] = useState('');
   const [editingFees, setEditingFees] = useState(false);
   const [feeAdmin, setFeeAdmin] = useState('');
   const [feeShipping, setFeeShipping] = useState('');
@@ -542,6 +567,76 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       reloadItems(); reloadOrder();
     } catch (e: unknown) {
       setAddMsg(e instanceof Error ? e.message : 'Failed to remove item');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Credits (price reductions agreed with the customer — reduce due, book
+  // in P&L like comps) and refunds (money returned from an overpay — reduce
+  // effective received, capped server-side at the current overpay).
+  type CreditRow = { id: number; amount_usd: string; reason: string; created_by: string | null; created_at: string };
+  type RefundRow = { id: number; amount_usd: string; method: string; wallet_id: number | null; wallet_name: string | null; tx_ref: string | null; reason: string; created_by: string | null; created_at: string };
+  const credits = rows<CreditRow>(rawCredits);
+  const refunds = rows<RefundRow>(rawRefunds);
+  const sheetWallets = rows<{ id: number; name: string; chain: string; active: boolean }>(rawSheetWallets);
+  const reloadMoney = () => { reloadCredits(); reloadRefunds(); reloadOrder(); };
+
+  const submitCredit = async () => {
+    if (!o) return;
+    if (!/^\d+(?:\.\d{1,2})?$/.test(creditAmt.trim()) || !(Number(creditAmt) > 0)) { setCrMsg('Credit must be a positive dollar amount, max 2 decimals.'); return; }
+    if (!creditReason.trim()) { setCrMsg('A reason is required — credits are audited money.'); return; }
+    setSaving(true); setCrMsg('');
+    try {
+      const res = await doAddCredit({ order_id: o.id, amount_usd: creditAmt.trim(), reason: creditReason.trim(), actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCrMsg('Credit refused — check the amount and reason.');
+      else { setAddingCredit(false); setCreditAmt(''); setCreditReason(''); }
+      reloadMoney();
+    } catch (e: unknown) {
+      setCrMsg(e instanceof Error ? e.message : 'Failed to add credit');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const removeCredit = async (c: CreditRow) => {
+    if (!o || !window.confirm(`Remove the ${fmtUSD(c.amount_usd)} credit (“${c.reason}”)? The order will owe that much more again.`)) return;
+    setSaving(true); setCrMsg('');
+    try {
+      await doDelCredit({ credit_id: c.id, order_id: o.id, actor: userName });
+      reloadMoney();
+    } catch (e: unknown) {
+      setCrMsg(e instanceof Error ? e.message : 'Failed to remove credit');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const submitRefund = async () => {
+    if (!o) return;
+    if (!/^\d+(?:\.\d{1,2})?$/.test(refundAmt.trim()) || !(Number(refundAmt) > 0)) { setCrMsg('Refund must be a positive dollar amount, max 2 decimals.'); return; }
+    if (!refundReason.trim()) { setCrMsg('A reason is required — refunds are audited money.'); return; }
+    setSaving(true); setCrMsg('');
+    try {
+      const res = await doAddRefund({
+        order_id: o.id, amount_usd: refundAmt.trim(), method: refundMethod,
+        wallet_id: refundWallet, tx_ref: refundTxRef.trim(), reason: refundReason.trim(), actor: userName,
+      }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCrMsg('Refund refused — it cannot exceed the current overpayment.');
+      else { setAddingRefund(false); setRefundAmt(''); setRefundTxRef(''); setRefundReason(''); setRefundWallet(''); }
+      reloadMoney();
+    } catch (e: unknown) {
+      setCrMsg(e instanceof Error ? e.message : 'Failed to record refund');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const removeRefund = async (rf: RefundRow) => {
+    if (!o || !window.confirm(`Remove the ${fmtUSD(rf.amount_usd)} refund record (“${rf.reason}”)? Only do this if it was recorded by mistake — it does not move any money.`)) return;
+    setSaving(true); setCrMsg('');
+    try {
+      await doDelRefund({ refund_id: rf.id, order_id: o.id, actor: userName });
+      reloadMoney();
+    } catch (e: unknown) {
+      setCrMsg(e instanceof Error ? e.message : 'Failed to remove refund');
     } finally {
       setSaving(false);
     }
@@ -1318,13 +1413,73 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   {Number(o.comp_usd) > 0 && (
                     <div className="flex justify-between text-green-700"><span>Comped items</span><span>−{fmtUSD(o.comp_usd)}</span></div>
                   )}
+                  {credits.map(c => (
+                    <div key={c.id} className="flex justify-between text-green-700 items-center gap-2">
+                      <span className="truncate" title={c.reason}>Credit — {c.reason}</span>
+                      <span className="flex items-center gap-1 shrink-0">
+                        −{fmtUSD(c.amount_usd)}
+                        <Button size="sm" variant="ghost" className="h-4 px-1 text-[10px] text-red-600" disabled={saving} onClick={() => removeCredit(c)}>✕</Button>
+                      </span>
+                    </div>
+                  ))}
                   {Number(o.writeoff_usd) > 0 && (
                     <div className="flex justify-between text-green-700"><span>Write-off</span><span>−{fmtUSD(o.writeoff_usd)}</span></div>
                   )}
-                  {(Number(o.comp_usd) > 0 || Number(o.writeoff_usd) > 0) && (
+                  {(Number(o.comp_usd) > 0 || Number(o.writeoff_usd) > 0 || credits.length > 0) && (
                     <div className="flex justify-between font-semibold text-foreground"><span>Due</span><span>{fmtUSD(o.due_usd)}</span></div>
                   )}
                   <div className="flex justify-between"><span>Received (effective)</span><span>{fmtUSD(o.effective_received_usd)}</span></div>
+                  {refunds.map(rf => (
+                    <div key={rf.id} className="flex justify-between text-amber-700 items-center gap-2">
+                      <span className="truncate" title={`${rf.reason}${rf.tx_ref ? ` · ${rf.tx_ref}` : ''}`}>
+                        Refunded ({rf.method}{rf.wallet_name ? ` · ${rf.wallet_name}` : ''}) — {rf.reason}
+                      </span>
+                      <span className="flex items-center gap-1 shrink-0">
+                        −{fmtUSD(rf.amount_usd)}
+                        <Button size="sm" variant="ghost" className="h-4 px-1 text-[10px] text-red-600" disabled={saving} onClick={() => removeRefund(rf)}>✕</Button>
+                      </span>
+                    </div>
+                  ))}
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {!addingCredit && (
+                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={() => { setAddingCredit(true); setAddingRefund(false); setCrMsg(''); }}>Add credit</Button>
+                    )}
+                    {!addingRefund && Number(o.diff_usd) < -0.005 && (
+                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={() => { setAddingRefund(true); setAddingCredit(false); setRefundAmt(String(-Number(o.diff_usd))); setCrMsg(''); }}>
+                        Record refund (over by {fmtUSD(-Number(o.diff_usd))})
+                      </Button>
+                    )}
+                  </div>
+                  {addingCredit && (
+                    <div className="flex flex-wrap gap-2 mt-1 items-center">
+                      <Input placeholder="Credit $" value={creditAmt} onChange={e => setCreditAmt(e.target.value)} className="h-7 w-24 text-xs" />
+                      <Input placeholder="Why is this credited? (audited)" value={creditReason} onChange={e => setCreditReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
+                      <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={submitCredit}>Save</Button>
+                      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setAddingCredit(false); setCrMsg(''); }}>Cancel</Button>
+                    </div>
+                  )}
+                  {addingRefund && (
+                    <div className="flex flex-wrap gap-2 mt-1 items-center">
+                      <Input placeholder="Refund $" value={refundAmt} onChange={e => setRefundAmt(e.target.value)} className="h-7 w-24 text-xs" />
+                      <Select value={refundMethod} onValueChange={setRefundMethod}>
+                        <SelectTrigger className="h-7 w-20 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {['eth', 'sol', 'base', 'zelle', 'venmo', 'paypal', 'other'].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Select value={refundWallet} onValueChange={setRefundWallet}>
+                        <SelectTrigger className="h-7 w-36 text-xs"><SelectValue placeholder="From wallet (opt.)" /></SelectTrigger>
+                        <SelectContent>
+                          {sheetWallets.filter(w => w.active).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Input placeholder="Tx ref (optional)" value={refundTxRef} onChange={e => setRefundTxRef(e.target.value)} className="h-7 flex-1 min-w-32 text-xs" />
+                      <Input placeholder="Why refunded? (audited)" value={refundReason} onChange={e => setRefundReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
+                      <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={submitRefund}>Save</Button>
+                      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setAddingRefund(false); setCrMsg(''); }}>Cancel</Button>
+                    </div>
+                  )}
+                  {crMsg && <p className="text-xs text-red-600 mt-0.5">{crMsg}</p>}
                   {(Number(o.diff_usd) > 0.005 || Number(o.writeoff_usd) > 0) && (
                     <div className="mt-1">
                       {Number(o.pending_payment_count) > 0 && Number(o.writeoff_usd) === 0 ? (
