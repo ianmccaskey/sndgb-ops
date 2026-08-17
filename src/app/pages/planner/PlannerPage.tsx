@@ -281,7 +281,10 @@ export function PlannerPage() {
   // live what-if: the coverage gap follows the outside/cash figures AS TYPED
   // (before Save), so the operator can dial the inputs until the allocations
   // are covered. Same waterfall as buildSankey, in integer cents; invalid or
-  // negative input counts as 0 rather than poisoning the number with NaN.
+  // negative input counts as 0 rather than poisoning the number with NaN,
+  // and attributable is capped at what the outside wallet holds — the same
+  // constraint Save enforces, so the box never shows "covered" on a figure
+  // that could not be saved.
   const liveShortfall = useMemo(() => {
     const c = (n: number) => Math.round(n * 100);
     const num = (s: string) => { const n = Number(s); return Number.isFinite(n) && n > 0 ? n : 0; };
@@ -290,9 +293,10 @@ export function PlannerPage() {
     const recvC = c(receivableTotal);
     const walletProfitC = Math.max(walletC - owedC, 0);
     const floatProfitC = recvC - Math.min(recvC, Math.max(owedC - walletC, 0));
-    const poolC = walletProfitC + floatProfitC + c(num(srcOutsideMax)) + c(num(srcCash));
+    const outsideC = Math.min(c(num(srcOutsideMax)), c(num(srcOutsideTotal)));
+    const poolC = walletProfitC + floatProfitC + outsideC + c(num(srcCash));
     return (c(allocTotal) - poolC) / 100;
-  }, [walletTotal, owedTotal, receivableTotal, srcOutsideMax, srcCash, allocTotal]);
+  }, [walletTotal, owedTotal, receivableTotal, srcOutsideMax, srcOutsideTotal, srcCash, allocTotal]);
 
   const sankey = useMemo(() => buildSankey({
     walletRows: cryptoWallets.map(w => ({ name: w.name, usd: Number(w.latest_balance_usd || 0) })),
