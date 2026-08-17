@@ -290,7 +290,7 @@ export function PlannerPage() {
   };
 
   const removeAllocation = async (it: PlanItem) => {
-    const res = await doDeleteItem({ item_id: it.id, actor: userName }) as unknown[] | null;
+    const res = await doDeleteItem({ item_id: it.id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
     if (!(Array.isArray(res) ? res.length > 0 : !!res)) { setAMsg('Not removed — an ordered line is locked to its vendor payment.'); return; }
     reloadPlan();
   };

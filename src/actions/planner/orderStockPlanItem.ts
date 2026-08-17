@@ -30,7 +30,12 @@ function orderStockPlanItem() {
                p.sku_code
         FROM stock_plan_items i
         JOIN stock_plans sp ON sp.id = i.plan_id AND sp.group_buy_id = {{params.group_buy_id}}::bigint
+        -- commit-time eligibility RE-CHECK: the product must STILL be active
+        -- and flat-cost — a tier conversion or cancellation between planning
+        -- and commit must refuse, not price a real payment off a stale formula
         JOIN group_buy_products gbp ON gbp.id = i.group_buy_product_id
+          AND gbp.status = 'active'
+          AND gbp.cost_tier_qty IS NULL
         JOIN products p ON p.id = gbp.product_id
         WHERE i.id = {{params.item_id}}::bigint
           AND i.ordered_at IS NULL

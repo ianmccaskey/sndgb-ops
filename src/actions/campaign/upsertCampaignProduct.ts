@@ -51,11 +51,20 @@ function upsertCampaignProduct() {
          ))
         -- a line with AT-COST adjustments must stay flat-cost: the P&L
         -- margin waiver assumes qty x unit_cost, and switching to tiered
-        -- pricing would silently break the sale's neutrality
-        AND (EXCLUDED.cost_tier_qty IS NULL OR NOT EXISTS (
-           SELECT 1 FROM admin_adjustments a
-           WHERE a.group_buy_product_id = group_buy_products.id
-             AND a.pricing = 'cost'
+        -- pricing would silently break the sale's neutrality. UNCOMMITTED
+        -- stock-plan lines pin flat-cost too — their commit prices a real
+        -- vendor payment as kits x (unit_cost + freight)
+        AND (EXCLUDED.cost_tier_qty IS NULL OR (
+           NOT EXISTS (
+             SELECT 1 FROM admin_adjustments a
+             WHERE a.group_buy_product_id = group_buy_products.id
+               AND a.pricing = 'cost'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM stock_plan_items spi
+             WHERE spi.group_buy_product_id = group_buy_products.id
+               AND spi.ordered_at IS NULL
+           )
          ))
       RETURNING id
     `,
