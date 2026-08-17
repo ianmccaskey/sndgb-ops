@@ -17,12 +17,20 @@ function upsertStockPlanItem() {
         VALUES ({{params.group_buy_id}}::bigint, {{params.actor}})
         ON CONFLICT (group_buy_id) DO UPDATE SET updated_at = now()
         RETURNING id
+      ), gbp_lock AS (
+        -- lock the product row while validating eligibility: a concurrent
+        -- tier conversion (upsertCampaignProduct's DO UPDATE locks the same
+        -- row) serializes with this insert, so a tiered product can never
+        -- gain a plan line after its conversion committed
+        SELECT gbp.id, gbp.group_buy_id, gbp.status, gbp.cost_tier_qty
+        FROM group_buy_products gbp
+        WHERE gbp.id = {{params.group_buy_product_id}}::bigint
+        FOR UPDATE OF gbp
       ), up AS (
         INSERT INTO stock_plan_items (plan_id, group_buy_product_id, kits, created_by)
         SELECT plan.id, gbp.id, ({{params.kits}})::numeric, {{params.actor}}
         FROM plan
-        JOIN group_buy_products gbp ON gbp.id = {{params.group_buy_product_id}}::bigint
-          AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
+        JOIN gbp_lock gbp ON gbp.group_buy_id = {{params.group_buy_id}}::bigint
           AND gbp.status = 'active'
           AND gbp.cost_tier_qty IS NULL
         WHERE ({{params.kits}})::text ~ '^[0-9]+$'

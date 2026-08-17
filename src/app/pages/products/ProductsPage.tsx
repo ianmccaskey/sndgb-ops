@@ -143,7 +143,7 @@ export function ProductsPage() {
       // attributed to this product under its current vendor).
       const wrote = Array.isArray(res) ? res.length > 0 : !!res;
       if (!wrote) {
-        setCError('Not saved — either the vendor cannot change (vendor payments are attributed to this product; remove/reassign them on the Vendors page first), or you are adding a cost tier to a product that has at-cost adjustments (tiered pricing would break their P&L-neutral math; delete those adjustments first).');
+        setCError('Not saved — either the vendor cannot change (vendor payments are attributed to this product; remove/reassign them on the Vendors page first), or you are adding a cost tier to a product that has at-cost adjustments or stock-plan lines (their math assumes flat cost; remove those first).');
         return;
       }
       resetCampaignForm();
