@@ -39,7 +39,10 @@ function orderStockPlanItem() {
         JOIN products p ON p.id = gbp.product_id
         WHERE i.id = {{params.item_id}}::bigint
           AND i.ordered_at IS NULL
-        FOR UPDATE OF i
+        -- lock the PRODUCT row too: the payment amount is priced from
+        -- gbp.unit_cost/freight, so a concurrent campaign-product edit
+        -- must serialize with this commit — never a stale price
+        FOR UPDATE OF i, gbp
       ), lck AS (
         SELECT pg_advisory_xact_lock(42002, hashtext(itm.vendor_id::text || ':' || itm.group_buy_id::text)) AS locked
         FROM itm
