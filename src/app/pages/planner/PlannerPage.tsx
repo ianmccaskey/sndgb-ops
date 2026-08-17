@@ -467,21 +467,21 @@ export function PlannerPage() {
           <CardContent className="space-y-3 text-sm">
             <div className="space-y-1">
               {cryptoWallets.map(w => (
-                <div key={w.id} className="flex justify-between">
-                  <span className="text-muted-foreground">{w.name} ({w.chain})</span>
-                  <span>
+                <div key={w.id} className="flex justify-between gap-2">
+                  <span className="text-muted-foreground min-w-0 truncate">{w.name} ({w.chain})</span>
+                  <span className="shrink-0 text-right">
                     {fmtUSD(w.latest_balance_usd || 0)}
-                    {w.latest_snapshot_at && <span className="block text-[10px] text-muted-foreground text-right">as of {fmtDateTime(w.latest_snapshot_at)}</span>}
+                    {w.latest_snapshot_at && <span className="block text-[10px] text-muted-foreground">as of {fmtDateTime(w.latest_snapshot_at)}</span>}
                   </span>
                 </div>
               ))}
-              <div className="flex justify-between border-t pt-1">
-                <span className="text-muted-foreground">Owed to vendors (non-COA, all campaigns)</span>
-                <span className="text-red-600">−{fmtUSD(owedTotal)}</span>
+              <div className="flex justify-between gap-2 border-t pt-1">
+                <span className="text-muted-foreground min-w-0">Owed to vendors (non-COA, all campaigns)</span>
+                <span className="text-red-600 shrink-0 whitespace-nowrap">−{fmtUSD(owedTotal)}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Expected at-cost payments ({receivables.length})</span>
-                <span className="text-amber-700">{fmtUSD(receivableTotal)}</span>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground min-w-0">Expected at-cost payments ({receivables.length})</span>
+                <span className="text-amber-700 shrink-0 whitespace-nowrap">{fmtUSD(receivableTotal)}</span>
               </div>
             </div>
             <div className="border-t pt-2 space-y-2">
@@ -505,11 +505,11 @@ export function PlannerPage() {
               <div className="border-t pt-2">
                 <p className="text-xs font-semibold uppercase text-muted-foreground mb-1">Awaiting at-cost payments</p>
                 {receivables.map(r => (
-                  <div key={r.id} className="flex justify-between text-xs">
-                    <span className="text-muted-foreground truncate" title={r.reason}>
-                      {r.sku_code} × {fmtNum(r.qty)}{r.preordered && <span className="text-sky-700"> (already ordered)</span>} — {r.reason}
+                  <div key={r.id} className="flex justify-between gap-2 text-xs">
+                    <span className="text-muted-foreground min-w-0 truncate" title={`${r.sku_code} × ${fmtNum(r.qty)}${r.preordered ? ' (already ordered)' : ''} — ${r.reason}`}>
+                      {r.sku_code} × {fmtNum(r.qty)}{r.preordered && <span className="text-sky-700"> (ordered)</span>} — {r.reason}
                     </span>
-                    <span className="text-amber-700 shrink-0 ml-2">{fmtUSD(r.expected_usd)}</span>
+                    <span className="text-amber-700 shrink-0 whitespace-nowrap">{fmtUSD(r.expected_usd)}</span>
                   </div>
                 ))}
               </div>
@@ -540,8 +540,8 @@ export function PlannerPage() {
             {aMsg && <p className="text-xs text-red-600">{aMsg}</p>}
             <div className="space-y-1 pt-1">
               {items.map(it => (
-                <div key={it.id} className="flex items-center justify-between gap-2 border-b last:border-0 pb-1">
-                  <span className="min-w-0 truncate">
+                <div key={it.id} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b last:border-0 pb-1">
+                  <span className="min-w-0 flex-1 truncate">
                     {it.sku_code} × {fmtNum(it.kits)}
                     <span className="text-muted-foreground"> · {it.vendor_code}</span>
                     {it.ordered_at && (
@@ -549,7 +549,7 @@ export function PlannerPage() {
                         title={`Vendor payment recorded ${fmtDateTime(it.ordered_at)} by ${it.ordered_by}`}>ordered</span>
                     )}
                   </span>
-                  <span className="flex items-center gap-1.5 shrink-0">
+                  <span className="flex items-center gap-1.5 shrink-0 whitespace-nowrap ml-auto">
                     {fmtUSD(it.ordered_at ? (it.ordered_value_usd ?? it.planned_value_usd) : it.planned_value_usd)}
                     {!it.ordered_at && (
                       <>
