@@ -4,14 +4,12 @@ import getStockPlan from '@/actions/planner/getStockPlan';
 import saveStockPlanSources from '@/actions/planner/saveStockPlanSources';
 import upsertStockPlanItem from '@/actions/planner/upsertStockPlanItem';
 import deleteStockPlanItem from '@/actions/planner/deleteStockPlanItem';
-import markStockPlanItemOrdered from '@/actions/planner/markStockPlanItemOrdered';
+import orderStockPlanItem from '@/actions/planner/orderStockPlanItem';
 import listAtCostReceivables from '@/actions/planner/listAtCostReceivables';
 import listWallets from '@/actions/financials/listWallets';
-import listVendors from '@/actions/vendors/listVendors';
 import listVendorProductProgress from '@/actions/vendors/listVendorProductProgress';
 import listNonCoaVendorOwed from '@/actions/vendors/listNonCoaVendorOwed';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
-import addVendorPayment from '@/actions/vendors/addVendorPayment';
 import addWalletSnapshot from '@/actions/financials/addWalletSnapshot';
 import { getEvmBalances } from '@/lib/moralis';
 import { getSolBalances } from '@/lib/helius';
@@ -61,7 +59,6 @@ type Wallet = {
   id: number; name: string; chain: string; address: string | null; active: boolean;
   latest_balance_usd: string | null; latest_snapshot_at: string | null;
 };
-type Vendor = { id: number; code: string; active: boolean };
 type OwedRow = { vendor_code: string; owed_usd: string };
 type Receivable = { id: number; sku_code: string; qty: string; expected_usd: string; reason: string; created_at: string };
 type CampaignProduct = {
@@ -165,7 +162,6 @@ export function PlannerPage() {
   const enabled = groupBuyId != null;
   const [rawPlan, , , reloadPlan] = useLoadAction(getStockPlan, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
-  const [rawVendors] = useLoadAction(listVendors, [], {});
   const [rawOwed] = useLoadAction(listNonCoaVendorOwed, [], {});
   const [rawRecv] = useLoadAction(listAtCostReceivables, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
@@ -173,7 +169,6 @@ export function PlannerPage() {
 
   const plan = firstRow<Plan>(rawPlan);
   const wallets = rows<Wallet>(rawWallets);
-  const vendors = rows<Vendor>(rawVendors);
   const owedRows = rows<OwedRow>(rawOwed);
   const receivables = rows<Receivable>(rawRecv);
   const products = rows<CampaignProduct>(rawProducts);
@@ -183,8 +178,7 @@ export function PlannerPage() {
   const [doSaveSources] = useMutateAction(saveStockPlanSources);
   const [doUpsertItem] = useMutateAction(upsertStockPlanItem);
   const [doDeleteItem] = useMutateAction(deleteStockPlanItem);
-  const [doMarkOrdered] = useMutateAction(markStockPlanItemOrdered);
-  const [doPay] = useMutateAction(addVendorPayment);
+  const [doOrderItem] = useMutateAction(orderStockPlanItem);
   const [doSnapshot] = useMutateAction(addWalletSnapshot);
 
   // sources form (prefilled from the saved plan once it loads)
@@ -309,13 +303,7 @@ export function PlannerPage() {
     if (!ordering) return;
     if (!oDate) { setOMsg('Date is required.'); return; }
     if (!oWallet) { setOMsg('Pick the wallet the payment came from.'); return; }
-    const vendor = vendors.find(v => v.code === ordering.vendor_code);
-    if (!vendor) { setOMsg('Vendor not found.'); return; }
     const kits = Number(ordering.kits);
-    // one payment line carrying the FULL cost+freight value: floating kits
-    // are not in freight demand, so the vendor freight ledger (demand-capped)
-    // deliberately isn't used — the note carries the breakdown
-    const amount = Math.round(kits * (Number(ordering.unit_cost_usd) + Number(ordering.freight_usd)) * 100) / 100;
     const prog = progress.find(p => Number(p.group_buy_product_id) === Number(ordering.group_buy_product_id));
     const kitsOwed = prog ? Math.round((Number(prog.kits_demand) - Number(prog.kits_paid)) * 100) / 100 : 0;
     const over = kits > kitsOwed;
@@ -325,20 +313,18 @@ export function PlannerPage() {
     }
     setOSaving(true); setOMsg('');
     try {
-      const res = await doPay({
-        vendor_id: vendor.id, group_buy_id: groupBuyId, paid_on: oDate,
-        amount_usd: amount, wallet_id: oWallet, method: oMethod, receipt_ref: oRef.trim(),
-        note: `stock plan: ${ordering.sku_code} × ${fmtNum(kits)} personal stock (cost+freight)`,
-        kits_qty: String(kits), freight_usd: '', group_buy_product_id: String(ordering.group_buy_product_id),
+      // ONE atomic server action: the vendor payment and the plan stamp
+      // commit together (the amount is computed server-side from the plan
+      // line) — a retry or concurrent click sees the row locked/ordered and
+      // refuses BEFORE any payment is inserted
+      const res = await doOrderItem({
+        item_id: ordering.id, group_buy_id: groupBuyId, paid_on: oDate,
+        wallet_id: oWallet, method: oMethod, receipt_ref: oRef.trim(),
         allow_over: over ? 'true' : '', confirmed_owed: over ? String(Math.max(kitsOwed, 0)) : '',
+        actor: userName,
       }) as unknown[] | null;
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
-        setOMsg('Payment refused — owed changed while confirming (someone else recorded a payment?). Refresh and retry.');
-        return;
-      }
-      const marked = await doMarkOrdered({ item_id: ordering.id, ordered_value_usd: amount.toFixed(2), actor: userName }) as unknown[] | null;
-      if (!(Array.isArray(marked) ? marked.length > 0 : !!marked)) {
-        setOMsg('Payment recorded, but the plan line was already marked — check the Vendors page for a duplicate payment.');
+        setOMsg('Not recorded — the line is already ordered, or owed changed while confirming (someone else recorded a payment?). Refresh and retry.');
         return;
       }
       setOrdering(null);
