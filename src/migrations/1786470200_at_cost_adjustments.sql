@@ -32,7 +32,12 @@ SELECT gb.id AS group_buy_id,
   COALESCE(cred.credits_usd, 0) AS credits_usd,
   COALESCE(wo.writeoffs_usd, 0) AS writeoffs_usd,
   COALESCE(adjb.adj_both_usd, 0) AS adj_both_usd,
-  COALESCE(prod.expected_revenue_usd, 0) + COALESCE(ord.admin_fees_usd, 0) + COALESCE(ord.shipping_fees_usd, 0) + COALESCE(ord.insurance_usd, 0) + COALESCE(ord.tips_usd, 0) + COALESCE(spl.split_fees_usd, 0) - COALESCE(cmp.comps_usd, 0) - COALESCE(cred.credits_usd, 0) - COALESCE(wo.writeoffs_usd, 0) - COALESCE(adjb.adj_both_usd, 0) - COALESCE(atc.at_cost_margin_usd, 0) AS total_revenue_usd,
+  -- revenue subtracts the LINEAR at-cost margin: expected_revenue is linear
+  -- in final_count, so the at-cost kits always book qty x gb_price there and
+  -- waiving qty x (gb − cost − freight) leaves exactly the receivable
+  -- (qty x (cost + freight)) in revenue, in every demand state. The cost-side
+  -- nonlinearity (CEIL, testing) belongs to NET, not revenue.
+  COALESCE(prod.expected_revenue_usd, 0) + COALESCE(ord.admin_fees_usd, 0) + COALESCE(ord.shipping_fees_usd, 0) + COALESCE(ord.insurance_usd, 0) + COALESCE(ord.tips_usd, 0) + COALESCE(spl.split_fees_usd, 0) - COALESCE(cmp.comps_usd, 0) - COALESCE(cred.credits_usd, 0) - COALESCE(wo.writeoffs_usd, 0) - COALESCE(adjb.adj_both_usd, 0) - COALESCE(atc.revenue_waiver_usd, 0) AS total_revenue_usd,
   COALESCE(prod.product_profit_usd, 0) AS product_profit_usd,
   COALESCE(exp.expenses_usd, 0) AS expenses_usd,
   COALESCE(ship.label_costs_usd, 0) AS label_costs_usd,
@@ -126,13 +131,16 @@ LEFT JOIN (
   --    v_product_profit), so the increment is the product's ENTIRE
   --    total_product_profit_usd — waive exactly that, which also covers
   --    fractional/negative baselines, CEIL steps, and testing.
-  SELECT t.group_buy_id, SUM(t.waiver_usd) AS at_cost_margin_usd
+  SELECT t.group_buy_id,
+         SUM(t.net_waiver_usd) AS at_cost_margin_usd,
+         SUM(t.revenue_waiver_usd) AS revenue_waiver_usd
   FROM (
     SELECT gbp.group_buy_id,
+           SUM(a.qty) * (gbp.gb_price_usd - gbp.unit_cost_usd - gbp.freight_usd) AS revenue_waiver_usd,
            CASE WHEN pp.final_count - SUM(a.qty) > 0
                 THEN SUM(a.qty) * (gbp.gb_price_usd - gbp.unit_cost_usd - gbp.freight_usd)
                 ELSE pp.total_product_profit_usd
-           END AS waiver_usd
+           END AS net_waiver_usd
     FROM admin_adjustments a
     JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
     JOIN v_product_profit pp ON pp.group_buy_product_id = gbp.id

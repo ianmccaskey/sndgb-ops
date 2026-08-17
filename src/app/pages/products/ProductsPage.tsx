@@ -475,7 +475,15 @@ export function ProductsPage() {
                           refuses its deletion, so don't offer the button */}
                       {!(a.pricing === 'cost' && a.received_at) && (
                         <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600"
-                          onClick={() => doDelAdj({ id: a.id }).then(() => { reloadAdj(); reloadCampaign(); })}>
+                          onClick={() => doDelAdj({ id: a.id }).then(res => {
+                            const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+                            if (!wrote) {
+                              setAError('Not removed — an at-cost row is locked once its payment is received or its product is vendor-committed (marked ordered / has vendor payments): the kits may already be bought.');
+                              return;
+                            }
+                            setAError('');
+                            reloadAdj(); reloadCampaign();
+                          })}>
                           Remove
                         </Button>
                       )}
