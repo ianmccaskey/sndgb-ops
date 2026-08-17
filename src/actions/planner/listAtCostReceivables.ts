@@ -9,7 +9,7 @@ function listAtCostReceivables() {
   return action('listAtCostReceivables', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT a.id, p.sku_code, a.qty, a.expected_usd, a.reason, a.created_at
+      SELECT a.id, p.sku_code, a.qty, a.expected_usd, a.reason, a.created_at, a.preordered
       FROM admin_adjustments a
       JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
       JOIN products p ON p.id = gbp.product_id

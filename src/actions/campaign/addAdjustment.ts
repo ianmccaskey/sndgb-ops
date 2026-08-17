@@ -19,12 +19,18 @@ import { action } from '@uibakery/data';
  * not qty × unit_cost, so exact P&L neutrality can't be guaranteed);
  * beneficiary is stored 'both' but excluded from all payout math by
  * pricing filters.
+ *
+ * preordered 'true' (cost rows only) = the vendor order was ALREADY placed
+ * and paid from the wallet: the kits contribute NOTHING to demand
+ * (v_moq_progress excludes them) and NOTHING to P&L (no waiver needed);
+ * only the receivable exists. The positive-demand guard doesn't apply —
+ * there is no demand or testing-cost effect to protect.
  */
 function addAdjustment() {
   return action('addAdjustment', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      INSERT INTO admin_adjustments (group_buy_product_id, qty, reason, created_by, beneficiary, pricing, expected_usd)
+      INSERT INTO admin_adjustments (group_buy_product_id, qty, reason, created_by, beneficiary, pricing, expected_usd, preordered)
       SELECT
         gbp.id,
         ({{params.qty}})::numeric,
@@ -34,12 +40,16 @@ function addAdjustment() {
         COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb'),
         CASE WHEN COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
              THEN ROUND(({{params.qty}})::numeric * (gbp.unit_cost_usd + gbp.freight_usd), 2)
-             ELSE NULL END
+             ELSE NULL END,
+        COALESCE(NULLIF({{params.preordered}}::text, ''), 'false') = 'true'
       FROM group_buy_products gbp
       WHERE gbp.id = {{params.group_buy_product_id}}::bigint
         AND ({{params.qty}})::text ~ '^-?[0-9]+(\\.[0-9]{1,2})?$'
         AND ({{params.qty}})::numeric <> 0
         AND COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') IN ('gb', 'cost')
+        -- preordered is an at-cost concept only
+        AND (COALESCE(NULLIF({{params.preordered}}::text, ''), 'false') = 'false'
+             OR COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost')
         AND (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'gb'
              -- at-cost rows: positive WHOLE kits on a flat-cost product only.
              -- Whole because a fractional at-cost qty would break neutrality:
@@ -48,12 +58,14 @@ function addAdjustment() {
              OR (({{params.qty}})::numeric > 0
                  AND ({{params.qty}})::numeric % 1 = 0
                  AND gbp.cost_tier_qty IS NULL
-                 -- the product must ALREADY have positive demand: an at-cost
-                 -- row that flips final_count positive would drag the flat
-                 -- testing cost into P&L while the waiver covers only
-                 -- per-kit margin — neutrality would silently break
-                 AND (SELECT m.final_count FROM v_moq_progress m
-                      WHERE m.group_buy_product_id = gbp.id) > 0))
+                 -- non-preordered rows: the product must ALREADY have positive
+                 -- demand — an at-cost row that flips final_count positive
+                 -- would drag the flat testing cost into P&L while the waiver
+                 -- covers only per-kit margin. PREORDERED rows skip this:
+                 -- they touch neither demand nor P&L, only the receivable.
+                 AND (COALESCE(NULLIF({{params.preordered}}::text, ''), 'false') = 'true'
+                      OR (SELECT m.final_count FROM v_moq_progress m
+                          WHERE m.group_buy_product_id = gbp.id) > 0)))
         AND (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
              OR {{params.beneficiary}} = 'both'
              -- party must have a split in THE GROUP BUY BEING ADJUSTED —

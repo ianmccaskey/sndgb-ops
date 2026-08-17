@@ -60,7 +60,7 @@ type Wallet = {
   latest_balance_usd: string | null; latest_snapshot_at: string | null;
 };
 type OwedRow = { vendor_code: string; owed_usd: string };
-type Receivable = { id: number; sku_code: string; qty: string; expected_usd: string; reason: string; created_at: string };
+type Receivable = { id: number; sku_code: string; qty: string; expected_usd: string; reason: string; created_at: string; preordered: boolean };
 type CampaignProduct = {
   group_buy_product_id: number; sku_code: string; vendor_code: string;
   unit_cost_usd: string; freight_usd: string; cost_tier_qty: string | null; status: string;
@@ -442,7 +442,9 @@ export function PlannerPage() {
                 <p className="text-xs font-semibold uppercase text-muted-foreground mb-1">Awaiting at-cost payments</p>
                 {receivables.map(r => (
                   <div key={r.id} className="flex justify-between text-xs">
-                    <span className="text-muted-foreground truncate" title={r.reason}>{r.sku_code} × {fmtNum(r.qty)} — {r.reason}</span>
+                    <span className="text-muted-foreground truncate" title={r.reason}>
+                      {r.sku_code} × {fmtNum(r.qty)}{r.preordered && <span className="text-sky-700"> (already ordered)</span>} — {r.reason}
+                    </span>
                     <span className="text-amber-700 shrink-0 ml-2">{fmtUSD(r.expected_usd)}</span>
                   </div>
                 ))}

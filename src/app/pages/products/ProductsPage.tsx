@@ -38,7 +38,7 @@ type CampaignProduct = {
 };
 type Adjustment = {
   id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string;
-  pricing: string; expected_usd: string | null; received_at: string | null;
+  pricing: string; expected_usd: string | null; received_at: string | null; preordered: boolean;
 };
 type SplitParty = { party: string; pct: string };
 
@@ -93,7 +93,7 @@ export function ProductsPage() {
   const [aQty, setAQty] = useState('');
   const [aReason, setAReason] = useState('');
   const [aFor, setAFor] = useState('both');
-  const [aPricing, setAPricing] = useState('gb'); // 'gb' | 'cost' (at-cost outside-GB sale)
+  const [aPricing, setAPricing] = useState('gb'); // 'gb' | 'cost' | 'cost_pre' (at-cost; _pre = vendor order already placed)
   const [aError, setAError] = useState('');
 
   const saveCampaignProduct = async () => {
@@ -199,8 +199,9 @@ export function ProductsPage() {
   };
 
   // at-cost preview: what the outside customer owes (cost + freight per kit)
+  const aIsCost = aPricing === 'cost' || aPricing === 'cost_pre';
   const aCostProduct = campaign.find(c => String(c.group_buy_product_id) === aProduct);
-  const aExpectedUsd = aPricing === 'cost' && aCostProduct && Number(aQty) > 0
+  const aExpectedUsd = aIsCost && aCostProduct && Number(aQty) > 0
     ? Math.round(Number(aQty) * (Number(aCostProduct.unit_cost_usd) + Number(aCostProduct.freight_usd)) * 100) / 100
     : null;
 
@@ -216,7 +217,7 @@ export function ProductsPage() {
       setAError('Qty must have at most 2 decimal places (split kits use 0.5).');
       return;
     }
-    if (aPricing === 'cost') {
+    if (aIsCost) {
       if (!(qty > 0) || qty % 1 !== 0) { setAError('An at-cost sale needs a positive WHOLE-kit qty (fractional kits would break the P&L-neutral math).'); return; }
       if (aCostProduct?.cost_tier_price != null) {
         setAError('At-cost sales are not supported on tiered-cost products — their incremental vendor cost is not qty × unit cost.');
@@ -229,7 +230,8 @@ export function ProductsPage() {
       // round an over-precision qty — surface that as an error, not success.
       const res = await doAddAdj({
         group_buy_product_id: Number(aProduct), qty, reason: aReason.trim(), created_by: userName,
-        beneficiary: aFor, pricing: aPricing,
+        beneficiary: aFor, pricing: aIsCost ? 'cost' : 'gb',
+        preordered: aPricing === 'cost_pre' ? 'true' : '',
       });
       // Mutate results can be an array of rows or a singleton object — treat
       // only an empty/absent result as refused (same handling as ImportPage).
@@ -400,10 +402,11 @@ export function ProductsPage() {
                 </Select>
                 <Input placeholder="Qty (+/-)" value={aQty} onChange={e => setAQty(e.target.value)} className="h-9 w-24" />
                 <Select value={aPricing} onValueChange={setAPricing}>
-                  <SelectTrigger className="h-9 w-44"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-9 w-56"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="gb">At GB price</SelectItem>
                     <SelectItem value="cost">At vendor cost + freight</SelectItem>
+                    <SelectItem value="cost_pre">At cost + freight — already ordered</SelectItem>
                   </SelectContent>
                 </Select>
                 {aPricing === 'gb' && (
@@ -415,7 +418,7 @@ export function ProductsPage() {
                     </SelectContent>
                   </Select>
                 )}
-                <Input placeholder={aPricing === 'cost' ? 'Reason / customer (audited)' : "Reason (e.g. 'P&P personal x100')"} value={aReason} onChange={e => setAReason(e.target.value)} className="h-9 flex-1 min-w-48" />
+                <Input placeholder={aIsCost ? 'Reason / customer (audited)' : "Reason (e.g. 'P&P personal x100')"} value={aReason} onChange={e => setAReason(e.target.value)} className="h-9 flex-1 min-w-48" />
                 <Button size="sm" onClick={addAdj}>Add</Button>
               </div>
               {aError && <p className="text-sm text-red-600">{aError}</p>}
@@ -423,11 +426,16 @@ export function ProductsPage() {
                 <p className="text-xs text-muted-foreground">
                   "For" decides whose profit pays for these units at GB price: a person's adjustments come out of their split payout; "Both" comes out of total profit before the split.
                 </p>
-              ) : (
+              ) : aPricing === 'cost' ? (
                 <p className="text-xs text-muted-foreground">
                   At-cost sale to a customer outside the group buy: the kits join what you order from the vendor, but P&L stays neutral — the customer owes vendor cost + per-kit freight
                   {aExpectedUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(aExpectedUsd)}</span> for this line)</>}, tracked until you mark it received.
                   {' '}These kits are assumed to <span className="font-medium">arrive with your bulk vendor order</span> — vendor-direct shipping to an outside customer (per-box direct freight) is not modeled here.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  At-cost sale of kits you <span className="font-medium">already ordered and paid for</span> from the wallet: nothing is added to what you order from the vendor and P&L is untouched — this only records that the customer owes vendor cost + per-kit freight
+                  {aExpectedUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(aExpectedUsd)}</span> for this line)</>}, tracked until you mark it received. It shows as expected incoming money on the Planner.
                 </p>
               )}
             </CardContent>
@@ -451,7 +459,16 @@ export function ProductsPage() {
                   <TableRow key={a.id}>
                     <TableCell className="font-medium">{a.sku_code}</TableCell>
                     <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
-                    <TableCell>{a.pricing === 'cost' ? <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Sold at vendor cost + freight — P&L neutral">at cost</span> : a.beneficiary === 'both' ? 'Both' : a.beneficiary}</TableCell>
+                    <TableCell>
+                      {a.pricing === 'cost' ? (
+                        <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          title={a.preordered
+                            ? 'Sold at vendor cost + freight from kits ALREADY ordered/paid — no demand or P&L effect, receivable only'
+                            : 'Sold at vendor cost + freight — P&L neutral'}>
+                          {a.preordered ? 'at cost · ordered' : 'at cost'}
+                        </span>
+                      ) : a.beneficiary === 'both' ? 'Both' : a.beneficiary}
+                    </TableCell>
                     <TableCell className="text-right">
                       {a.pricing === 'cost' ? (
                         a.received_at ? (

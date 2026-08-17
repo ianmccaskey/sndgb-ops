@@ -8,6 +8,9 @@ import { action } from '@uibakery/data';
  *    payment is attributed to it) — the kits may already be bought, so
  *    silently dropping the demand would strand real vendor money as
  *    phantom over-payment and erase why the extra kits were procured.
+ *    PREORDERED at-cost rows are exempt from this lock: they contribute
+ *    no demand (the kits were bought outside demand), so deleting one
+ *    just cancels the receivable expectation — the sale fell through.
  * Unreceived, uncommitted at-cost rows delete freely (the sale fell
  * through before anything real happened: demand, waiver, and receivable
  * all leave together). GB-priced adjustments delete as before.
@@ -21,7 +24,7 @@ function deleteAdjustment() {
       WHERE a.id = {{params.id}}::bigint
         AND gbp.id = a.group_buy_product_id
         AND NOT (a.pricing = 'cost' AND a.received_at IS NOT NULL)
-        AND NOT (a.pricing = 'cost' AND (
+        AND NOT (a.pricing = 'cost' AND NOT a.preordered AND (
               gbp.ordered_from_vendor_at IS NOT NULL
               OR EXISTS (
                 SELECT 1 FROM vendor_payments vp
