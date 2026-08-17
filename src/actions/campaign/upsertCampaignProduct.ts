@@ -44,11 +44,19 @@ function upsertCampaignProduct() {
         direct_freight_usd = EXCLUDED.direct_freight_usd,
         direct_box_kits = EXCLUDED.direct_box_kits,
         split_fee_usd = EXCLUDED.split_fee_usd
-      WHERE group_buy_products.vendor_id = EXCLUDED.vendor_id
+      WHERE (group_buy_products.vendor_id = EXCLUDED.vendor_id
          OR NOT EXISTS (
            SELECT 1 FROM vendor_payments vp
            WHERE vp.group_buy_product_id = group_buy_products.id
-         )
+         ))
+        -- a line with AT-COST adjustments must stay flat-cost: the P&L
+        -- margin waiver assumes qty x unit_cost, and switching to tiered
+        -- pricing would silently break the sale's neutrality
+        AND (EXCLUDED.cost_tier_qty IS NULL OR NOT EXISTS (
+           SELECT 1 FROM admin_adjustments a
+           WHERE a.group_buy_product_id = group_buy_products.id
+             AND a.pricing = 'cost'
+         ))
       RETURNING id
     `,
   });

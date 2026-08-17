@@ -192,7 +192,12 @@ export function FinancialsPage() {
               <div className="flex justify-between"><span className="text-muted-foreground">Write-offs (forgiven shortfalls)</span><span className="text-red-600">−{fmtUSD(pnl?.writeoffs_usd)}</span></div>
             )}
             {Number(pnl?.at_cost_margin_usd) !== 0 && (
-              <div className="flex justify-between"><span className="text-muted-foreground" title="Kits sold to outside customers at vendor cost + freight — this waives their GB-price margin so the sale nets zero in P&L">At-cost sales (margin waived)</span><span className="text-red-600">−{fmtUSD(pnl?.at_cost_margin_usd)}</span></div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground" title="Kits sold to outside customers at vendor cost + freight — this waives exactly their P&L contribution so the sale nets zero">At-cost sales (margin waived)</span>
+                {Number(pnl?.at_cost_margin_usd) > 0
+                  ? <span className="text-red-600">−{fmtUSD(pnl?.at_cost_margin_usd)}</span>
+                  : <span className="text-green-700">+{fmtUSD(-Number(pnl?.at_cost_margin_usd))}</span>}
+              </div>
             )}
             {Number(pnl?.adj_both_usd) !== 0 && (
               <div className="flex justify-between">

@@ -116,12 +116,25 @@ LEFT JOIN (
 ) spl ON spl.group_buy_id = gb.id
 LEFT JOIN (
   -- margin waived on at-cost sales: exactly the live P&L contribution of
-  -- those kits (revenue at GB price − vendor cost − per-kit freight), so
-  -- their net effect is always zero
-  SELECT gbp.group_buy_id,
-         SUM(a.qty * (gbp.gb_price_usd - gbp.unit_cost_usd - gbp.freight_usd)) AS at_cost_margin_usd
-  FROM admin_adjustments a
-  JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
-  WHERE a.pricing = 'cost'
-  GROUP BY gbp.group_buy_id
+  -- those kits so their net effect is always zero, in EVERY demand state:
+  --  * per-kit terms: revenue at GB price − vendor cost − per-kit freight
+  --    (whole at-cost qtys are CEIL-transparent, so these are linear);
+  --  * the flat testing cost is SUBTRACTED from the waiver ONLY when the
+  --    at-cost kits are the sole reason it is charged (final_count > 0 but
+  --    would be <= 0 without them): the row's true contribution is then
+  --    margin − testing (negative), and waiving exactly that keeps net at
+  --    zero — durable even if real demand later collapses
+  SELECT t.group_buy_id, SUM(t.margin_usd - t.testing_waiver_usd) AS at_cost_margin_usd
+  FROM (
+    SELECT gbp.group_buy_id,
+           SUM(a.qty) * (gbp.gb_price_usd - gbp.unit_cost_usd - gbp.freight_usd) AS margin_usd,
+           CASE WHEN m.final_count > 0 AND m.final_count - SUM(a.qty) <= 0
+                THEN gbp.testing_cost_usd ELSE 0 END AS testing_waiver_usd
+    FROM admin_adjustments a
+    JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
+    JOIN v_moq_progress m ON m.group_buy_product_id = gbp.id
+    WHERE a.pricing = 'cost'
+    GROUP BY gbp.group_buy_id, gbp.id, gbp.gb_price_usd, gbp.unit_cost_usd, gbp.freight_usd, gbp.testing_cost_usd, m.final_count
+  ) t
+  GROUP BY t.group_buy_id
 ) atc ON atc.group_buy_id = gb.id;

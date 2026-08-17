@@ -143,7 +143,7 @@ export function ProductsPage() {
       // attributed to this product under its current vendor).
       const wrote = Array.isArray(res) ? res.length > 0 : !!res;
       if (!wrote) {
-        setCError('Not saved — this product already has vendor payments recorded against it, so its vendor cannot be changed. Remove/reassign those payments on the Vendors page first.');
+        setCError('Not saved — either the vendor cannot change (vendor payments are attributed to this product; remove/reassign them on the Vendors page first), or you are adding a cost tier to a product that has at-cost adjustments (tiered pricing would break their P&L-neutral math; delete those adjustments first).');
         return;
       }
       resetCampaignForm();
@@ -471,10 +471,14 @@ export function ProductsPage() {
                     <TableCell>{a.created_by}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{fmtDateTime(a.created_at)}</TableCell>
                     <TableCell>
-                      <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600"
-                        onClick={() => doDelAdj({ id: a.id }).then(() => { reloadAdj(); reloadCampaign(); })}>
-                        Remove
-                      </Button>
+                      {/* a RECEIVED at-cost row is a paid sale — the server
+                          refuses its deletion, so don't offer the button */}
+                      {!(a.pricing === 'cost' && a.received_at) && (
+                        <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600"
+                          onClick={() => doDelAdj({ id: a.id }).then(() => { reloadAdj(); reloadCampaign(); })}>
+                          Remove
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
