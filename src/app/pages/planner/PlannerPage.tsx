@@ -275,6 +275,25 @@ export function PlannerPage() {
   const aChosen = allocatableProducts.find(p => String(p.group_buy_product_id) === aProduct);
   const aPerKit = aChosen ? Number(aChosen.unit_cost_usd) + Number(aChosen.freight_usd) : 0;
 
+  const walletTotal = cryptoWallets.reduce((s, w) => s + Number(w.latest_balance_usd || 0), 0);
+  const allocTotal = items.reduce(
+    (s, i) => s + Number(i.ordered_at ? (i.ordered_value_usd ?? i.planned_value_usd) : i.planned_value_usd), 0);
+  // live what-if: the coverage gap follows the outside/cash figures AS TYPED
+  // (before Save), so the operator can dial the inputs until the allocations
+  // are covered. Same waterfall as buildSankey, in integer cents; invalid or
+  // negative input counts as 0 rather than poisoning the number with NaN.
+  const liveShortfall = useMemo(() => {
+    const c = (n: number) => Math.round(n * 100);
+    const num = (s: string) => { const n = Number(s); return Number.isFinite(n) && n > 0 ? n : 0; };
+    const walletC = c(walletTotal);
+    const owedC = c(owedTotal);
+    const recvC = c(receivableTotal);
+    const walletProfitC = Math.max(walletC - owedC, 0);
+    const floatProfitC = recvC - Math.min(recvC, Math.max(owedC - walletC, 0));
+    const poolC = walletProfitC + floatProfitC + c(num(srcOutsideMax)) + c(num(srcCash));
+    return (c(allocTotal) - poolC) / 100;
+  }, [walletTotal, owedTotal, receivableTotal, srcOutsideMax, srcCash, allocTotal]);
+
   const sankey = useMemo(() => buildSankey({
     walletRows: cryptoWallets.map(w => ({ name: w.name, usd: Number(w.latest_balance_usd || 0) })),
     owedTotal,
@@ -475,6 +494,10 @@ export function PlannerPage() {
                   </span>
                 </div>
               ))}
+              <div className="flex justify-between gap-2 border-t pt-1 font-medium">
+                <span className="min-w-0">Total wallet value</span>
+                <span className="shrink-0 whitespace-nowrap">{fmtUSD(walletTotal)}</span>
+              </div>
               <div className="flex justify-between gap-2 border-t pt-1">
                 <span className="text-muted-foreground min-w-0">Owed to vendors (non-COA, all campaigns)</span>
                 <span className="text-red-600 shrink-0 whitespace-nowrap">−{fmtUSD(owedTotal)}</span>
@@ -485,17 +508,37 @@ export function PlannerPage() {
               </div>
             </div>
             <div className="border-t pt-2 space-y-2">
-              <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-xs text-muted-foreground w-44">Outside wallet holds</span>
-                <Input value={srcOutsideTotal} onChange={e => setSrcOutsideTotal(e.target.value)} className="h-8 w-28 text-sm" />
-              </div>
-              <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-xs text-muted-foreground w-44">…of which attributable</span>
-                <Input value={srcOutsideMax} onChange={e => setSrcOutsideMax(e.target.value)} className="h-8 w-28 text-sm" />
-              </div>
-              <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-xs text-muted-foreground w-44" title="Cash profit you could convert to crypto — a what-if figure, not money in the wallets">Cash profit assignable</span>
-                <Input value={srcCash} onChange={e => setSrcCash(e.target.value)} className="h-8 w-28 text-sm" />
+              <div className="flex flex-wrap gap-x-6 gap-y-2 items-start">
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className="text-xs text-muted-foreground w-44">Outside wallet holds</span>
+                    <Input value={srcOutsideTotal} onChange={e => setSrcOutsideTotal(e.target.value)} className="h-8 w-28 text-sm" />
+                  </div>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className="text-xs text-muted-foreground w-44">…of which attributable</span>
+                    <Input value={srcOutsideMax} onChange={e => setSrcOutsideMax(e.target.value)} className="h-8 w-28 text-sm" />
+                  </div>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className="text-xs text-muted-foreground w-44" title="Cash profit you could convert to crypto — a what-if figure, not money in the wallets">Cash profit assignable</span>
+                    <Input value={srcCash} onChange={e => setSrcCash(e.target.value)} className="h-8 w-28 text-sm" />
+                  </div>
+                </div>
+                {/* coverage gap for the planned stock, LIVE against the
+                    figures typed on the left (not just the saved plan) */}
+                <div className={`flex-1 min-w-44 rounded border p-2 text-xs ${
+                  allocTotal <= 0 ? 'border-border text-muted-foreground'
+                    : liveShortfall > 0 ? 'border-red-300 bg-red-50 text-red-800'
+                      : 'border-green-300 bg-green-50 text-green-800'}`}>
+                  <p className="font-semibold uppercase text-[10px]">Stock allocations · {fmtUSD(allocTotal)}</p>
+                  {allocTotal <= 0 ? (
+                    <p className="mt-0.5">No stock allocated yet.</p>
+                  ) : liveShortfall > 0 ? (
+                    <p className="mt-0.5">Need <span className="font-semibold">{fmtUSD(liveShortfall)}</span> more to cover.</p>
+                  ) : (
+                    <p className="mt-0.5">Covered — {fmtUSD(-liveShortfall)} to spare.</p>
+                  )}
+                  <p className="text-[10px] opacity-80 mt-0.5">Updates as you type the outside / cash figures.</p>
+                </div>
               </div>
               <Button size="sm" className="h-8" onClick={saveSources}>Save sources</Button>
               {srcMsg && <p className="text-xs text-red-600">{srcMsg}</p>}
