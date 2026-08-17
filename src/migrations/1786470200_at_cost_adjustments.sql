@@ -120,32 +120,36 @@ LEFT JOIN (
   GROUP BY o.group_buy_id
 ) spl ON spl.group_buy_id = gb.id
 LEFT JOIN (
-  -- margin waived on at-cost sales: EXACTLY the kits' incremental P&L
-  -- contribution in every demand state, so their net effect is always zero:
-  --  * non-cost baseline still positive (final_count − at_cost_qty > 0):
-  --    the increment is linear — qty × (GB price − unit cost − per-kit
-  --    freight); whole at-cost qtys are CEIL-transparent for any baseline,
-  --    and the flat testing cost is charged with or without the rows;
-  --  * baseline <= 0 (real demand later collapsed): without the at-cost
-  --    rows the product would contribute NOTHING (final_count <= 0 zeroes
-  --    v_product_profit), so the increment is the product's ENTIRE
-  --    total_product_profit_usd — waive exactly that, which also covers
-  --    fractional/negative baselines, CEIL steps, and testing.
+  -- at-cost waivers, ANCHORED to the snapshotted receivable (expected_usd —
+  -- the money actually agreed with the outside customer), so later edits to
+  -- the product's price/cost/freight can never rewrite the sale's revenue:
+  --  * revenue: expected_revenue is LINEAR in final_count, so the at-cost
+  --    kits always book qty × gb_price there — waiving qty × gb_price −
+  --    expected leaves exactly the receivable in revenue, in every state;
+  --  * net, baseline > 0: same waiver — at entry expected = qty × (cost +
+  --    freight), making the sale exactly neutral; if vendor economics are
+  --    later EDITED, net honestly shows the real gain/loss between the
+  --    agreed receivable and live costs (deliberate: books track reality);
+  --  * net, baseline <= 0 (real demand collapsed): the product's live
+  --    contribution is final_count × gb_price − all costs, and the desired
+  --    display is expected − all costs, so the waiver is final_count ×
+  --    gb_price − expected — covering fractional/negative baselines, CEIL
+  --    steps, and testing with no term-by-term modeling.
   SELECT t.group_buy_id,
          SUM(t.net_waiver_usd) AS at_cost_margin_usd,
          SUM(t.revenue_waiver_usd) AS revenue_waiver_usd
   FROM (
     SELECT gbp.group_buy_id,
-           SUM(a.qty) * (gbp.gb_price_usd - gbp.unit_cost_usd - gbp.freight_usd) AS revenue_waiver_usd,
+           SUM(a.qty) * gbp.gb_price_usd - SUM(COALESCE(a.expected_usd, 0)) AS revenue_waiver_usd,
            CASE WHEN pp.final_count - SUM(a.qty) > 0
-                THEN SUM(a.qty) * (gbp.gb_price_usd - gbp.unit_cost_usd - gbp.freight_usd)
-                ELSE pp.total_product_profit_usd
+                THEN SUM(a.qty) * gbp.gb_price_usd - SUM(COALESCE(a.expected_usd, 0))
+                ELSE pp.final_count * gbp.gb_price_usd - SUM(COALESCE(a.expected_usd, 0))
            END AS net_waiver_usd
     FROM admin_adjustments a
     JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
     JOIN v_product_profit pp ON pp.group_buy_product_id = gbp.id
     WHERE a.pricing = 'cost'
-    GROUP BY gbp.group_buy_id, gbp.id, gbp.gb_price_usd, gbp.unit_cost_usd, gbp.freight_usd, pp.final_count, pp.total_product_profit_usd
+    GROUP BY gbp.group_buy_id, gbp.id, gbp.gb_price_usd, pp.final_count
   ) t
   GROUP BY t.group_buy_id
 ) atc ON atc.group_buy_id = gb.id;
