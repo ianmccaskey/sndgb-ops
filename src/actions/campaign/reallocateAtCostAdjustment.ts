@@ -15,7 +15,12 @@ import { action } from '@uibakery/data';
  * serializes the kit-cap read with every other payment writer; paying for
  * more kits than still owed needs the operator-confirmed over-buy anchor;
  * the funding wallet must exist and be active. Only UNRECEIVED preordered
- * rows qualify — a received sale has the customer's money and is locked.
+ * OUTSIDE-CUSTOMER rows qualify — a received sale has the customer's money
+ * and is locked, and PERSONAL stock rows (party beneficiary) have no
+ * receivable to fall through: they settle against the party's payout, so
+ * reallocating one here would silently erase that deduction while mutating
+ * the campaign's vendor-paid ledger. Personal rows are refused (zero rows);
+ * the recovery path for a personal row is explicit delete.
  */
 function reallocateAtCostAdjustment() {
   return action('reallocateAtCostAdjustment', 'SQL', {
@@ -30,6 +35,9 @@ function reallocateAtCostAdjustment() {
         JOIN products p ON p.id = gbp.product_id
         WHERE a.id = {{params.adjustment_id}}::bigint
           AND a.pricing = 'cost'
+          -- personal stock (party beneficiary) settles against the party's
+          -- payout — there is no receivable to reallocate
+          AND a.beneficiary = 'both'
           AND a.preordered
           AND a.received_at IS NULL
         FOR UPDATE OF a

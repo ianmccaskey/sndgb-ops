@@ -575,10 +575,14 @@ export function ProductsPage() {
                       {!(a.pricing === 'cost' && a.received_at) && (
                         <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600"
                           onClick={() => {
-                            // pre-ordered kits are already bought: removing the
-                            // sale is a CHOICE — delete only, or allocate the
-                            // kits to the group buy — so it goes via a dialog
-                            if (a.pricing === 'cost' && a.preordered) {
+                            // pre-ordered kits for an OUTSIDE customer are
+                            // already bought: removing the sale is a CHOICE —
+                            // delete only, or allocate the kits to the group
+                            // buy — so it goes via a dialog. Personal stock
+                            // has no receivable to fall through (it settles
+                            // against the party's payout), so it deletes
+                            // directly like any other row.
+                            if (a.pricing === 'cost' && a.preordered && a.beneficiary === 'both') {
                               setRemoving(a); setRDate(''); setRWallet(''); setRMethod('USDC'); setRRef(''); setRMsg('');
                               return;
                             }
