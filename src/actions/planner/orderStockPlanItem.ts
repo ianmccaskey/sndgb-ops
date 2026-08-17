@@ -75,6 +75,14 @@ function orderStockPlanItem() {
            AND cur.kits_remaining >= NULLIF({{params.confirmed_owed}}::text, '')::numeric)
           OR itm.kits <= cur.kits_remaining
         )
+        -- the funding wallet is REQUIRED and must be a real, ACTIVE wallet —
+        -- payment provenance feeds rail reconciliation, so a stale or
+        -- tampered wallet id refuses instead of mis-attributing real money
+        AND EXISTS (
+          SELECT 1 FROM wallets w
+          WHERE w.id = NULLIF({{params.wallet_id}}::text, '')::bigint
+            AND w.active
+        )
         RETURNING id, vendor_id, amount_usd, kits_qty, group_buy_product_id
       ), stamp AS (
         UPDATE stock_plan_items i
