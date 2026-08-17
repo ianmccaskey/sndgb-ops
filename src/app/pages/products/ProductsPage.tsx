@@ -10,6 +10,9 @@ import listAdjustments from '@/actions/campaign/listAdjustments';
 import addAdjustment from '@/actions/campaign/addAdjustment';
 import deleteAdjustment from '@/actions/campaign/deleteAdjustment';
 import markAdjustmentReceived from '@/actions/campaign/markAdjustmentReceived';
+import reallocateAtCostAdjustment from '@/actions/campaign/reallocateAtCostAdjustment';
+import listVendorProductProgress from '@/actions/vendors/listVendorProductProgress';
+import listWallets from '@/actions/financials/listWallets';
 import getPnl from '@/actions/financials/getPnl';
 import { useApp } from '@/app/AppContext';
 import { OrderingAppSync } from '@/app/pages/products/OrderingAppSync';
@@ -21,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Package, CheckCircle2 } from 'lucide-react';
 
 type Product = { id: number; external_id: string | null; sku_code: string; name: string; mass_label: string | null; active: boolean };
@@ -37,7 +41,7 @@ type CampaignProduct = {
   direct_freight_usd: string; direct_box_kits: string; split_fee_usd: string;
 };
 type Adjustment = {
-  id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string;
+  id: number; group_buy_product_id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string;
   pricing: string; expected_usd: string | null; received_at: string | null; preordered: boolean;
 };
 type SplitParty = { party: string; pct: string };
@@ -64,6 +68,11 @@ export function ProductsPage() {
   const [doAddAdj] = useMutateAction(addAdjustment);
   const [doDelAdj] = useMutateAction(deleteAdjustment);
   const [doMarkReceived] = useMutateAction(markAdjustmentReceived);
+  const [doReallocate] = useMutateAction(reallocateAtCostAdjustment);
+  const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawWallets] = useLoadAction(listWallets, [], {});
+  const progress = rows<{ group_buy_product_id: number; kits_demand: string; kits_paid: string }>(rawProgress);
+  const walletsList = rows<{ id: number; name: string; active: boolean }>(rawWallets);
 
   // add-to-campaign form
   const [cProduct, setCProduct] = useState('');
@@ -87,6 +96,16 @@ export function ProductsPage() {
   const [npName, setNpName] = useState('');
   const [npMass, setNpMass] = useState('');
   const [npError, setNpError] = useState('');
+
+  // removing a PRE-ORDERED at-cost row: the kits are already bought, so the
+  // operator chooses — delete only, or reallocate the kits to the group buy
+  const [removing, setRemoving] = useState<Adjustment | null>(null);
+  const [rDate, setRDate] = useState('');
+  const [rWallet, setRWallet] = useState('');
+  const [rMethod, setRMethod] = useState('USDC');
+  const [rRef, setRRef] = useState('');
+  const [rMsg, setRMsg] = useState('');
+  const [rSaving, setRSaving] = useState(false);
 
   // adjustment form
   const [aProduct, setAProduct] = useState('');
@@ -204,6 +223,53 @@ export function ProductsPage() {
   const aExpectedUsd = aIsCost && aCostProduct && Number(aQty) > 0
     ? Math.round(Number(aQty) * (Number(aCostProduct.unit_cost_usd) + Number(aCostProduct.freight_usd)) * 100) / 100
     : null;
+
+  const deleteAdjOnly = async (a: Adjustment) => {
+    const res = await doDelAdj({ id: a.id }) as unknown[] | null;
+    if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+      setAError('Not removed — an at-cost row is locked once its payment is received or its product is vendor-committed (marked ordered / has vendor payments): the kits may already be bought.');
+      return false;
+    }
+    setAError('');
+    reloadAdj(); reloadCampaign(); reloadProgress();
+    return true;
+  };
+
+  const reallocateToGb = async () => {
+    if (!removing) return;
+    if (!rDate) { setRMsg('Date is required (when the vendor order was paid).'); return; }
+    if (!rWallet) { setRMsg('Pick the wallet the vendor order was paid from.'); return; }
+    const kits = Number(removing.qty);
+    const prog = progress.find(p => Number(p.group_buy_product_id) === Number(removing.group_buy_product_id));
+    const kitsOwed = prog ? Math.round((Number(prog.kits_demand) - Number(prog.kits_paid)) * 100) / 100 : 0;
+    const over = kits > kitsOwed;
+    if (over && !window.confirm(
+      `${removing.sku_code}: allocating ${fmtNum(kits)} kits but only ${fmtNum(Math.max(kitsOwed, 0))} are still owed by demand — the rest records as a deliberate over-buy.\n\nAllocate anyway?`)) {
+      return;
+    }
+    setRSaving(true); setRMsg('');
+    try {
+      // ONE atomic action: the adjustment (receivable) is deleted only
+      // together with the kit-attributed vendor payment that allocates the
+      // already-bought kits against the campaign's vendor total
+      const res = await doReallocate({
+        adjustment_id: removing.id, group_buy_id: groupBuyId, paid_on: rDate,
+        wallet_id: rWallet, method: rMethod, receipt_ref: rRef.trim(),
+        allow_over: over ? 'true' : '', confirmed_owed: over ? String(Math.max(kitsOwed, 0)) : '',
+        actor: userName,
+      }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+        setRMsg('Not allocated — the row may already be removed/received, the wallet invalid, or owed changed while confirming. Refresh and retry.');
+        return;
+      }
+      setRemoving(null);
+      reloadAdj(); reloadCampaign(); reloadProgress();
+    } catch (e: unknown) {
+      setRMsg(e instanceof Error ? e.message : 'Failed to allocate');
+    } finally {
+      setRSaving(false);
+    }
+  };
 
   const addAdj = async () => {
     const qty = Number(aQty);
@@ -492,15 +558,16 @@ export function ProductsPage() {
                           refuses its deletion, so don't offer the button */}
                       {!(a.pricing === 'cost' && a.received_at) && (
                         <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600"
-                          onClick={() => doDelAdj({ id: a.id }).then(res => {
-                            const wrote = Array.isArray(res) ? res.length > 0 : !!res;
-                            if (!wrote) {
-                              setAError('Not removed — an at-cost row is locked once its payment is received or its product is vendor-committed (marked ordered / has vendor payments): the kits may already be bought.');
+                          onClick={() => {
+                            // pre-ordered kits are already bought: removing the
+                            // sale is a CHOICE — delete only, or allocate the
+                            // kits to the group buy — so it goes via a dialog
+                            if (a.pricing === 'cost' && a.preordered) {
+                              setRemoving(a); setRDate(''); setRWallet(''); setRMethod('USDC'); setRRef(''); setRMsg('');
                               return;
                             }
-                            setAError('');
-                            reloadAdj(); reloadCampaign();
-                          })}>
+                            deleteAdjOnly(a);
+                          }}>
                           Remove
                         </Button>
                       )}
@@ -559,6 +626,52 @@ export function ProductsPage() {
           <OrderingAppSync products={products} onImported={reloadProducts} />
         </TabsContent>
       </Tabs>
+
+      <Dialog open={removing != null} onOpenChange={o => { if (!o) setRemoving(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Remove at-cost sale — {removing?.sku_code} × {removing ? fmtNum(removing.qty) : ''} ({removing?.reason})</DialogTitle>
+          </DialogHeader>
+          {removing && (
+            <div className="space-y-3 text-sm">
+              <p className="text-muted-foreground">
+                These {fmtNum(removing.qty)} kits were <span className="font-medium">already ordered and paid for</span> ({fmtUSD(removing.expected_usd)} from the wallet). Choose what happens to them:
+              </p>
+              <div className="rounded border p-2 space-y-2">
+                <p className="font-medium">Allocate the kits to the group buy</p>
+                <p className="text-xs text-muted-foreground">
+                  Records a {fmtNum(removing.qty)}-kit vendor payment of {fmtUSD(removing.expected_usd)} against {removing.sku_code}, so they count toward what the campaign still needs from the vendor — and removes the receivable in the same step.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Input type="date" value={rDate} disabled={rSaving} onChange={e => setRDate(e.target.value)} className="h-9 w-40" />
+                  <Select value={rWallet} onValueChange={setRWallet}>
+                    <SelectTrigger className="h-9 flex-1 min-w-36"><SelectValue placeholder="Paid from wallet" /></SelectTrigger>
+                    <SelectContent>
+                      {walletsList.filter(w => w.active).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Input placeholder="Method" value={rMethod} disabled={rSaving} onChange={e => setRMethod(e.target.value)} className="h-9 w-28" />
+                  <Input placeholder="Receipt / tx ref (optional)" value={rRef} disabled={rSaving} onChange={e => setRRef(e.target.value)} className="h-9 flex-1 min-w-40" />
+                </div>
+                <Button size="sm" disabled={rSaving} onClick={reallocateToGb}>{rSaving ? 'Recording…' : `Allocate ${fmtNum(removing.qty)} kits to group buy`}</Button>
+              </div>
+              <div className="rounded border p-2 space-y-1">
+                <p className="font-medium">Delete only</p>
+                <p className="text-xs text-muted-foreground">
+                  Removes just the receivable record. The kits stay off the campaign's kit ledger — use this if they'll be resold outside the buy or handled separately.
+                </p>
+                <Button size="sm" variant="outline" className="text-red-600" disabled={rSaving}
+                  onClick={async () => { const ok = await deleteAdjOnly(removing); if (ok) setRemoving(null); }}>
+                  Delete only
+                </Button>
+              </div>
+              {rMsg && <p className="text-xs text-red-600">{rMsg}</p>}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
