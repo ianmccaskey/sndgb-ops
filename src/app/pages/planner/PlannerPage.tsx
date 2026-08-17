@@ -92,67 +92,94 @@ function buildSankey(args: {
   const nodes: SNode[] = [];
   const links: SLink[] = [];
   const idx = (n: SNode) => { nodes.push(n); return nodes.length - 1; };
-  const r2 = (n: number) => Math.round(n * 100) / 100;
+  // ALL math in integer CENTS so every parent node equals the exact sum of
+  // its child links (independent per-link rounding would let the chart's
+  // totals drift from the labels/banners by pennies); dollars only at render
+  const c = (usd: number) => Math.round(usd * 100);
+  const usd = (cents: number) => cents / 100;
 
-  const walletTotal = args.walletRows.reduce((s, w) => s + w.usd, 0);
+  const walletsC = args.walletRows.map(w => ({ name: w.name, c: c(w.usd) })).filter(w => w.c > 0);
+  const walletTotalC = walletsC.reduce((s, w) => s + w.c, 0);
+  const owedC = c(args.owedTotal);
+  const receivablesC = c(args.receivables);
+  const outsideC = c(args.outsideMax);
+  const cashC = c(args.cash);
+
   // WATERFALL: wallets cover owed first…
-  const walletToOwed = Math.min(args.owedTotal, walletTotal);
-  const walletProfit = walletTotal - walletToOwed; // "Crypto Profit" above the threshold
+  const walletToOwedC = Math.min(owedC, walletTotalC);
+  const walletProfitC = walletTotalC - walletToOwedC; // "Crypto Profit" above the threshold
   // …then the expected float payments backfill what's left…
-  const owedAfterWallets = args.owedTotal - walletToOwed;
-  const floatToOwed = Math.min(args.receivables, owedAfterWallets);
-  const floatProfit = args.receivables - floatToOwed;
+  const owedAfterWalletsC = owedC - walletToOwedC;
+  const floatToOwedC = Math.min(receivablesC, owedAfterWalletsC);
+  const floatProfitC = receivablesC - floatToOwedC;
   // …and anything still uncovered is a real gap.
-  const uncoveredOwed = Math.max(owedAfterWallets - floatToOwed, 0);
+  const uncoveredOwedC = Math.max(owedAfterWalletsC - floatToOwedC, 0);
 
-  const pool = walletProfit + floatProfit + args.outsideMax + args.cash;
-  const allocTotal = args.items.reduce((s, i) => s + i.usd, 0);
-  const unallocated = Math.max(pool - allocTotal, 0);
-  const overAllocated = Math.max(allocTotal - pool, 0);
+  const poolC = walletProfitC + floatProfitC + outsideC + cashC;
+  const itemsC = args.items.map(i => ({ ...i, c: c(i.usd) })).filter(i => i.c > 0);
+  const allocTotalC = itemsC.reduce((s, i) => s + i.c, 0);
+  const unallocatedC = Math.max(poolC - allocTotalC, 0);
+  const overAllocatedC = Math.max(allocTotalC - poolC, 0);
+
+  // pro-rata wallet->owed shares in cents; the LAST wallet absorbs the
+  // residual pennies so the shares sum to walletToOwedC exactly
+  const sharesC: number[] = [];
+  let sharesSoFar = 0;
+  walletsC.forEach((w, i) => {
+    const share = i === walletsC.length - 1
+      ? walletToOwedC - sharesSoFar
+      : Math.floor(walletToOwedC * (w.c / walletTotalC));
+    sharesC.push(share);
+    sharesSoFar += share;
+  });
 
   // GB Wallet root -> per-chain balances
-  const rootIdx = walletTotal > 0 ? idx({ name: 'GB Wallet', kind: 'root', usd: walletTotal }) : -1;
-  const owedIdx = args.owedTotal > 0
-    ? idx({ name: 'Vendor GB', kind: 'owed', usd: args.owedTotal, hint: uncoveredOwed > 0 ? `${fmtUSD(uncoveredOwed)} not covered even with expected float payments` : floatToOwed > 0 ? `${fmtUSD(floatToOwed)} of this coverage depends on float payments arriving` : undefined })
+  const rootIdx = walletTotalC > 0 ? idx({ name: 'GB Wallet', kind: 'root', usd: usd(walletTotalC) }) : -1;
+  const owedIdx = owedC > 0
+    ? idx({ name: 'Vendor GB', kind: 'owed', usd: usd(owedC), hint: uncoveredOwedC > 0 ? `${fmtUSD(usd(uncoveredOwedC))} not covered even with expected float payments` : floatToOwedC > 0 ? `${fmtUSD(usd(floatToOwedC))} of this coverage depends on float payments arriving` : undefined })
     : -1;
-  const poolIdx = idx({ name: 'Vendor STOCK', kind: 'pool', usd: pool });
-  const profitIdx = walletProfit > 0.005 ? idx({ name: 'Crypto Profit', kind: 'profit', usd: r2(walletProfit), hint: 'wallet money above what vendors are owed' }) : -1;
+  const poolIdx = idx({ name: 'Vendor STOCK', kind: 'pool', usd: usd(poolC) });
+  const profitIdx = walletProfitC > 0 ? idx({ name: 'Crypto Profit', kind: 'profit', usd: usd(walletProfitC), hint: 'wallet money above what vendors are owed' }) : -1;
 
-  for (const w of args.walletRows) {
-    if (w.usd <= 0 || rootIdx < 0) continue;
-    const wi = idx({ name: w.name, kind: 'wallet', usd: w.usd });
-    links.push({ source: rootIdx, target: wi, value: r2(w.usd), kind: 'wallet' });
-    // pro-rata share of the wallet->owed coverage, remainder to Crypto Profit
-    const share = walletTotal > 0 ? walletToOwed * (w.usd / walletTotal) : 0;
-    if (share > 0.005 && owedIdx >= 0) links.push({ source: wi, target: owedIdx, value: r2(share), kind: 'wallet' });
-    const rest = w.usd - share;
-    if (rest > 0.005 && profitIdx >= 0) links.push({ source: wi, target: profitIdx, value: r2(rest), kind: 'profit' });
-  }
-  if (profitIdx >= 0) links.push({ source: profitIdx, target: poolIdx, value: r2(walletProfit), kind: 'profit' });
+  walletsC.forEach((w, i) => {
+    if (rootIdx < 0) return;
+    const wi = idx({ name: w.name, kind: 'wallet', usd: usd(w.c) });
+    links.push({ source: rootIdx, target: wi, value: usd(w.c), kind: 'wallet' });
+    const shareC = sharesC[i];
+    if (shareC > 0 && owedIdx >= 0) links.push({ source: wi, target: owedIdx, value: usd(shareC), kind: 'wallet' });
+    const restC = w.c - shareC;
+    if (restC > 0 && profitIdx >= 0) links.push({ source: wi, target: profitIdx, value: usd(restC), kind: 'profit' });
+  });
+  if (profitIdx >= 0) links.push({ source: profitIdx, target: poolIdx, value: usd(walletProfitC), kind: 'profit' });
 
-  if (args.receivables > 0) {
-    const fi = idx({ name: 'Floating cost payments', kind: 'floating', usd: args.receivables, hint: 'expected at-cost payments — not in the wallets yet' });
-    if (floatToOwed > 0.005 && owedIdx >= 0) links.push({ source: fi, target: owedIdx, value: r2(floatToOwed), kind: 'floating' });
-    if (floatProfit > 0.005) links.push({ source: fi, target: poolIdx, value: r2(floatProfit), kind: 'floating' });
+  if (receivablesC > 0) {
+    const fi = idx({ name: 'Floating cost payments', kind: 'floating', usd: usd(receivablesC), hint: 'expected at-cost payments — not in the wallets yet' });
+    if (floatToOwedC > 0 && owedIdx >= 0) links.push({ source: fi, target: owedIdx, value: usd(floatToOwedC), kind: 'floating' });
+    if (floatProfitC > 0) links.push({ source: fi, target: poolIdx, value: usd(floatProfitC), kind: 'floating' });
   }
-  if (args.outsideMax > 0) {
-    const i = idx({ name: 'Outside crypto', kind: 'outside', usd: args.outsideMax, hint: `attributable ${fmtUSD(args.outsideMax)} of ${fmtUSD(args.outsideTotal)} held` });
-    links.push({ source: i, target: poolIdx, value: r2(args.outsideMax), kind: 'outside' });
+  if (outsideC > 0) {
+    const i = idx({ name: 'Outside crypto', kind: 'outside', usd: usd(outsideC), hint: `attributable ${fmtUSD(usd(outsideC))} of ${fmtUSD(args.outsideTotal)} held` });
+    links.push({ source: i, target: poolIdx, value: usd(outsideC), kind: 'outside' });
   }
-  if (args.cash > 0) {
-    const i = idx({ name: 'Allocated cash profit', kind: 'cash', usd: args.cash, hint: 'entered figure — convertible cash profit, not held as crypto' });
-    links.push({ source: i, target: poolIdx, value: r2(args.cash), kind: 'cash' });
+  if (cashC > 0) {
+    const i = idx({ name: 'Allocated cash profit', kind: 'cash', usd: usd(cashC), hint: 'entered figure — convertible cash profit, not held as crypto' });
+    links.push({ source: i, target: poolIdx, value: usd(cashC), kind: 'cash' });
   }
-  for (const it of args.items) {
-    if (it.usd <= 0) continue;
-    const i = idx({ name: it.label, kind: it.ordered ? 'ordered' : 'alloc', usd: it.usd });
-    links.push({ source: poolIdx, target: i, value: r2(it.usd), kind: it.ordered ? 'ordered' : 'alloc' });
+  for (const it of itemsC) {
+    const i = idx({ name: it.label, kind: it.ordered ? 'ordered' : 'alloc', usd: usd(it.c) });
+    links.push({ source: poolIdx, target: i, value: usd(it.c), kind: it.ordered ? 'ordered' : 'alloc' });
   }
-  if (unallocated > 0.005) {
-    const i = idx({ name: 'Unallocated', kind: 'rest', usd: r2(unallocated) });
-    links.push({ source: poolIdx, target: i, value: r2(unallocated), kind: 'rest' });
+  if (unallocatedC > 0) {
+    const i = idx({ name: 'Unallocated', kind: 'rest', usd: usd(unallocatedC) });
+    links.push({ source: poolIdx, target: i, value: usd(unallocatedC), kind: 'rest' });
   }
-  return { nodes, links, uncoveredOwed, overAllocated, pool, floatToOwed };
+  return {
+    nodes, links,
+    uncoveredOwed: usd(uncoveredOwedC),
+    overAllocated: usd(overAllocatedC),
+    pool: usd(poolC),
+    floatToOwed: usd(floatToOwedC),
+  };
 }
 
 function PlannerNode(props: { x?: number; y?: number; width?: number; height?: number; index?: number; payload?: SNode; containerWidth?: number }) {
