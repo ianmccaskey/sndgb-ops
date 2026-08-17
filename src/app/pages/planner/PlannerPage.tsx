@@ -25,25 +25,31 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { GitBranch, AlertTriangle, RefreshCw } from 'lucide-react';
 
 /*
- * Stock Planner (dataviz-skill compliant):
- * - one Sankey: sources -> owed reservation + profit pool -> allocations
- * - fixed hue per entity CLASS, never per rank: wallets blue, outside teal,
- *   receivables amber (pending money), hypothetical cash gray (not real yet),
- *   owed red, pool/unallocated green, product allocations violet, committed
- *   orders a deeper violet
+ * Stock Planner (waterfall model, per Ian's mock):
+ * - GB Wallet splits into per-chain balances that cover Vendor GB (owed)
+ *   FIRST; the wallet's excess above the owed threshold is "Crypto Profit"
+ * - Floating cost payments (at-cost receivables) BACKFILL any owed the
+ *   wallets can't cover — the rest sits above the threshold and joins the
+ *   profit side; drawn dashed because the money hasn't arrived yet
+ * - Outside crypto (attributable slice) and the entered cash-profit figure
+ *   flow straight to Vendor STOCK
+ * - Vendor STOCK then breaks into the planned per-product allocations and
+ *   the unallocated remainder
  * - color is never the only signal: every node label carries its $ value,
- *   warnings are text badges, pending/hypothetical sources say so in words
+ *   warnings are text badges, pending money is dashed AND labeled
  */
 const KIND_COLORS: Record<string, string> = {
-  wallet: 'rgb(37 99 235)',      // blue-600 — real crypto held
+  root: 'rgb(24 24 27)',         // zinc-900 — the GB wallet
+  wallet: 'rgb(220 38 38)',      // red-600 — wallet money bound for Vendor GB
+  floating: 'rgb(234 88 12)',    // orange-600 — expected float payments
+  profit: 'rgb(22 163 74)',      // green-600 — crypto profit above the owed threshold
   outside: 'rgb(13 148 136)',    // teal-600 — attributable outside crypto
-  receivable: 'rgb(217 119 6)',  // amber-600 — expected, not yet received
-  cash: 'rgb(113 113 122)',      // zinc-500 — hypothetical (entered figure)
-  owed: 'rgb(220 38 38)',        // red-600 — reserved for vendors
-  pool: 'rgb(22 163 74)',        // green-600 — available for stock
+  cash: 'rgb(202 138 4)',        // yellow-600 — hypothetical (entered figure)
+  owed: 'rgb(37 99 235)',        // blue-600 — Vendor GB (group-buy obligations)
+  pool: 'rgb(147 51 234)',       // purple-600 — Vendor STOCK budget
   alloc: 'rgb(124 58 237)',      // violet-600 — planned allocation
   ordered: 'rgb(76 29 149)',     // violet-900 — committed (vendor paid)
-  rest: 'rgb(134 239 172)',      // green-300 — unallocated remainder
+  rest: 'rgb(216 180 254)',      // purple-300 — unallocated remainder
 };
 
 type PlanItem = {
@@ -70,63 +76,83 @@ type Progress = { group_buy_product_id: number; kits_demand: string; kits_paid: 
 type SNode = { name: string; kind: string; usd: number; hint?: string };
 type SLink = { source: number; target: number; value: number; kind: string };
 
-/** Sources -> (owed + pool) -> (allocations + unallocated). Pure. */
+/**
+ * Waterfall Sankey (pure):
+ *   GB Wallet -> per-chain balances -> Vendor GB first;
+ *   wallet excess above the owed threshold -> Crypto Profit -> Vendor STOCK;
+ *   floating payments backfill remaining owed, their excess -> Vendor STOCK;
+ *   outside crypto + cash figure -> Vendor STOCK -> allocations + unallocated.
+ */
 function buildSankey(args: {
   walletRows: { name: string; usd: number }[];
   owedTotal: number; outsideMax: number; outsideTotal: number;
   receivables: number; cash: number;
   items: { label: string; usd: number; ordered: boolean }[];
-}): { nodes: SNode[]; links: SLink[]; uncoveredOwed: number; overAllocated: number; pool: number } {
+}): { nodes: SNode[]; links: SLink[]; uncoveredOwed: number; overAllocated: number; pool: number; floatToOwed: number } {
   const nodes: SNode[] = [];
   const links: SLink[] = [];
-  const add = (n: SNode) => nodes.push(n) - 1 + 1 - 1; // index of pushed node
   const idx = (n: SNode) => { nodes.push(n); return nodes.length - 1; };
+  const r2 = (n: number) => Math.round(n * 100) / 100;
 
   const walletTotal = args.walletRows.reduce((s, w) => s + w.usd, 0);
-  const owedFromWallets = Math.min(args.owedTotal, walletTotal);
-  const uncoveredOwed = Math.max(args.owedTotal - walletTotal, 0);
-  const walletProfit = walletTotal - owedFromWallets;
-  const pool = walletProfit + args.outsideMax + args.receivables + args.cash;
+  // WATERFALL: wallets cover owed first…
+  const walletToOwed = Math.min(args.owedTotal, walletTotal);
+  const walletProfit = walletTotal - walletToOwed; // "Crypto Profit" above the threshold
+  // …then the expected float payments backfill what's left…
+  const owedAfterWallets = args.owedTotal - walletToOwed;
+  const floatToOwed = Math.min(args.receivables, owedAfterWallets);
+  const floatProfit = args.receivables - floatToOwed;
+  // …and anything still uncovered is a real gap.
+  const uncoveredOwed = Math.max(owedAfterWallets - floatToOwed, 0);
 
+  const pool = walletProfit + floatProfit + args.outsideMax + args.cash;
   const allocTotal = args.items.reduce((s, i) => s + i.usd, 0);
   const unallocated = Math.max(pool - allocTotal, 0);
   const overAllocated = Math.max(allocTotal - pool, 0);
 
-  // middle nodes first so both columns exist even when a side is empty
-  const owedIdx = args.owedTotal > 0 ? idx({ name: 'Owed to vendors', kind: 'owed', usd: args.owedTotal, hint: uncoveredOwed > 0 ? `wallets cover ${fmtUSD(owedFromWallets)}; ${fmtUSD(uncoveredOwed)} uncovered` : undefined }) : -1;
-  const poolIdx = idx({ name: 'Available for stock', kind: 'pool', usd: pool });
+  // GB Wallet root -> per-chain balances
+  const rootIdx = walletTotal > 0 ? idx({ name: 'GB Wallet', kind: 'root', usd: walletTotal }) : -1;
+  const owedIdx = args.owedTotal > 0
+    ? idx({ name: 'Vendor GB', kind: 'owed', usd: args.owedTotal, hint: uncoveredOwed > 0 ? `${fmtUSD(uncoveredOwed)} not covered even with expected float payments` : floatToOwed > 0 ? `${fmtUSD(floatToOwed)} of this coverage depends on float payments arriving` : undefined })
+    : -1;
+  const poolIdx = idx({ name: 'Vendor STOCK', kind: 'pool', usd: pool });
+  const profitIdx = walletProfit > 0.005 ? idx({ name: 'Crypto Profit', kind: 'profit', usd: r2(walletProfit), hint: 'wallet money above what vendors are owed' }) : -1;
 
   for (const w of args.walletRows) {
-    if (w.usd <= 0) continue;
-    const i = idx({ name: w.name, kind: 'wallet', usd: w.usd });
-    const share = walletTotal > 0 ? owedFromWallets * (w.usd / walletTotal) : 0;
-    if (share > 0.005 && owedIdx >= 0) links.push({ source: i, target: owedIdx, value: +share.toFixed(2), kind: 'owed' });
+    if (w.usd <= 0 || rootIdx < 0) continue;
+    const wi = idx({ name: w.name, kind: 'wallet', usd: w.usd });
+    links.push({ source: rootIdx, target: wi, value: r2(w.usd), kind: 'wallet' });
+    // pro-rata share of the wallet->owed coverage, remainder to Crypto Profit
+    const share = walletTotal > 0 ? walletToOwed * (w.usd / walletTotal) : 0;
+    if (share > 0.005 && owedIdx >= 0) links.push({ source: wi, target: owedIdx, value: r2(share), kind: 'wallet' });
     const rest = w.usd - share;
-    if (rest > 0.005) links.push({ source: i, target: poolIdx, value: +rest.toFixed(2), kind: 'wallet' });
+    if (rest > 0.005 && profitIdx >= 0) links.push({ source: wi, target: profitIdx, value: r2(rest), kind: 'profit' });
+  }
+  if (profitIdx >= 0) links.push({ source: profitIdx, target: poolIdx, value: r2(walletProfit), kind: 'profit' });
+
+  if (args.receivables > 0) {
+    const fi = idx({ name: 'Floating cost payments', kind: 'floating', usd: args.receivables, hint: 'expected at-cost payments — not in the wallets yet' });
+    if (floatToOwed > 0.005 && owedIdx >= 0) links.push({ source: fi, target: owedIdx, value: r2(floatToOwed), kind: 'floating' });
+    if (floatProfit > 0.005) links.push({ source: fi, target: poolIdx, value: r2(floatProfit), kind: 'floating' });
   }
   if (args.outsideMax > 0) {
-    const i = idx({ name: 'Outside wallet (attributable)', kind: 'outside', usd: args.outsideMax, hint: `attributable ${fmtUSD(args.outsideMax)} of ${fmtUSD(args.outsideTotal)} held` });
-    links.push({ source: i, target: poolIdx, value: args.outsideMax, kind: 'outside' });
-  }
-  if (args.receivables > 0) {
-    const i = idx({ name: 'Expected at-cost payments', kind: 'receivable', usd: args.receivables, hint: 'awaiting customer payment — not in the wallets yet' });
-    links.push({ source: i, target: poolIdx, value: args.receivables, kind: 'receivable' });
+    const i = idx({ name: 'Outside crypto', kind: 'outside', usd: args.outsideMax, hint: `attributable ${fmtUSD(args.outsideMax)} of ${fmtUSD(args.outsideTotal)} held` });
+    links.push({ source: i, target: poolIdx, value: r2(args.outsideMax), kind: 'outside' });
   }
   if (args.cash > 0) {
-    const i = idx({ name: 'Cash profit (hypothetical crypto)', kind: 'cash', usd: args.cash, hint: 'entered figure — convertible cash profit, not held as crypto' });
-    links.push({ source: i, target: poolIdx, value: args.cash, kind: 'cash' });
+    const i = idx({ name: 'Allocated cash profit', kind: 'cash', usd: args.cash, hint: 'entered figure — convertible cash profit, not held as crypto' });
+    links.push({ source: i, target: poolIdx, value: r2(args.cash), kind: 'cash' });
   }
   for (const it of args.items) {
     if (it.usd <= 0) continue;
     const i = idx({ name: it.label, kind: it.ordered ? 'ordered' : 'alloc', usd: it.usd });
-    links.push({ source: poolIdx, target: i, value: it.usd, kind: it.ordered ? 'ordered' : 'alloc' });
+    links.push({ source: poolIdx, target: i, value: r2(it.usd), kind: it.ordered ? 'ordered' : 'alloc' });
   }
   if (unallocated > 0.005) {
-    const i = idx({ name: 'Unallocated', kind: 'rest', usd: unallocated });
-    links.push({ source: poolIdx, target: i, value: +unallocated.toFixed(2), kind: 'rest' });
+    const i = idx({ name: 'Unallocated', kind: 'rest', usd: r2(unallocated) });
+    links.push({ source: poolIdx, target: i, value: r2(unallocated), kind: 'rest' });
   }
-  void add;
-  return { nodes, links, uncoveredOwed, overAllocated, pool };
+  return { nodes, links, uncoveredOwed, overAllocated, pool, floatToOwed };
 }
 
 function PlannerNode(props: { x?: number; y?: number; width?: number; height?: number; index?: number; payload?: SNode; containerWidth?: number }) {
@@ -152,7 +178,7 @@ function PlannerLink(props: { sourceX?: number; targetX?: number; sourceY?: numb
     <path
       d={`M${sourceX},${sourceY} C${sourceControlX},${sourceY} ${targetControlX},${targetY} ${targetX},${targetY}`}
       fill="none" stroke={color} strokeOpacity={payload?.kind === 'cash' ? 0.25 : 0.35} strokeWidth={linkWidth}
-      strokeDasharray={payload?.kind === 'cash' || payload?.kind === 'receivable' ? '6 4' : undefined}
+      strokeDasharray={payload?.kind === 'cash' || payload?.kind === 'floating' ? '6 4' : undefined}
     />
   );
 }
@@ -352,13 +378,19 @@ export function PlannerPage() {
       {sankey.uncoveredOwed > 0 && (
         <div className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
-          <span>Vendor owed exceeds the crypto wallets by <span className="font-semibold">{fmtUSD(sankey.uncoveredOwed)}</span> — the pool below assumes the other sources also help cover stock, but the owed gap comes first.</span>
+          <span>Vendor GB is short <span className="font-semibold">{fmtUSD(sankey.uncoveredOwed)}</span> even counting the expected float payments — cover the gap before allocating stock.</span>
+        </div>
+      )}
+      {sankey.uncoveredOwed <= 0 && sankey.floatToOwed > 0 && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4" />
+          <span><span className="font-semibold">{fmtUSD(sankey.floatToOwed)}</span> of the Vendor GB coverage depends on float payments that haven't arrived yet (dashed flow).</span>
         </div>
       )}
       {sankey.overAllocated > 0 && (
         <div className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
-          <span>Over-allocated by <span className="font-semibold">{fmtUSD(sankey.overAllocated)}</span> — planned purchases exceed the available pool ({fmtUSD(sankey.pool)}).</span>
+          <span>Over-allocated by <span className="font-semibold">{fmtUSD(sankey.overAllocated)}</span> — planned purchases exceed the Vendor STOCK budget ({fmtUSD(sankey.pool)}).</span>
         </div>
       )}
 
@@ -392,7 +424,7 @@ export function PlannerPage() {
             </div>
           )}
           <p className="text-[11px] text-muted-foreground mt-2">
-            Dashed flows are money not in the wallets yet (expected at-cost payments, hypothetical cash-derived crypto). The pool mixes sources — no specific dollar funds a specific kit.
+            Waterfall: the wallets cover Vendor GB first; float payments backfill the rest of owed, and everything above that threshold flows to Vendor STOCK. Dashed flows are money not in the wallets yet. The stock budget mixes sources — no specific dollar funds a specific kit.
           </p>
         </CardContent>
       </Card>
