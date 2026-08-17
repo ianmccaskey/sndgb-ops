@@ -427,6 +427,7 @@ export function ProductsPage() {
                 <p className="text-xs text-muted-foreground">
                   At-cost sale to a customer outside the group buy: the kits join what you order from the vendor, but P&L stays neutral — the customer owes vendor cost + per-kit freight
                   {aExpectedUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(aExpectedUsd)}</span> for this line)</>}, tracked until you mark it received.
+                  {' '}These kits are assumed to <span className="font-medium">arrive with your bulk vendor order</span> — vendor-direct shipping to an outside customer (per-box direct freight) is not modeled here.
                 </p>
               )}
             </CardContent>
