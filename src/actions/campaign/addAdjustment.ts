@@ -11,14 +11,17 @@ import { action } from '@uibakery/data';
  * that person's payout). Validated against profit_splits here — party names
  * are data, not an enum.
  *
- * pricing 'cost' = an AT-COST sale to a customer outside the group buy:
- * kits join vendor demand but P&L waives their margin (net zero — the
- * customer pays vendor cost + per-kit freight, snapshotted as expected_usd,
- * the receivable). Guards for cost rows: qty POSITIVE (you can't un-sell at
- * cost), product NOT tiered (incremental vendor cost of a tiered line is
- * not qty × unit_cost, so exact P&L neutrality can't be guaranteed);
- * beneficiary is stored 'both' but excluded from all payout math by
- * pricing filters.
+ * pricing 'cost' = an AT-COST purchase at vendor cost + per-kit freight
+ * (snapshotted as expected_usd): kits join vendor demand but P&L waives
+ * their margin (net zero). WHO pays is the beneficiary:
+ *   - 'both'  = an OUTSIDE CUSTOMER — expected_usd is a receivable
+ *     (awaiting / mark-received lifecycle);
+ *   - a party = PERSONAL STOCK — expected_usd deducts from that party's
+ *     profit payout (no receivable; the wallet outflow is recouped from
+ *     their share). Party validated against the campaign's profit splits.
+ * Guards for cost rows: qty POSITIVE (you can't un-sell at cost), product
+ * NOT tiered (incremental vendor cost of a tiered line is not qty ×
+ * unit_cost, so exact P&L neutrality can't be guaranteed).
  *
  * preordered 'true' (cost rows only) = the vendor order was ALREADY placed
  * and paid from the wallet: the kits contribute NOTHING to demand
@@ -36,7 +39,7 @@ function addAdjustment() {
         ({{params.qty}})::numeric,
         {{params.reason}},
         {{params.created_by}},
-        CASE WHEN COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost' THEN 'both' ELSE {{params.beneficiary}} END,
+        {{params.beneficiary}},
         COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb'),
         CASE WHEN COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
              THEN ROUND(({{params.qty}})::numeric * (gbp.unit_cost_usd + gbp.freight_usd), 2)
@@ -66,11 +69,10 @@ function addAdjustment() {
                  AND (COALESCE(NULLIF({{params.preordered}}::text, ''), 'false') = 'true'
                       OR (SELECT m.final_count FROM v_moq_progress m
                           WHERE m.group_buy_product_id = gbp.id) > 0)))
-        AND (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
-             OR {{params.beneficiary}} = 'both'
-             -- party must have a split in THE GROUP BUY BEING ADJUSTED —
-             -- a party from another campaign would be aggregated by getPnl
-             -- but deducted from no one's payout (phantom profit returns)
+        -- ANY row with a party beneficiary (gb-priced or at-cost personal
+        -- stock) must name a split party in THE GROUP BUY BEING ADJUSTED —
+        -- otherwise its value would be deducted from no one's payout
+        AND ({{params.beneficiary}} = 'both'
              OR EXISTS (
                SELECT 1
                FROM profit_splits ps

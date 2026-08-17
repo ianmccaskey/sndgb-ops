@@ -475,15 +475,13 @@ export function ProductsPage() {
                     <SelectItem value="cost_pre">At cost + freight — already ordered</SelectItem>
                   </SelectContent>
                 </Select>
-                {aPricing === 'gb' && (
-                  <Select value={aFor} onValueChange={setAFor}>
-                    <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="both">Both</SelectItem>
-                      {splitParties.map(p => <SelectItem key={p.party} value={p.party}>{p.party}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                )}
+                <Select value={aFor} onValueChange={setAFor}>
+                  <SelectTrigger className="h-9 w-40"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="both">{aIsCost ? 'Outside customer' : 'Both'}</SelectItem>
+                    {splitParties.map(p => <SelectItem key={p.party} value={p.party}>{aIsCost ? `${p.party} (personal)` : p.party}</SelectItem>)}
+                  </SelectContent>
+                </Select>
                 <Input placeholder={aIsCost ? 'Reason / customer (audited)' : "Reason (e.g. 'P&P personal x100')"} value={aReason} onChange={e => setAReason(e.target.value)} className="h-9 flex-1 min-w-48" />
                 <Button size="sm" onClick={addAdj}>Add</Button>
               </div>
@@ -491,6 +489,14 @@ export function ProductsPage() {
               {aPricing === 'gb' ? (
                 <p className="text-xs text-muted-foreground">
                   "For" decides whose profit pays for these units at GB price: a person's adjustments come out of their split payout; "Both" comes out of total profit before the split.
+                </p>
+              ) : aFor !== 'both' ? (
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-medium">Personal stock for {aFor}</span> at vendor cost + freight
+                  {aExpectedUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(aExpectedUsd)}</span> for this line)</>}: the amount is <span className="font-medium">deducted from {aFor}'s profit payout</span> — no receivable, P&L stays neutral.
+                  {aPricing === 'cost'
+                    ? ' The kits join what you order from the vendor.'
+                    : ' Already ordered and paid — nothing is added to what you order from the vendor.'}
                 </p>
               ) : aPricing === 'cost' ? (
                 <p className="text-xs text-muted-foreground">
@@ -527,17 +533,27 @@ export function ProductsPage() {
                     <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
                     <TableCell>
                       {a.pricing === 'cost' ? (
-                        <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
-                          title={a.preordered
-                            ? 'Sold at vendor cost + freight from kits ALREADY ordered/paid — no demand or P&L effect, receivable only'
-                            : 'Sold at vendor cost + freight — P&L neutral'}>
-                          {a.preordered ? 'at cost · ordered' : 'at cost'}
+                        <span className="whitespace-nowrap">
+                          <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase"
+                            title={a.beneficiary !== 'both'
+                              ? `Personal stock at vendor cost + freight — deducted from ${a.beneficiary}'s profit payout`
+                              : a.preordered
+                                ? 'Sold at vendor cost + freight from kits ALREADY ordered/paid — no demand or P&L effect, receivable only'
+                                : 'Sold at vendor cost + freight — P&L neutral'}>
+                            {a.preordered ? 'at cost · ordered' : 'at cost'}
+                          </span>
+                          {a.beneficiary !== 'both' && <span className="ml-1 text-xs">{a.beneficiary}</span>}
                         </span>
                       ) : a.beneficiary === 'both' ? 'Both' : a.beneficiary}
                     </TableCell>
                     <TableCell className="text-right">
                       {a.pricing === 'cost' ? (
-                        a.received_at ? (
+                        a.beneficiary !== 'both' ? (
+                          <span title={`Deducted from ${a.beneficiary}'s profit payout — no receivable`}>
+                            {fmtUSD(a.expected_usd)}
+                            <span className="block text-[10px] font-normal text-muted-foreground">from {a.beneficiary}'s profit</span>
+                          </span>
+                        ) : a.received_at ? (
                           <span className="text-green-700">{fmtUSD(a.expected_usd)}<span className="block text-[10px] font-normal">received {fmtDate(a.received_at)}</span></span>
                         ) : (
                           <span className="text-amber-700">

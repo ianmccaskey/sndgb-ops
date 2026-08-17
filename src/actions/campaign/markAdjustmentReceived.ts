@@ -17,6 +17,8 @@ function markAdjustmentReceived() {
         SET received_at = now(), received_by = {{params.actor}}
         WHERE a.id = {{params.adjustment_id}}::bigint
           AND a.pricing = 'cost'
+          -- personal at-cost stock has no receivable to receive
+          AND a.beneficiary = 'both'
           AND a.received_at IS NULL
         RETURNING a.id, a.expected_usd, a.reason
       )

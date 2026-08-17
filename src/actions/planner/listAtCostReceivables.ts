@@ -15,6 +15,9 @@ function listAtCostReceivables() {
       JOIN products p ON p.id = gbp.product_id
       WHERE gbp.group_buy_id = {{params.group_buy_id}}::bigint
         AND a.pricing = 'cost'
+        -- only OUTSIDE-customer sales are receivables; personal at-cost
+        -- stock (party beneficiary) settles against the party's payout
+        AND a.beneficiary = 'both'
         AND a.received_at IS NULL
       ORDER BY a.created_at DESC
     `,
