@@ -49,13 +49,16 @@ function orderStockPlanItem() {
         FROM lck, itm
         JOIN v_moq_progress m ON m.group_buy_product_id = itm.group_buy_product_id
       ), pay AS (
-        INSERT INTO vendor_payments (vendor_id, group_buy_id, paid_on, amount_usd, wallet_id, method, receipt_ref, note, kits_qty, freight_usd, group_buy_product_id)
+        INSERT INTO vendor_payments (vendor_id, group_buy_id, paid_on, amount_usd, wallet_id, method, receipt_ref, note, kits_qty, freight_usd, group_buy_product_id, stock_plan_item_id)
         SELECT itm.vendor_id, itm.group_buy_id, {{params.paid_on}}::date, itm.amount_usd,
                NULLIF({{params.wallet_id}}::text, '')::bigint,
                NULLIF({{params.method}}::text, ''),
                NULLIF({{params.receipt_ref}}::text, ''),
                'stock plan: ' || itm.sku_code || ' x ' || itm.kits::text || ' personal stock (cost+freight)',
-               itm.kits, NULL, itm.group_buy_product_id
+               itm.kits, NULL, itm.group_buy_product_id,
+               -- the payment<->plan link is DATA (unique per line):
+               -- deleteVendorPayment un-stamps the line atomically on removal
+               itm.id
         FROM itm
         JOIN cur ON cur.item_id = itm.id
         WHERE (
