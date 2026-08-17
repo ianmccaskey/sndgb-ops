@@ -436,18 +436,23 @@ export function PlannerPage() {
           {sankey.links.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">Nothing to draw yet — refresh wallet balances or enter sources below.</p>
           ) : (
-            <div className="w-full" style={{ height: 440 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <Sankey
-                  data={sankeyData}
-                  nodePadding={28}
-                  margin={{ top: 12, right: 200, bottom: 12, left: 12 }}
-                  node={<PlannerNode />}
-                  link={<PlannerLink />}
-                >
-                  <Tooltip formatter={(v: number) => fmtUSD(v)} />
-                </Sankey>
-              </ResponsiveContainer>
+            // the flow diagram needs real width for its four columns and
+            // outboard labels — on narrow screens it keeps a minimum width
+            // and scrolls horizontally instead of squashing
+            <div className="w-full overflow-x-auto">
+              <div style={{ minWidth: 760, height: 440 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <Sankey
+                    data={sankeyData}
+                    nodePadding={28}
+                    margin={{ top: 12, right: 200, bottom: 12, left: 12 }}
+                    node={<PlannerNode />}
+                    link={<PlannerLink />}
+                  >
+                    <Tooltip formatter={(v: number) => fmtUSD(v)} />
+                  </Sankey>
+                </ResponsiveContainer>
+              </div>
             </div>
           )}
           <p className="text-[11px] text-muted-foreground mt-2">
