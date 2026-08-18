@@ -57,6 +57,10 @@ function addAdjustment() {
         COALESCE(NULLIF({{params.stock}}::text, ''), 'false') = 'true'
       FROM group_buy_products gbp
       WHERE gbp.id = {{params.group_buy_product_id}}::bigint
+        -- CAMPAIGN-SCOPED like every money-writing action: a stale or
+        -- forged product id from another campaign must not gain demand or
+        -- P&L deductions there
+        AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
         AND ({{params.qty}})::text ~ '^-?[0-9]+(\\.[0-9]{1,2})?$'
         AND ({{params.qty}})::numeric <> 0
         AND COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') IN ('gb', 'cost')

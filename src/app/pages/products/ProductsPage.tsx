@@ -296,7 +296,7 @@ export function ProductsPage() {
       // The action refuses (returns no row) instead of letting Postgres
       // round an over-precision qty — surface that as an error, not success.
       const res = await doAddAdj({
-        group_buy_product_id: Number(aProduct), qty, reason: aReason.trim(), created_by: userName,
+        group_buy_product_id: Number(aProduct), group_buy_id: groupBuyId, qty, reason: aReason.trim(), created_by: userName,
         // 'both_stock' is a UI-only sentinel: GROUP STOCK = beneficiary
         // 'both' + the stock flag (net-profit deduction, no receivable)
         beneficiary: aFor === 'both_stock' ? 'both' : aFor, pricing: aIsCost ? 'cost' : 'gb',
