@@ -24,6 +24,15 @@ import { action } from '@uibakery/data';
  * Whole positive kits are already guaranteed by stock_plan_items' CHECK.
  * Already-ORDERED lines commit too when unlinked: their over-buy payment
  * exists, and the adjustment makes demand and paid line up.
+ *
+ * FIRST-DEMAND products cost more than the snapshot, ON PURPOSE: when a
+ * stock commit is what flips a product's final_count above zero, the
+ * product's one-time testing_cost_usd starts being charged in
+ * v_product_profit — real money the group pays BECAUSE of this decision,
+ * so it hits net profit rather than being waived (hiding it would
+ * overstate profit by real dollars). The Planner's confirm dialog flags
+ * such lines before committing. Products that already have group demand
+ * deduct exactly the snapshotted cost + freight.
  */
 function commitStockPlan() {
   return action('commitStockPlan', 'SQL', {

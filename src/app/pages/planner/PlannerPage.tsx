@@ -389,7 +389,15 @@ export function PlannerPage() {
 
   const commitPlan = async () => {
     if (uncommitted.length === 0) return;
-    const lines = uncommitted.map(i => `  ${i.sku_code} × ${fmtNum(i.kits)} = ${fmtUSD(i.planned_value_usd)}`).join('\n');
+    // a line whose product has NO group demand yet is this product's FIRST
+    // demand — committing it also starts the product's one-time testing
+    // cost in P&L (real money the commit decision incurs), so say so
+    const firstDemand = (i: PlanItem) => {
+      const prog = progress.find(p => Number(p.group_buy_product_id) === Number(i.group_buy_product_id));
+      return !prog || Number(prog.kits_demand) <= 0;
+    };
+    const lines = uncommitted.map(i =>
+      `  ${i.sku_code} × ${fmtNum(i.kits)} = ${fmtUSD(i.planned_value_usd)}${firstDemand(i) ? '  ⚠ FIRST demand — its one-time testing cost will also hit P&L' : ''}`).join('\n');
     if (!window.confirm(
       `Commit the ENTIRE plan to vendor demand?\n\n${lines}\n\nTotal ${fmtUSD(uncommittedValue)} at vendor cost + freight.\n\nThese kits are added to what we order from the vendors, and the total comes out of NET PROFIT before the split. No receivable — this is the group's own stock. All-or-nothing: if any line's product is inactive or tiered, nothing commits.`)) {
       return;
