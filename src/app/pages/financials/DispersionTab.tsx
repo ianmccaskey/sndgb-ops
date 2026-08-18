@@ -135,6 +135,13 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
   const composedNet = gross + bridge.reduce((s, b) => s + b.amount, 0);
   const drift = Math.abs(composedNet - viewNet) >= 0.005;
 
+  // informational per-party figure (Ian's ask): net after ONLY shipping
+  // (net), comps, credits, write-offs, and GB-price giveaways — stock
+  // (group AND personal), at-cost waivers, direct freight, and
+  // non-shipping expenses deliberately excluded. Not a payout figure.
+  const infoNet = gross + shippingNet
+    - num(pnl?.comps_usd) - num(pnl?.credits_usd) - num(pnl?.writeoffs_usd) - num(pnl?.adj_both_usd);
+
   // ---- per-party stock contributions --------------------------------------
   // group-stock rows (planner commits + direct) split by the profit split;
   // personal rows belong 100% to their party
@@ -218,9 +225,16 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
           <div className="text-sm font-bold uppercase tracking-wide px-1">Net profit break</div>
           {splits.map(s => (
             <Card key={s.party}>
-              <CardContent className="py-3 flex items-baseline justify-between gap-2">
-                <span className="text-xl font-bold">{s.party}</span>
-                <span className="text-2xl font-bold text-green-600 whitespace-nowrap">{fmtUSD(viewNet * Number(s.pct) / 100)}</span>
+              <CardContent className="py-3 space-y-0.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xl font-bold">{s.party}</span>
+                  <span className="text-2xl font-bold text-green-600 whitespace-nowrap">{fmtUSD(viewNet * Number(s.pct) / 100)}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
+                  title="Informational only: gross + shipping (net) − comps − credits − write-offs − GB-price giveaways, × split share. Stock (group and personal), at-cost waivers, direct freight, and non-shipping expenses are deliberately excluded — this is not a payout figure.">
+                  <span>after ship/comp/credit/WO/giveaway</span>
+                  <span className="whitespace-nowrap">{fmtUSD(infoNet * Number(s.pct) / 100)}</span>
+                </div>
               </CardContent>
             </Card>
           ))}
