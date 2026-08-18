@@ -28,6 +28,7 @@ export type Pnl = {
   direct_freight_usd: string; split_fees_usd: string; at_cost_margin_usd: string;
   stock_cost_usd: string; stock_retail_usd: string;
   comps_usd: string; credits_usd: string; writeoffs_usd: string; adj_both_usd: string;
+  shipping_expenses_usd: string;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
   splits: { party: string; pct: string }[] | null;
 };
@@ -57,15 +58,21 @@ function prorate(totalUsd: number, splits: { party: string; pct: string }[]): Re
   return out;
 }
 
-export function DispersionTab({ pnl, expenses, adjustments, adjustmentsReady }: {
+export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: {
   pnl: Pnl | undefined;
   expenses: ExpenseRow[];
   adjustments: DispAdjustment[];
   // the itemized rows load lazily on tab activation — until they land, the
   // itemized sections show a loading note and the per-party desync guard
-  // stays silent (an empty list is "not loaded yet", not "out of sync")
-  adjustmentsReady: boolean;
+  // stays silent (an empty list is "not loaded yet", not "out of sync");
+  // a FAILED load renders as failure, never as an empty dataset
+  adjustmentsState: 'loading' | 'error' | 'ready';
 }) {
+  const adjustmentsReady = adjustmentsState === 'ready';
+  const itemizedNote = adjustmentsState === 'error'
+    ? 'Failed to load the itemized adjustments — the totals above are unaffected. Switch tabs and back to retry.'
+    : 'Loading itemized adjustments…';
+  const itemizedNoteClass = adjustmentsState === 'error' ? 'text-xs text-red-600' : 'text-xs text-muted-foreground';
   const splits = pnl?.splits || [];
   const viewNet = num(pnl?.net_profit_usd);
 
@@ -73,14 +80,16 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsReady }: 
   const earnedMargin = num(pnl?.product_profit_usd) - (num(pnl?.stock_retail_usd) - num(pnl?.stock_cost_usd));
   const gross = earnedMargin + num(pnl?.admin_fee_revenue_usd) + num(pnl?.tip_revenue_usd) + num(pnl?.split_fees_usd);
 
-  const shipExp = expenses
-    .filter(e => e.category === 'shipping' || e.category === 'reship')
-    .reduce((s, e) => s + num(e.total_usd), 0);
-  // other expenses derive from the VIEW total minus the shipping slice, so
-  // the composition can never disagree with the P&L even if the expense list
-  // and view were momentarily loaded at different instants
+  // the shipping slice comes from getPnl's OWN statement (same snapshot as
+  // the view totals), never from the separately-loaded expense list — a
+  // stale list can therefore only affect display sub-rows (guarded below),
+  // never the bridge math
+  const shipExp = num(pnl?.shipping_expenses_usd);
   const otherExp = num(pnl?.expenses_usd) - shipExp;
   const shippingNet = num(pnl?.shipping_fee_revenue_usd) + num(pnl?.insurance_revenue_usd) - num(pnl?.label_costs_usd) - shipExp;
+  const shipExpFromList = expenses
+    .filter(e => e.category === 'shipping' || e.category === 'reship')
+    .reduce((s, e) => s + num(e.total_usd), 0);
 
   const bridge: { label: string; amount: number; hint?: string; subs?: { label: string; amount: number }[] }[] = [
     {
@@ -91,6 +100,11 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsReady }: 
         { label: 'Shipping insurance collected', amount: num(pnl?.insurance_revenue_usd) },
         { label: 'Label costs (from shipments)', amount: -num(pnl?.label_costs_usd) },
         { label: 'Shipping / reship expenses', amount: -shipExp },
+        // informational: the on-screen expense list disagreeing with the
+        // P&L snapshot means it's stale — the parent line stays authoritative
+        ...(Math.abs(shipExpFromList - shipExp) >= 0.005
+          ? [{ label: 'expense list is stale vs the P&L snapshot — reload', amount: shipExp - shipExpFromList }]
+          : []),
       ],
     },
     {
@@ -298,7 +312,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsReady }: 
                   <span>…of group stock, {Number(s.pct)}% share (pre-split, informational)</span>
                   <span>{fmtUSD(groupShare)}</span>
                 </div>
-                {!adjustmentsReady && <p className="text-xs text-muted-foreground">Loading itemized adjustments…</p>}
+                {!adjustmentsReady && <p className={itemizedNoteClass}>{itemizedNote}</p>}
                 {desync && (
                   <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
                     Itemized rows sum to {fmtUSD(itemsSum)} but the P&L aggregation says {fmtUSD(personal)} — the two
@@ -335,12 +349,13 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsReady }: 
             <Card key={s.party}>
               <CardHeader className="pb-2"><CardTitle className="text-base">{s.party} — stock contributions</CardTitle></CardHeader>
               <CardContent className="text-sm space-y-1">
-                {!adjustmentsReady && <p className="text-xs text-muted-foreground">Loading itemized adjustments…</p>}
+                {!adjustmentsReady && <p className={itemizedNoteClass}>{itemizedNote}</p>}
                 <div className="flex justify-between"><span className="text-muted-foreground">Group stock ({Number(s.pct)}% of {fmtUSD(num(pnl?.stock_cost_usd))})</span><span>{fmtUSD(t.group)}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Personal stock (at cost + freight)</span><span>{fmtUSD(t.personal)}</span></div>
                 <div className="flex justify-between font-semibold border-t pt-1"><span>Total in stock</span><span>{fmtUSD(t.group + t.personal)}</span></div>
                 <p className="text-[11px] text-muted-foreground">
                   {fmtUSD(t.group + t.personal)} of {s.party}'s {fmtUSD(base)} net share is held as product instead of cash.
+                  Group-stock share uses the current split ({Number(s.pct)}%).
                 </p>
               </CardContent>
             </Card>
@@ -402,7 +417,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsReady }: 
               )}
               {stockRows.length === 0 && (
                 <TableRow><TableCell colSpan={5 + splits.length + (hasOrphans ? 1 : 0)} className="text-center text-muted-foreground py-6">
-                  {adjustmentsReady ? 'No stock expenditures yet.' : 'Loading itemized adjustments…'}
+                  {adjustmentsReady ? 'No stock expenditures yet.' : itemizedNote}
                 </TableCell></TableRow>
               )}
             </TableBody>
@@ -414,7 +429,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsReady }: 
             </div>
           )}
           <p className="text-[11px] text-muted-foreground mt-2">
-            Group-stock rows (planner commits and direct group-stock adjustments) split by the profit split; personal rows belong entirely to their party. Values are the cost+freight snapshots taken when each row was created.
+            Group-stock rows (planner commits and direct group-stock adjustments) split by the CURRENT profit split ({(pnl?.splits || []).map(s => `${s.party} ${Number(s.pct)}%`).join(' / ')}) — split snapshots are not stored, so changing the split re-derives these shares; this is a current-split view, not a historical record. Personal rows belong entirely to their party. Values are the cost+freight snapshots taken when each row was created.
           </p>
         </CardContent>
       </Card>

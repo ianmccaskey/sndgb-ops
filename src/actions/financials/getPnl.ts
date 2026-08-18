@@ -4,7 +4,15 @@ function getPnl() {
   return action('getPnl', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT pnl.*, splits.splits, adj.adjustments
+      SELECT pnl.*, splits.splits, adj.adjustments,
+             -- the shipping/reship expense slice rides in the SAME statement
+             -- (same snapshot) as the view read: the dispersion tab's
+             -- shipping bridge must never pair view totals with a
+             -- separately-loaded (possibly stale) expense list
+             (SELECT COALESCE(SUM(e.total_usd), 0)
+              FROM expenses e
+              WHERE e.group_buy_id = pnl.group_buy_id
+                AND e.category IN ('shipping', 'reship')) AS shipping_expenses_usd
       FROM v_group_buy_pnl pnl
       LEFT JOIN (
         SELECT group_buy_id,

@@ -41,7 +41,11 @@ export function FinancialsPage() {
   // the dispersion tab's itemized rows load LAZILY on first tab activation —
   // Overview must never pay for (or depend on) a query it doesn't render
   const [finTab, setFinTab] = useState('overview');
-  const [rawAdjustments, adjustmentsLoading] = useLoadAction(listAdjustments, [groupBuyId, finTab], { group_buy_id: groupBuyId }, { enabled: enabled && finTab === 'dispersion' });
+  const [rawAdjustments, adjustmentsLoading, adjustmentsError] = useLoadAction(listAdjustments, [groupBuyId, finTab], { group_buy_id: groupBuyId }, { enabled: enabled && finTab === 'dispersion' });
+  // a failed fetch must read as FAILURE, never as an empty dataset — an
+  // empty stock table on a financial screen would be a silent lie
+  const adjustmentsState: 'loading' | 'error' | 'ready' =
+    adjustmentsError ? 'error' : (finTab === 'dispersion' && !adjustmentsLoading) ? 'ready' : 'loading';
 
   const pnl = firstRow<Pnl>(rawPnl);
   const expenses = rows<Expense>(rawExpenses);
@@ -174,7 +178,7 @@ export function FinancialsPage() {
 
         <TabsContent value="dispersion" className="mt-4">
           <DispersionTab pnl={pnl} expenses={expenses} adjustments={adjustmentRows}
-            adjustmentsReady={finTab === 'dispersion' && !adjustmentsLoading} />
+            adjustmentsState={adjustmentsState} />
         </TabsContent>
 
         <TabsContent value="overview" className="mt-4 space-y-5">
