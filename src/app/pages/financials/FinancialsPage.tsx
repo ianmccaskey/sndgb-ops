@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import getPnl from '@/actions/financials/getPnl';
 import listExpenses from '@/actions/financials/listExpenses';
+import listAdjustments from '@/actions/campaign/listAdjustments';
 import addExpense from '@/actions/financials/addExpense';
 import deleteExpense from '@/actions/financials/deleteExpense';
 import listWallets from '@/actions/financials/listWallets';
@@ -18,18 +19,9 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BarChart3, RefreshCw } from 'lucide-react';
-
-type Pnl = {
-  product_revenue_usd: string; order_count: string; admin_fee_revenue_usd: string;
-  shipping_fee_revenue_usd: string; insurance_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string;
-  product_profit_usd: string; expenses_usd: string; label_costs_usd: string; net_profit_usd: string;
-  direct_freight_usd: string; split_fees_usd: string; at_cost_margin_usd: string;
-  stock_cost_usd: string; stock_retail_usd: string;
-  comps_usd: string; credits_usd: string; writeoffs_usd: string; adj_both_usd: string;
-  adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
-  splits: { party: string; pct: string }[] | null;
-};
+import { DispersionTab, type Pnl, type DispAdjustment } from './DispersionTab';
 type Expense = { id: number; category: string; description: string; unit_cost_usd: string; qty: string; total_usd: string };
 type Wallet = {
   id: number; name: string; chain: string; address: string | null; active: boolean;
@@ -46,9 +38,11 @@ export function FinancialsPage() {
   const [rawFreight] = useLoadAction(listFreightByVendor, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawExpenses, , , reloadExpenses] = useLoadAction(listExpenses, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
+  const [rawAdjustments] = useLoadAction(listAdjustments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
 
   const pnl = firstRow<Pnl>(rawPnl);
   const expenses = rows<Expense>(rawExpenses);
+  const adjustmentRows = rows<DispAdjustment>(rawAdjustments);
   const wallets = rows<Wallet>(rawWallets);
   const freightByVendor = rows<{ vendor_code: string; kit_freight_usd: string; direct_freight_usd: string; boxes: string; total_freight_usd: string }>(rawFreight);
 
@@ -168,6 +162,18 @@ export function FinancialsPage() {
         </h1>
         <p className="text-sm text-muted-foreground mt-1">P&L is computed live from orders, products, expenses, and shipments — nothing is typed twice.</p>
       </div>
+
+      <Tabs defaultValue="overview">
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="dispersion">Profit dispersion</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="dispersion" className="mt-4">
+          <DispersionTab pnl={pnl} expenses={expenses} adjustments={adjustmentRows} />
+        </TabsContent>
+
+        <TabsContent value="overview" className="mt-4 space-y-5">
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -407,6 +413,9 @@ export function FinancialsPage() {
           </div>
         </CardContent>
       </Card>
+
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
