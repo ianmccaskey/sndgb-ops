@@ -36,7 +36,21 @@ type Wallet = { id: number; name: string };
 type ProductProgress = {
   group_buy_product_id: number; vendor_code: string; sku_code: string;
   kits_demand: string; kits_paid: string; vendor_order_value_usd: string; per_kit_cost_usd: string;
+  orders_kits: string; adj_kits: string;
+  adj_detail: { kind: string; qty: string }[] | null;
 };
+
+// admin-adjustment kinds get distinct chips so it's visible at a glance
+// that their kits are INSIDE the purchase numbers (color never the only
+// signal — every chip carries its kind label and signed kit count)
+const ADJ_CHIP_STYLES: [RegExp, string][] = [
+  [/^stock plan$/, 'bg-emerald-100 text-emerald-900'],
+  [/^outside sale$/, 'bg-sky-100 text-sky-900'],
+  [/^personal/, 'bg-indigo-100 text-indigo-900'],
+  [/^admin$/, 'bg-zinc-200 text-zinc-800'],
+];
+const adjChipClass = (kind: string) =>
+  (ADJ_CHIP_STYLES.find(([re]) => re.test(kind)) || [null, 'bg-zinc-200 text-zinc-800'])[1];
 
 export function VendorsPage() {
   const { groupBuyId, userName } = useApp();
@@ -254,10 +268,19 @@ export function VendorsPage() {
                   <TableCell className="text-right">
                     {(() => {
                       const left = Number(b.kits_demand) - Number(b.kits_paid);
+                      const vendorAdj = productProgress
+                        .filter(pp => pp.vendor_code === b.vendor_code)
+                        .reduce((s, pp) => s + Number(pp.adj_kits), 0);
                       return (
                         <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
                           {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
                           <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(b.kits_paid)}/{fmtNum(b.kits_demand)} paid</span>
+                          {vendorAdj !== 0 && (
+                            <span className="block text-[10px] text-indigo-700 font-normal whitespace-nowrap"
+                              title="Kits this vendor's demand includes from admin adjustments — see the product lines below for the per-kind split">
+                              incl. {fmtNum(vendorAdj)} adj kits
+                            </span>
+                          )}
                         </span>
                       );
                     })()}
@@ -277,9 +300,23 @@ export function VendorsPage() {
                 </TableRow>
                 {withLines && productProgress.filter(pp => pp.vendor_code === b.vendor_code).map(pp => {
                   const left = Number(pp.kits_demand) - Number(pp.kits_paid);
+                  const adj = Number(pp.adj_kits);
                   return (
                     <TableRow key={`pp-${pp.group_buy_product_id}`} className="bg-muted/30 hover:bg-muted/40">
-                      <TableCell className="pl-8 text-sm text-muted-foreground">↳ {pp.sku_code}</TableCell>
+                      <TableCell className="pl-8 text-sm text-muted-foreground">
+                        ↳ {pp.sku_code}
+                        {/* every admin adjustment that ADDS TO (or removes
+                            from) the purchase numbers gets a labeled chip —
+                            the demand cell on the right shows the same split
+                            as orders + adj */}
+                        {adj !== 0 && (pp.adj_detail || []).map(d => (
+                          <span key={d.kind}
+                            className={`ml-1.5 rounded text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap ${adjChipClass(d.kind)}`}
+                            title={`${fmtNum(Math.abs(Number(d.qty)))} ${Number(d.qty) < 0 ? 'kits removed from' : 'kits added to'} the vendor order by ${d.kind} adjustments — included in this product's demand`}>
+                            {Number(d.qty) < 0 ? '−' : '+'}{fmtNum(Math.abs(Number(d.qty)))} {d.kind}
+                          </span>
+                        ))}
+                      </TableCell>
                       <TableCell className="text-right text-sm text-muted-foreground">{fmtUSD(pp.vendor_order_value_usd, { cents: false })}</TableCell>
                       <TableCell />
                       <TableCell />
@@ -287,6 +324,12 @@ export function VendorsPage() {
                         <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
                           {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
                           <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(pp.kits_paid)}/{fmtNum(pp.kits_demand)} paid</span>
+                          {adj !== 0 && (
+                            <span className="block text-[10px] text-indigo-700 font-normal whitespace-nowrap"
+                              title="The purchase total is customer orders plus admin adjustments (rounded up to whole kits)">
+                              = {fmtNum(pp.orders_kits)} orders {adj < 0 ? '−' : '+'} {fmtNum(Math.abs(adj))} adj
+                            </span>
+                          )}
                         </span>
                       </TableCell>
                       <TableCell />
