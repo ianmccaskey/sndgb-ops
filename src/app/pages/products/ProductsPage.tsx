@@ -584,7 +584,7 @@ export function ProductsPage() {
                           <span className="text-amber-700">
                             awaiting {fmtUSD(a.expected_usd)}
                             <Button size="sm" variant="outline" className="block h-6 px-1.5 mt-0.5 ml-auto text-[11px]"
-                              onClick={() => doMarkReceived({ adjustment_id: a.id, actor: userName }).then(() => reloadAdj())}>
+                              onClick={() => doMarkReceived({ adjustment_id: a.id, group_buy_id: groupBuyId, actor: userName }).then(() => reloadAdj())}>
                               Mark received
                             </Button>
                           </span>
