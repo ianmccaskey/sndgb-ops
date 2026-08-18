@@ -404,9 +404,16 @@ export function PlannerPage() {
     }
     setCommitting(true); setAMsg('');
     try {
-      const res = await doCommitPlan({ group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
+      // the commit is anchored to EXACTLY the lines just confirmed —
+      // if the plan changed meanwhile (co-admin edit), the server
+      // refuses the whole batch and we re-confirm against fresh data
+      const res = await doCommitPlan({
+        group_buy_id: groupBuyId, actor: userName,
+        confirmed_items: uncommitted.map(i => `${i.id}:${Number(i.kits)}`).join(','),
+      }) as unknown[] | null;
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
-        setAMsg('Nothing committed — every line is already committed, or a line’s product is inactive/tiered (all-or-nothing).');
+        setAMsg('Nothing committed — the plan changed while you were confirming (or every line is already committed, or a product is inactive/tiered). Refresh and try again.');
+        reloadPlan();
         return;
       }
       reloadPlan(); reloadProgress();

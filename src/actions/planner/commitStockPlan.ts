@@ -9,14 +9,20 @@ import { action } from '@uibakery/data';
  * retail value of the kits is waived; their booked cost side remains).
  * No receivable: nobody pays the group back for its own stock.
  *
- * ALL-OR-NOTHING: if ANY pending line's product is inactive or has gone
- * cost-tiered since planning, nothing commits (zero rows) — a partial
- * commit would leave the operator guessing which lines landed. Pending
- * lines and their product rows are locked FOR UPDATE first, so a racing
- * second click (or a concurrent tier conversion, which locks the same
- * gbp row in upsertCampaignProduct) serializes; the loser sees the lines
- * already linked and inserts nothing. The partial unique index on
- * stock_plan_item_id makes double-commit unrepresentable outright.
+ * The commit is ANCHORED TO WHAT THE OPERATOR CONFIRMED (same philosophy
+ * as the over-buy anchor): confirmed_items carries the exact 'id:kits'
+ * list shown in the confirm dialog, and the server commits precisely that
+ * set or NOTHING. Any drift between the dialog and the click — a line
+ * added by the co-admin (not in the confirmed set: left alone, stays
+ * visibly uncommitted), a confirmed line deleted, re-quantified, already
+ * committed, or its product gone inactive/tiered — blocks the WHOLE batch
+ * (zero rows), because the operator's confirmation no longer describes
+ * the plan. Confirmed lines and their product rows are locked FOR UPDATE
+ * (a racing second click, or a concurrent tier conversion which locks the
+ * same gbp row in upsertCampaignProduct, serializes; re-quantify's DO
+ * UPDATE waits on the item lock and then refuses linked lines). The
+ * partial unique index on stock_plan_item_id makes double-commit
+ * unrepresentable outright.
  *
  * Deliberately NO positive-demand guard (unlike addAdjustment's at-cost
  * sales, which piggyback on group demand): a stock commit IS the demand —
@@ -38,7 +44,12 @@ function commitStockPlan() {
   return action('commitStockPlan', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH pending AS (
+      WITH confirmed AS (
+        -- the exact lines the operator saw and confirmed: 'id:kits,id:kits'
+        SELECT split_part(x, ':', 1)::bigint AS item_id,
+               split_part(x, ':', 2)::numeric AS kits
+        FROM unnest(string_to_array(NULLIF({{params.confirmed_items}}::text, ''), ',')) AS x
+      ), pending AS (
         SELECT i.id AS item_id, i.kits, gbp.id AS gbp_id, gbp.status, gbp.cost_tier_qty,
                gbp.unit_cost_usd, gbp.freight_usd, p.sku_code
         FROM stock_plan_items i
@@ -46,10 +57,20 @@ function commitStockPlan() {
           AND sp.group_buy_id = {{params.group_buy_id}}::bigint
         JOIN group_buy_products gbp ON gbp.id = i.group_buy_product_id
         JOIN products p ON p.id = gbp.product_id
-        WHERE NOT EXISTS (SELECT 1 FROM admin_adjustments a WHERE a.stock_plan_item_id = i.id)
+        WHERE i.id IN (SELECT item_id FROM confirmed)
+          AND NOT EXISTS (SELECT 1 FROM admin_adjustments a WHERE a.stock_plan_item_id = i.id)
         FOR UPDATE OF i, gbp
-      ), blocked AS (
-        SELECT 1 FROM pending WHERE pending.status <> 'active' OR pending.cost_tier_qty IS NOT NULL
+      ), drift AS (
+        -- ANY confirmed line that is gone, already committed, re-quantified,
+        -- or no longer an active flat-cost product blocks the whole batch:
+        -- the confirmation no longer describes the plan
+        SELECT 1
+        FROM confirmed c
+        LEFT JOIN pending p ON p.item_id = c.item_id
+        WHERE p.item_id IS NULL
+           OR p.kits <> c.kits
+           OR p.status <> 'active'
+           OR p.cost_tier_qty IS NOT NULL
       ), ins AS (
         INSERT INTO admin_adjustments (group_buy_product_id, qty, reason, created_by, beneficiary, pricing, expected_usd, preordered, stock_plan_item_id)
         SELECT pending.gbp_id, pending.kits,
@@ -58,7 +79,7 @@ function commitStockPlan() {
                ROUND(pending.kits * (pending.unit_cost_usd + pending.freight_usd), 2),
                false, pending.item_id
         FROM pending
-        WHERE NOT EXISTS (SELECT 1 FROM blocked)
+        WHERE NOT EXISTS (SELECT 1 FROM drift)
         RETURNING id, group_buy_product_id, qty, expected_usd, stock_plan_item_id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
