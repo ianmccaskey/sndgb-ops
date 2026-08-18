@@ -164,6 +164,20 @@ export function VendorsPage() {
       }).join('\n');
       if (!window.confirm(`These lines exceed what is currently owed:\n\n${detail}\n\nRecord anyway? The vendor breakdown will flag them as over-paid.`)) return;
     }
+    // freight beyond what the demand ledger says is owed (vendor added fees,
+    // surcharges) is allowed the same way as kit over-buys: an explicit
+    // confirmation whose owed figure travels with the payment — the server
+    // re-reads freight-remaining under its lock and refuses a stale
+    // confirmation rather than widening the over-payment silently
+    const vendorBal = balances.find(b => String(b.vendor_id) === pVendor);
+    const freightOwed = vendorBal ? Math.round((Number(vendorBal.freight_demand_usd) - Number(vendorBal.freight_paid_usd)) * 100) / 100 : null;
+    const freightOver = Number(pFreight) > 0 && freightOwed !== null && Number(pFreight) > freightOwed;
+    if (freightOver) {
+      const ledgerLine = freightOwed! >= 0
+        ? `only ${fmtUSD(freightOwed!)} of freight is still owed by the demand ledger`
+        : `the freight ledger is already over-paid by ${fmtUSD(-freightOwed!)}`;
+      if (!window.confirm(`Freight ${fmtUSD(Number(pFreight))} exceeds the ledger: ${ledgerLine}.\n\nVendor-added fees are a valid reason. Record anyway? The vendor breakdown will flag the freight as over-paid.`)) return;
+    }
     setPSaving(true); setPError('');
     const failed: string[] = [];
     const recordedLines = new Set<PayLine>();
@@ -180,6 +194,7 @@ export function VendorsPage() {
           kits_qty: l.kits.trim(), freight_usd: '', group_buy_product_id: l.product,
           allow_over: overLines.has(l) ? 'true' : '',
           confirmed_owed: overLines.has(l) ? String(kitsOwed(l) ?? '') : '',
+          allow_over_freight: '', confirmed_freight_owed: '',
           actor: userName,
         }) as unknown[] | null;
         const wrote = Array.isArray(res) ? res.length > 0 : !!res;
@@ -196,11 +211,13 @@ export function VendorsPage() {
           note: (pNote ? pNote + ' | ' : '') + 'freight',
           kits_qty: '', freight_usd: pFreight.trim(), group_buy_product_id: '',
           allow_over: '', confirmed_owed: '',
+          allow_over_freight: freightOver ? 'true' : '',
+          confirmed_freight_owed: freightOver ? String(freightOwed ?? '') : '',
           actor: userName,
         }) as unknown[] | null;
         const wrote = Array.isArray(res) ? res.length > 0 : !!res;
         if (wrote) freightRecorded = true;
-        else failed.push('freight (refused — exceeds freight still owed)');
+        else failed.push('freight (refused — exceeds freight still owed, or the ledger moved while confirming; press Record again to confirm the override)');
       }
       if (failed.length > 0) {
         setPError('Some lines were NOT recorded: ' + failed.join('; ') + '. Recorded lines moved to the log below; the form now holds only what is still unrecorded.');
