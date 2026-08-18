@@ -350,7 +350,7 @@ export function VendorsPage() {
                           return remUsd > 0 ? (
                             <span className="block text-[10px] text-violet-700 whitespace-nowrap"
                               title={`${fmtNum(remKits)} kits still to buy × ${fmtUSD(pp.per_kit_cost_usd)}/kit`}>
-                              left to buy {fmtUSD(remUsd, { cents: false })}
+                              left to buy {fmtUSD(remUsd)}
                             </span>
                           ) : null;
                         })()}
