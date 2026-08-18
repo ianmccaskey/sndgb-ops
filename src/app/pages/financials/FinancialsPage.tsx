@@ -25,6 +25,7 @@ type Pnl = {
   shipping_fee_revenue_usd: string; insurance_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string;
   product_profit_usd: string; expenses_usd: string; label_costs_usd: string; net_profit_usd: string;
   direct_freight_usd: string; split_fees_usd: string; at_cost_margin_usd: string;
+  stock_cost_usd: string; stock_retail_usd: string;
   comps_usd: string; credits_usd: string; writeoffs_usd: string; adj_both_usd: string;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
   splits: { party: string; pct: string }[] | null;
@@ -197,6 +198,18 @@ export function FinancialsPage() {
                 {Number(pnl?.at_cost_margin_usd) > 0
                   ? <span className="text-red-600">−{fmtUSD(pnl?.at_cost_margin_usd)}</span>
                   : <span className="text-green-700">+{fmtUSD(-Number(pnl?.at_cost_margin_usd))}</span>}
+              </div>
+            )}
+            {Number(pnl?.stock_cost_usd) > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground" title="Stock-plan commits: the group's own kits at vendor cost + freight, taken out of net profit BEFORE the split — no receivable, nobody pays this back">Group stock (at cost + freight, pre-split)</span>
+                <span className="text-red-600">−{fmtUSD(pnl?.stock_cost_usd)}</span>
+              </div>
+            )}
+            {Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd) > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground" title="Product profit above counts the stock kits as if sold at GB price — this cancels that hypothetical margin, since group stock is never sold">Group stock margin (never sold)</span>
+                <span className="text-red-600">−{fmtUSD(Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd))}</span>
               </div>
             )}
             {Number(pnl?.adj_both_usd) !== 0 && (

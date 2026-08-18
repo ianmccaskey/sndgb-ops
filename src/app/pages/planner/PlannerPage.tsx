@@ -5,6 +5,7 @@ import saveStockPlanSources from '@/actions/planner/saveStockPlanSources';
 import upsertStockPlanItem from '@/actions/planner/upsertStockPlanItem';
 import deleteStockPlanItem from '@/actions/planner/deleteStockPlanItem';
 import orderStockPlanItem from '@/actions/planner/orderStockPlanItem';
+import commitStockPlan from '@/actions/planner/commitStockPlan';
 import listAtCostReceivables from '@/actions/planner/listAtCostReceivables';
 import listWallets from '@/actions/financials/listWallets';
 import listVendorProductProgress from '@/actions/vendors/listVendorProductProgress';
@@ -56,6 +57,7 @@ type PlanItem = {
   id: number; group_buy_product_id: number; sku_code: string; vendor_code: string;
   kits: string; unit_cost_usd: string; freight_usd: string; planned_value_usd: string;
   ordered_at: string | null; ordered_by: string | null; ordered_value_usd: string | null;
+  committed_adjustment_id: number | null; committed_at: string | null; committed_value_usd: string | null;
 };
 type Plan = {
   outside_total_usd: string; outside_max_usd: string; cash_assignable_usd: string;
@@ -232,6 +234,7 @@ export function PlannerPage() {
   const [doUpsertItem] = useMutateAction(upsertStockPlanItem);
   const [doDeleteItem] = useMutateAction(deleteStockPlanItem);
   const [doOrderItem] = useMutateAction(orderStockPlanItem);
+  const [doCommitPlan] = useMutateAction(commitStockPlan);
   const [doSnapshot] = useMutateAction(addWalletSnapshot);
 
   // sources form (prefilled from the saved plan once it loads)
@@ -268,7 +271,16 @@ export function PlannerPage() {
   const cryptoWallets = useMemo(
     () => wallets.filter(w => w.active && (w.chain === 'eth' || w.chain === 'sol')),
     [wallets]);
-  const owedTotal = owedRows.reduce((s, v) => s + Number(v.owed_usd), 0);
+  const owedRaw = owedRows.reduce((s, v) => s + Number(v.owed_usd), 0);
+  // COMMITTED allocations live inside vendor owed now (their kits are real
+  // demand), but this chart draws them from the stock pool on the right —
+  // so net their live value back out of owed, or the same dollars would
+  // count twice (once fattening Vendor GB, once as an allocation). Ordered
+  // lines are excluded from the offset: their vendor payment already nets
+  // them out of owed on its own.
+  const committedUnorderedValue = items.reduce(
+    (s, i) => s + (i.committed_adjustment_id != null && !i.ordered_at ? Number(i.planned_value_usd) : 0), 0);
+  const owedTotal = Math.max(owedRaw - committedUnorderedValue, 0);
   const receivableTotal = receivables.reduce((s, r) => s + Number(r.expected_usd), 0);
   const allocatableProducts = products.filter(p =>
     p.status === 'active' && p.cost_tier_qty == null && !/^coa/i.test(p.sku_code));
@@ -306,7 +318,7 @@ export function PlannerPage() {
     receivables: receivableTotal,
     cash: Number(plan?.cash_assignable_usd || 0),
     items: items.map(i => ({
-      label: `${i.sku_code} × ${fmtNum(i.kits)}${i.ordered_at ? ' (ordered)' : ''}`,
+      label: `${i.sku_code} × ${fmtNum(i.kits)}${i.ordered_at ? ' (ordered)' : i.committed_adjustment_id != null ? ' (committed)' : ''}`,
       usd: Number(i.ordered_at ? (i.ordered_value_usd ?? i.planned_value_usd) : i.planned_value_usd),
       ordered: i.ordered_at != null,
     })),
@@ -358,7 +370,7 @@ export function PlannerPage() {
       group_buy_id: groupBuyId, group_buy_product_id: Number(aProduct), kits: aKits.trim(), actor: userName,
     }) as unknown[] | null;
     if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
-      setAMsg('Not saved — the product must be active, flat-cost, in this campaign, and the line not already ordered.');
+      setAMsg('Not saved — the product must be active, flat-cost, in this campaign, and the line not already committed or ordered.');
       return;
     }
     setAProduct(''); setAKits('');
@@ -367,8 +379,32 @@ export function PlannerPage() {
 
   const removeAllocation = async (it: PlanItem) => {
     const res = await doDeleteItem({ item_id: it.id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
-    if (!(Array.isArray(res) ? res.length > 0 : !!res)) { setAMsg('Not removed — an ordered line is locked to its vendor payment.'); return; }
+    if (!(Array.isArray(res) ? res.length > 0 : !!res)) { setAMsg('Not removed — an ordered line is locked to its vendor payment, and a committed line is locked to its adjustment (remove it on Products first).'); return; }
     reloadPlan();
+  };
+
+  const uncommitted = items.filter(i => i.committed_adjustment_id == null);
+  const uncommittedValue = uncommitted.reduce((s, i) => s + Number(i.planned_value_usd), 0);
+  const [committing, setCommitting] = useState(false);
+
+  const commitPlan = async () => {
+    if (uncommitted.length === 0) return;
+    const lines = uncommitted.map(i => `  ${i.sku_code} × ${fmtNum(i.kits)} = ${fmtUSD(i.planned_value_usd)}`).join('\n');
+    if (!window.confirm(
+      `Commit the ENTIRE plan to vendor demand?\n\n${lines}\n\nTotal ${fmtUSD(uncommittedValue)} at vendor cost + freight.\n\nThese kits are added to what we order from the vendors, and the total comes out of NET PROFIT before the split. No receivable — this is the group's own stock. All-or-nothing: if any line's product is inactive or tiered, nothing commits.`)) {
+      return;
+    }
+    setCommitting(true); setAMsg('');
+    try {
+      const res = await doCommitPlan({ group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+        setAMsg('Nothing committed — every line is already committed, or a line’s product is inactive/tiered (all-or-nothing).');
+        return;
+      }
+      reloadPlan(); reloadProgress();
+    } finally {
+      setCommitting(false);
+    }
   };
 
   const openOrderDialog = (it: PlanItem) => {
@@ -506,6 +542,11 @@ export function PlannerPage() {
                 <span className="text-muted-foreground min-w-0">Owed to vendors (non-COA, all campaigns)</span>
                 <span className="text-red-600 shrink-0 whitespace-nowrap">−{fmtUSD(owedTotal)}</span>
               </div>
+              {committedUnorderedValue > 0 && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-muted-foreground min-w-0 text-xs">…excludes {fmtUSD(committedUnorderedValue)} of committed stock, shown below as allocations</span>
+                </div>
+              )}
               <div className="flex justify-between gap-2">
                 <span className="text-muted-foreground min-w-0">Expected at-cost payments ({receivables.length})</span>
                 <span className="text-amber-700 shrink-0 whitespace-nowrap">{fmtUSD(receivableTotal)}</span>
@@ -595,13 +636,21 @@ export function PlannerPage() {
                       <span className="ml-1.5 rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                         title={`Vendor payment recorded ${fmtDateTime(it.ordered_at)} by ${it.ordered_by}`}>ordered</span>
                     )}
+                    {!it.ordered_at && it.committed_adjustment_id != null && (
+                      <span className="ml-1.5 rounded bg-emerald-100 text-emerald-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                        title={`In vendor demand since ${it.committed_at ? fmtDateTime(it.committed_at) : ''} — ${fmtUSD(it.committed_value_usd || 0)} pulls from net profit pre-split`}>committed</span>
+                    )}
                   </span>
                   <span className="flex items-center gap-1.5 shrink-0 whitespace-nowrap ml-auto">
                     {fmtUSD(it.ordered_at ? (it.ordered_value_usd ?? it.planned_value_usd) : it.planned_value_usd)}
                     {!it.ordered_at && (
                       <>
                         <Button size="sm" variant="outline" className="h-6 px-1.5 text-[11px]" onClick={() => openOrderDialog(it)}>Mark ordered</Button>
-                        <Button size="sm" variant="ghost" className="h-6 px-1 text-[11px] text-red-600" onClick={() => removeAllocation(it)}>✕</Button>
+                        {/* a committed line's kits live in an adjustment now —
+                            removing it goes through Products, not here */}
+                        {it.committed_adjustment_id == null && (
+                          <Button size="sm" variant="ghost" className="h-6 px-1 text-[11px] text-red-600" onClick={() => removeAllocation(it)}>✕</Button>
+                        )}
                       </>
                     )}
                   </span>
@@ -609,6 +658,16 @@ export function PlannerPage() {
               ))}
               {items.length === 0 && <p className="text-xs text-muted-foreground">No allocations yet — pick a product above.</p>}
             </div>
+            {uncommitted.length > 0 && (
+              <div className="border-t pt-2 flex flex-wrap items-center gap-2">
+                <Button size="sm" className="h-8 bg-emerald-700 hover:bg-emerald-800" disabled={committing} onClick={commitPlan}>
+                  {committing ? 'Committing…' : `Commit plan — ${uncommitted.length} ${uncommitted.length === 1 ? 'line' : 'lines'}, ${fmtUSD(uncommittedValue)}`}
+                </Button>
+                <span className="text-[11px] text-muted-foreground min-w-0">
+                  Adds the kits to what we order from vendors, at cost + freight, out of net profit pre-split.
+                </span>
+              </div>
+            )}
             <p className="text-[11px] text-muted-foreground">
               "Mark ordered" records the REAL vendor payment (same guarded path as the Vendors page, over-buy confirm included) and locks the line.
             </p>

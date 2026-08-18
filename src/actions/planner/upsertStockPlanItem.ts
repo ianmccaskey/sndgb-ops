@@ -6,7 +6,9 @@ import { action } from '@uibakery/data';
  * kits (string-scale checked); the product belongs to THIS campaign, is
  * active, and is flat-cost (tiered per-kit cost is ambiguous — same rule
  * as at-cost adjustments); an ORDERED line cannot be re-quantified (the
- * recorded vendor payment is the truth of what was bought). Audited.
+ * recorded vendor payment is the truth of what was bought), and neither
+ * can a COMMITTED one (its linked adjustment snapshotted the kits into
+ * vendor demand — remove the adjustment on Products first). Audited.
  */
 function upsertStockPlanItem() {
   return action('upsertStockPlanItem', 'SQL', {
@@ -38,6 +40,7 @@ function upsertStockPlanItem() {
         ON CONFLICT (plan_id, group_buy_product_id) DO UPDATE SET
           kits = EXCLUDED.kits
         WHERE stock_plan_items.ordered_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM admin_adjustments a WHERE a.stock_plan_item_id = stock_plan_items.id)
         RETURNING id, group_buy_product_id, kits
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

@@ -43,6 +43,7 @@ type CampaignProduct = {
 type Adjustment = {
   id: number; group_buy_product_id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string;
   pricing: string; expected_usd: string | null; received_at: string | null; preordered: boolean;
+  stock_plan_item_id: number | null;
 };
 type SplitParty = { party: string; pct: string };
 
@@ -532,7 +533,12 @@ export function ProductsPage() {
                     <TableCell className="font-medium">{a.sku_code}</TableCell>
                     <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
                     <TableCell>
-                      {a.pricing === 'cost' ? (
+                      {a.pricing === 'cost' && a.stock_plan_item_id != null ? (
+                        <span className="rounded bg-emerald-100 text-emerald-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          title="Committed from the Stock Planner at vendor cost + freight — kits join the vendor order; the value comes out of net profit before the split. No receivable.">
+                          stock plan
+                        </span>
+                      ) : a.pricing === 'cost' ? (
                         <span className="whitespace-nowrap">
                           <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase"
                             title={a.beneficiary !== 'both'
@@ -548,7 +554,12 @@ export function ProductsPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       {a.pricing === 'cost' ? (
-                        a.beneficiary !== 'both' ? (
+                        a.stock_plan_item_id != null ? (
+                          <span title="Comes out of net profit before the split — no receivable">
+                            {fmtUSD(a.expected_usd)}
+                            <span className="block text-[10px] font-normal text-muted-foreground">from net profit</span>
+                          </span>
+                        ) : a.beneficiary !== 'both' ? (
                           <span title={`Deducted from ${a.beneficiary}'s profit payout — no receivable`}>
                             {fmtUSD(a.expected_usd)}
                             <span className="block text-[10px] font-normal text-muted-foreground">from {a.beneficiary}'s profit</span>

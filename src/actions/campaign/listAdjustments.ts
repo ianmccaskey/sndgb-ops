@@ -5,7 +5,7 @@ function listAdjustments() {
     datasourceName: 'SND GB DB',
     query: `
       SELECT a.id, a.group_buy_product_id, a.qty, a.reason, a.created_by, a.created_at, a.beneficiary,
-             a.pricing, a.expected_usd, a.received_at, a.preordered,
+             a.pricing, a.expected_usd, a.received_at, a.preordered, a.stock_plan_item_id,
              (a.qty * gbp.gb_price_usd) AS value_usd,
              p.sku_code
       FROM admin_adjustments a

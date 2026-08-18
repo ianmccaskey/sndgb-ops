@@ -31,12 +31,18 @@ function getStockPlan() {
                  'planned_value_usd', ROUND(i.kits * (gbp.unit_cost_usd + gbp.freight_usd), 2),
                  'ordered_at', i.ordered_at,
                  'ordered_by', i.ordered_by,
-                 'ordered_value_usd', i.ordered_value_usd
+                 'ordered_value_usd', i.ordered_value_usd,
+                 'committed_adjustment_id', ca.id,
+                 'committed_at', ca.created_at,
+                 'committed_value_usd', ca.expected_usd
                ) ORDER BY p.sku_code) AS items
         FROM stock_plan_items i
         JOIN group_buy_products gbp ON gbp.id = i.group_buy_product_id
         JOIN products p ON p.id = gbp.product_id
         JOIN vendors v ON v.id = gbp.vendor_id
+        -- a COMMITTED line's adjustment carries its vendor demand and the
+        -- net-profit deduction (snapshot at commit time)
+        LEFT JOIN admin_adjustments ca ON ca.stock_plan_item_id = i.id
         WHERE i.plan_id = sp.id
       ) items ON sp.id IS NOT NULL
       WHERE gb.id = {{params.group_buy_id}}::bigint
