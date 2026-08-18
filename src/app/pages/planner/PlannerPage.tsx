@@ -685,6 +685,7 @@ export function PlannerPage() {
             )}
             <p className="text-[11px] text-muted-foreground">
               "Mark ordered" records the REAL vendor payment (same guarded path as the Vendors page, over-buy confirm included) and locks the line.
+              To add MORE of a committed product, add a "Both (group stock)" adjustment on the Products page — same economics, no plan line needed.
             </p>
           </CardContent>
         </Card>

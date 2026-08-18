@@ -45,6 +45,7 @@ type ProductProgress = {
 // signal — every chip carries its kind label and signed kit count)
 const ADJ_CHIP_STYLES: [RegExp, string][] = [
   [/^stock plan$/, 'bg-emerald-100 text-emerald-900'],
+  [/^group stock$/, 'bg-emerald-100 text-emerald-900'],
   [/^outside sale$/, 'bg-sky-100 text-sky-900'],
   [/^personal/, 'bg-indigo-100 text-indigo-900'],
   [/^admin$/, 'bg-zinc-200 text-zinc-800'],

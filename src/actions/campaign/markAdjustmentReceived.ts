@@ -18,9 +18,9 @@ function markAdjustmentReceived() {
         WHERE a.id = {{params.adjustment_id}}::bigint
           AND a.pricing = 'cost'
           -- personal at-cost stock has no receivable to receive, and
-          -- stock-plan commits settle out of net profit — nothing arrives
+          -- group stock settles out of net profit — nothing arrives
           AND a.beneficiary = 'both'
-          AND a.stock_plan_item_id IS NULL
+          AND NOT a.stock
           AND a.received_at IS NULL
         RETURNING a.id, a.expected_usd, a.reason
       )

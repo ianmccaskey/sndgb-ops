@@ -17,10 +17,11 @@ function listAtCostReceivables() {
         AND a.pricing = 'cost'
         -- only OUTSIDE-customer sales are receivables; personal at-cost
         -- stock (party beneficiary) settles against the party's payout,
-        -- and stock-plan commits (linked rows) come out of net profit —
-        -- nobody pays the group back for its own stock
+        -- and GROUP STOCK (planner commits and direct adjustments alike)
+        -- comes out of net profit — nobody pays the group back for its
+        -- own stock
         AND a.beneficiary = 'both'
-        AND a.stock_plan_item_id IS NULL
+        AND NOT a.stock
         AND a.received_at IS NULL
       ORDER BY a.created_at DESC
     `,

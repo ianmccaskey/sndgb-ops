@@ -43,7 +43,7 @@ type CampaignProduct = {
 type Adjustment = {
   id: number; group_buy_product_id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string;
   pricing: string; expected_usd: string | null; received_at: string | null; preordered: boolean;
-  stock_plan_item_id: number | null;
+  stock_plan_item_id: number | null; stock: boolean;
 };
 type SplitParty = { party: string; pct: string };
 
@@ -297,8 +297,11 @@ export function ProductsPage() {
       // round an over-precision qty — surface that as an error, not success.
       const res = await doAddAdj({
         group_buy_product_id: Number(aProduct), qty, reason: aReason.trim(), created_by: userName,
-        beneficiary: aFor, pricing: aIsCost ? 'cost' : 'gb',
+        // 'both_stock' is a UI-only sentinel: GROUP STOCK = beneficiary
+        // 'both' + the stock flag (net-profit deduction, no receivable)
+        beneficiary: aFor === 'both_stock' ? 'both' : aFor, pricing: aIsCost ? 'cost' : 'gb',
         preordered: aPricing === 'cost_pre' ? 'true' : '',
+        stock: aFor === 'both_stock' ? 'true' : '',
       });
       // Mutate results can be an array of rows or a singleton object — treat
       // only an empty/absent result as refused (same handling as ImportPage).
@@ -468,7 +471,12 @@ export function ProductsPage() {
                   </SelectContent>
                 </Select>
                 <Input placeholder="Qty (+/-)" value={aQty} onChange={e => setAQty(e.target.value)} className="h-9 w-24" />
-                <Select value={aPricing} onValueChange={setAPricing}>
+                <Select value={aPricing} onValueChange={v => {
+                  setAPricing(v);
+                  // "group stock" only exists for plain at-cost rows —
+                  // don't leave the For select on a vanished option
+                  if (v !== 'cost' && aFor === 'both_stock') setAFor('both');
+                }}>
                   <SelectTrigger className="h-9 w-56"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="gb">At GB price</SelectItem>
@@ -477,9 +485,10 @@ export function ProductsPage() {
                   </SelectContent>
                 </Select>
                 <Select value={aFor} onValueChange={setAFor}>
-                  <SelectTrigger className="h-9 w-40"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-9 w-44"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="both">{aIsCost ? 'Outside customer' : 'Both'}</SelectItem>
+                    {aPricing === 'cost' && <SelectItem value="both_stock">Both (group stock)</SelectItem>}
                     {splitParties.map(p => <SelectItem key={p.party} value={p.party}>{aIsCost ? `${p.party} (personal)` : p.party}</SelectItem>)}
                   </SelectContent>
                 </Select>
@@ -490,6 +499,11 @@ export function ProductsPage() {
               {aPricing === 'gb' ? (
                 <p className="text-xs text-muted-foreground">
                   "For" decides whose profit pays for these units at GB price: a person's adjustments come out of their split payout; "Both" comes out of total profit before the split.
+                </p>
+              ) : aFor === 'both_stock' ? (
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-medium">Group stock</span> at vendor cost + freight
+                  {aExpectedUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(aExpectedUsd)}</span> for this line)</>}: the kits join what you order from the vendor and the amount comes out of <span className="font-medium">net profit before the split</span> — no receivable, nothing to mark received. Same economics as a Stock Planner commit, and the way to top up a product whose planner line is already committed. If this is the product's first demand, its one-time testing cost also hits P&L.
                 </p>
               ) : aFor !== 'both' ? (
                 <p className="text-xs text-muted-foreground">
@@ -533,10 +547,10 @@ export function ProductsPage() {
                     <TableCell className="font-medium">{a.sku_code}</TableCell>
                     <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
                     <TableCell>
-                      {a.pricing === 'cost' && a.stock_plan_item_id != null ? (
+                      {a.pricing === 'cost' && a.stock ? (
                         <span className="rounded bg-emerald-100 text-emerald-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
-                          title="Committed from the Stock Planner at vendor cost + freight — kits join the vendor order; the value comes out of net profit before the split. No receivable.">
-                          stock plan
+                          title={`${a.stock_plan_item_id != null ? 'Committed from the Stock Planner' : 'Group stock adjustment'} at vendor cost + freight — kits join the vendor order; the value comes out of net profit before the split. No receivable.`}>
+                          {a.stock_plan_item_id != null ? 'stock plan' : 'group stock'}
                         </span>
                       ) : a.pricing === 'cost' ? (
                         <span className="whitespace-nowrap">
@@ -554,7 +568,7 @@ export function ProductsPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       {a.pricing === 'cost' ? (
-                        a.stock_plan_item_id != null ? (
+                        a.stock ? (
                           <span title="Comes out of net profit before the split — no receivable">
                             {fmtUSD(a.expected_usd)}
                             <span className="block text-[10px] font-normal text-muted-foreground">from net profit</span>

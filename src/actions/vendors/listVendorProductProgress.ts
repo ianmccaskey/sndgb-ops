@@ -51,6 +51,7 @@ function listVendorProductProgress() {
           SELECT a.group_buy_product_id,
                  CASE WHEN a.pricing = 'gb' THEN 'admin'
                       WHEN a.stock_plan_item_id IS NOT NULL THEN 'stock plan'
+                      WHEN a.stock THEN 'group stock'
                       WHEN a.beneficiary <> 'both' THEN 'personal: ' || a.beneficiary
                       ELSE 'outside sale' END AS kind,
                  SUM(a.qty) AS qty

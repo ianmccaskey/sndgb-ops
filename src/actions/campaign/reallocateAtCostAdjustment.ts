@@ -36,8 +36,11 @@ function reallocateAtCostAdjustment() {
         WHERE a.id = {{params.adjustment_id}}::bigint
           AND a.pricing = 'cost'
           -- personal stock (party beneficiary) settles against the party's
-          -- payout — there is no receivable to reallocate
+          -- payout and group stock against net profit — neither has a
+          -- receivable to reallocate (stock rows are never preordered, so
+          -- the belt below is unreachable today, but the semantics hold)
           AND a.beneficiary = 'both'
+          AND NOT a.stock
           AND a.preordered
           AND a.received_at IS NULL
         FOR UPDATE OF a
