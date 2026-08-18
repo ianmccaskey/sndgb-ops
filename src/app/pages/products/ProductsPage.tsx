@@ -226,7 +226,7 @@ export function ProductsPage() {
     : null;
 
   const deleteAdjOnly = async (a: Adjustment) => {
-    const res = await doDelAdj({ id: a.id }) as unknown[] | null;
+    const res = await doDelAdj({ id: a.id, group_buy_id: groupBuyId }) as unknown[] | null;
     if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
       setAError('Not removed — an at-cost row is locked once its payment is received or its product is vendor-committed (marked ordered / has vendor payments): the kits may already be bought.');
       return false;

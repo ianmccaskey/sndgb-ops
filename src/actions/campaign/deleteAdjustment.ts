@@ -14,6 +14,10 @@ import { action } from '@uibakery/data';
  * Unreceived, uncommitted at-cost rows delete freely (the sale fell
  * through before anything real happened: demand, waiver, and receivable
  * all leave together). GB-priced adjustments delete as before.
+ * CAMPAIGN-SCOPED like every destructive action: a stale or forged id
+ * from another campaign must not touch that campaign's demand or P&L —
+ * doubly important now that this is the documented undo path for
+ * stock-plan commits.
  */
 function deleteAdjustment() {
   return action('deleteAdjustment', 'SQL', {
@@ -23,6 +27,7 @@ function deleteAdjustment() {
       USING group_buy_products gbp
       WHERE a.id = {{params.id}}::bigint
         AND gbp.id = a.group_buy_product_id
+        AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
         AND NOT (a.pricing = 'cost' AND a.received_at IS NOT NULL)
         AND NOT (a.pricing = 'cost' AND NOT a.preordered AND (
               gbp.ordered_from_vendor_at IS NOT NULL

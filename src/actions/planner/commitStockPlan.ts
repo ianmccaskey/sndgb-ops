@@ -11,18 +11,20 @@ import { action } from '@uibakery/data';
  *
  * The commit is ANCHORED TO WHAT THE OPERATOR CONFIRMED (same philosophy
  * as the over-buy anchor): confirmed_items carries the exact 'id:kits'
- * list shown in the confirm dialog, and the server commits precisely that
- * set or NOTHING. Any drift between the dialog and the click — a line
- * added by the co-admin (not in the confirmed set: left alone, stays
- * visibly uncommitted), a confirmed line deleted, re-quantified, already
- * committed, or its product gone inactive/tiered — blocks the WHOLE batch
- * (zero rows), because the operator's confirmation no longer describes
- * the plan. Confirmed lines and their product rows are locked FOR UPDATE
- * (a racing second click, or a concurrent tier conversion which locks the
- * same gbp row in upsertCampaignProduct, serializes; re-quantify's DO
- * UPDATE waits on the item lock and then refuses linked lines). The
- * partial unique index on stock_plan_item_id makes double-commit
- * unrepresentable outright.
+ * list shown in the confirm dialog, and the server enforces FULL-SET
+ * EQUALITY against the plan's current uncommitted lines — it commits
+ * exactly that set, or NOTHING. Any drift between the dialog and the
+ * click blocks the whole batch (zero rows): a confirmed line deleted,
+ * re-quantified, already committed, or gone inactive/tiered no longer
+ * matches the confirmation, and an uncommitted line NOT in the
+ * confirmation (added by the co-admin, or omitted by a stale/forged
+ * caller) means the confirmation does not cover the ENTIRE plan — the
+ * operator re-confirms against fresh data either way. Confirmed lines
+ * and their product rows are locked FOR UPDATE (a racing second click,
+ * or a concurrent tier conversion which locks the same gbp row in
+ * upsertCampaignProduct, serializes; re-quantify's DO UPDATE waits on
+ * the item lock and then refuses linked lines). The partial unique index
+ * on stock_plan_item_id makes double-commit unrepresentable outright.
  *
  * Deliberately NO positive-demand guard (unlike addAdjustment's at-cost
  * sales, which piggyback on group demand): a stock commit IS the demand —
@@ -71,6 +73,17 @@ function commitStockPlan() {
            OR p.kits <> c.kits
            OR p.status <> 'active'
            OR p.cost_tier_qty IS NOT NULL
+        UNION ALL
+        -- FULL-SET EQUALITY: an uncommitted plan line NOT in the confirmed
+        -- set (added concurrently, or omitted by a stale/forged caller)
+        -- also blocks — "commit the ENTIRE plan" is enforced server-side,
+        -- never assumed from the client
+        SELECT 1
+        FROM stock_plan_items i
+        JOIN stock_plans sp2 ON sp2.id = i.plan_id
+          AND sp2.group_buy_id = {{params.group_buy_id}}::bigint
+        WHERE i.id NOT IN (SELECT item_id FROM confirmed)
+          AND NOT EXISTS (SELECT 1 FROM admin_adjustments a WHERE a.stock_plan_item_id = i.id)
       ), ins AS (
         INSERT INTO admin_adjustments (group_buy_product_id, qty, reason, created_by, beneficiary, pricing, expected_usd, preordered, stock_plan_item_id)
         SELECT pending.gbp_id, pending.kits,
