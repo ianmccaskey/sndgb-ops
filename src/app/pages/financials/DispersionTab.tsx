@@ -57,10 +57,14 @@ function prorate(totalUsd: number, splits: { party: string; pct: string }[]): Re
   return out;
 }
 
-export function DispersionTab({ pnl, expenses, adjustments }: {
+export function DispersionTab({ pnl, expenses, adjustments, adjustmentsReady }: {
   pnl: Pnl | undefined;
   expenses: ExpenseRow[];
   adjustments: DispAdjustment[];
+  // the itemized rows load lazily on tab activation — until they land, the
+  // itemized sections show a loading note and the per-party desync guard
+  // stays silent (an empty list is "not loaded yet", not "out of sync")
+  adjustmentsReady: boolean;
 }) {
   const splits = pnl?.splits || [];
   const viewNet = num(pnl?.net_profit_usd);
@@ -277,6 +281,12 @@ export function DispersionTab({ pnl, expenses, adjustments }: {
           const base = viewNet * Number(s.pct) / 100;
           const personal = personalDeduction(s.party);
           const items = personalItems(s.party);
+          const itemsSum = items.reduce((sum, a) => sum + (a.pricing === 'cost' ? num(a.expected_usd) : num(a.value_usd)), 0);
+          // the payout total comes from the P&L view's aggregation, the
+          // itemized rows from a separately-loaded list — if they ever
+          // disagree (concurrent edit between loads), say so loudly rather
+          // than looking reconciled while showing stale line items
+          const desync = adjustmentsReady && Math.abs(itemsSum - personal) >= 0.005;
           const groupShare = contribTotals[s.party]?.group || 0;
           return (
             <Card key={s.party}>
@@ -288,7 +298,14 @@ export function DispersionTab({ pnl, expenses, adjustments }: {
                   <span>…of group stock, {Number(s.pct)}% share (pre-split, informational)</span>
                   <span>{fmtUSD(groupShare)}</span>
                 </div>
-                {items.map(a => {
+                {!adjustmentsReady && <p className="text-xs text-muted-foreground">Loading itemized adjustments…</p>}
+                {desync && (
+                  <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                    Itemized rows sum to {fmtUSD(itemsSum)} but the P&L aggregation says {fmtUSD(personal)} — the two
+                    loads are out of sync (something changed between them). The final payout below uses the P&L figure; reload the page to re-sync the detail.
+                  </div>
+                )}
+                {adjustmentsReady && items.map(a => {
                   const v = a.pricing === 'cost' ? num(a.expected_usd) : num(a.value_usd);
                   return (
                     <div key={a.id} className="flex justify-between">
@@ -318,6 +335,7 @@ export function DispersionTab({ pnl, expenses, adjustments }: {
             <Card key={s.party}>
               <CardHeader className="pb-2"><CardTitle className="text-base">{s.party} — stock contributions</CardTitle></CardHeader>
               <CardContent className="text-sm space-y-1">
+                {!adjustmentsReady && <p className="text-xs text-muted-foreground">Loading itemized adjustments…</p>}
                 <div className="flex justify-between"><span className="text-muted-foreground">Group stock ({Number(s.pct)}% of {fmtUSD(num(pnl?.stock_cost_usd))})</span><span>{fmtUSD(t.group)}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Personal stock (at cost + freight)</span><span>{fmtUSD(t.personal)}</span></div>
                 <div className="flex justify-between font-semibold border-t pt-1"><span>Total in stock</span><span>{fmtUSD(t.group + t.personal)}</span></div>
@@ -383,7 +401,9 @@ export function DispersionTab({ pnl, expenses, adjustments }: {
                 </TableRow>
               )}
               {stockRows.length === 0 && (
-                <TableRow><TableCell colSpan={5 + splits.length + (hasOrphans ? 1 : 0)} className="text-center text-muted-foreground py-6">No stock expenditures yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={5 + splits.length + (hasOrphans ? 1 : 0)} className="text-center text-muted-foreground py-6">
+                  {adjustmentsReady ? 'No stock expenditures yet.' : 'Loading itemized adjustments…'}
+                </TableCell></TableRow>
               )}
             </TableBody>
           </Table>

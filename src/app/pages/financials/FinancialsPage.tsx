@@ -38,7 +38,10 @@ export function FinancialsPage() {
   const [rawFreight] = useLoadAction(listFreightByVendor, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawExpenses, , , reloadExpenses] = useLoadAction(listExpenses, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
-  const [rawAdjustments] = useLoadAction(listAdjustments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  // the dispersion tab's itemized rows load LAZILY on first tab activation —
+  // Overview must never pay for (or depend on) a query it doesn't render
+  const [finTab, setFinTab] = useState('overview');
+  const [rawAdjustments, adjustmentsLoading] = useLoadAction(listAdjustments, [groupBuyId, finTab], { group_buy_id: groupBuyId }, { enabled: enabled && finTab === 'dispersion' });
 
   const pnl = firstRow<Pnl>(rawPnl);
   const expenses = rows<Expense>(rawExpenses);
@@ -163,14 +166,15 @@ export function FinancialsPage() {
         <p className="text-sm text-muted-foreground mt-1">P&L is computed live from orders, products, expenses, and shipments — nothing is typed twice.</p>
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={finTab} onValueChange={setFinTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="dispersion">Profit dispersion</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dispersion" className="mt-4">
-          <DispersionTab pnl={pnl} expenses={expenses} adjustments={adjustmentRows} />
+          <DispersionTab pnl={pnl} expenses={expenses} adjustments={adjustmentRows}
+            adjustmentsReady={finTab === 'dispersion' && !adjustmentsLoading} />
         </TabsContent>
 
         <TabsContent value="overview" className="mt-4 space-y-5">
