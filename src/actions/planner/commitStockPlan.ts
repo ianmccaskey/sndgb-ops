@@ -61,7 +61,12 @@ function commitStockPlan() {
         JOIN products p ON p.id = gbp.product_id
         WHERE i.id IN (SELECT item_id FROM confirmed)
           AND NOT EXISTS (SELECT 1 FROM admin_adjustments a WHERE a.stock_plan_item_id = i.id)
-        FOR UPDATE OF i, gbp
+        -- sp is locked too: upsertStockPlanItem's INSERT ... ON CONFLICT DO
+        -- UPDATE takes the same stock_plans row lock, so a concurrent line
+        -- INSERT waits behind an in-flight commit and lands strictly after
+        -- it — visibly uncommitted — instead of racing the full-set check.
+        -- (Concurrent line DELETEs already serialize on the item row locks.)
+        FOR UPDATE OF i, gbp, sp
       ), drift AS (
         -- ANY confirmed line that is gone, already committed, re-quantified,
         -- or no longer an active flat-cost product blocks the whole batch:
