@@ -90,11 +90,21 @@ export function DispersionTab({ pnl, expenses, adjustments }: {
       ],
     },
     {
-      label: 'Expenses (supplies, testing, other)', amount: -otherExp,
-      subs: ['supplies', 'testing', 'other'].map(cat => ({
-        label: cat,
-        amount: -expenses.filter(e => e.category === cat).reduce((s, e) => s + num(e.total_usd), 0),
-      })).filter(s => s.amount !== 0),
+      label: 'Expenses (non-shipping)', amount: -otherExp,
+      // category sub-rows are DERIVED from the expense list, never a
+      // hard-coded name set — a new category can't silently vanish from
+      // the breakdown; any residue vs the view total gets its own row
+      subs: (() => {
+        const cats = [...new Set(expenses.map(e => e.category))].filter(c => c !== 'shipping' && c !== 'reship').sort();
+        const subs = cats.map(cat => ({
+          label: cat,
+          amount: -expenses.filter(e => e.category === cat).reduce((s, e) => s + num(e.total_usd), 0),
+        })).filter(s => s.amount !== 0);
+        const listed = subs.reduce((s, x) => s + x.amount, 0);
+        const remainder = -otherExp - listed;
+        if (Math.abs(remainder) >= 0.005) subs.push({ label: 'not in the expense list (view/list desync?)', amount: remainder });
+        return subs;
+      })(),
     },
     { label: 'Comped product (free to customers)', amount: -num(pnl?.comps_usd) },
     { label: 'Customer credits', amount: -num(pnl?.credits_usd) },
@@ -114,10 +124,16 @@ export function DispersionTab({ pnl, expenses, adjustments }: {
     .filter(a => a.stock || (a.pricing === 'cost' && a.beneficiary !== 'both' && a.beneficiary !== 'unattributed'))
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
   const rowValue = (a: DispAdjustment) => num(a.expected_usd);
+  // a personal row whose beneficiary no longer matches a split party
+  // (rename/removal drift) must not silently show zero in every column —
+  // it gets an explicit Orphaned column so table totals always reconcile
+  const isOrphaned = (a: DispAdjustment) => !a.stock && !splits.some(s => s.party === a.beneficiary);
+  const hasOrphans = stockRows.some(isOrphaned);
   const rowShares = (a: DispAdjustment): Record<string, number> => {
     if (a.stock) return prorate(rowValue(a), splits);
     return Object.fromEntries(splits.map(s => [s.party, s.party === a.beneficiary ? rowValue(a) : 0]));
   };
+  const orphanedTotal = stockRows.filter(isOrphaned).reduce((s, a) => s + rowValue(a), 0);
   const contribTotals: Record<string, { group: number; personal: number }> = {};
   for (const s of splits) contribTotals[s.party] = { group: 0, personal: 0 };
   for (const a of stockRows) {
@@ -327,6 +343,7 @@ export function DispersionTab({ pnl, expenses, adjustments }: {
                 <TableHead>Kind</TableHead>
                 <TableHead className="text-right">Value</TableHead>
                 {splits.map(s => <TableHead key={s.party} className="text-right">{s.party}</TableHead>)}
+                {hasOrphans && <TableHead className="text-right text-amber-700">Orphaned</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -347,6 +364,9 @@ export function DispersionTab({ pnl, expenses, adjustments }: {
                     {splits.map(s => (
                       <TableCell key={s.party} className="text-right">{(shares[s.party] || 0) !== 0 ? fmtUSD(shares[s.party]) : '—'}</TableCell>
                     ))}
+                    {hasOrphans && (
+                      <TableCell className="text-right text-amber-700">{isOrphaned(a) ? fmtUSD(rowValue(a)) : '—'}</TableCell>
+                    )}
                   </TableRow>
                 );
               })}
@@ -359,13 +379,20 @@ export function DispersionTab({ pnl, expenses, adjustments }: {
                       {fmtUSD((contribTotals[s.party]?.group || 0) + (contribTotals[s.party]?.personal || 0))}
                     </TableCell>
                   ))}
+                  {hasOrphans && <TableCell className="text-right text-amber-700">{fmtUSD(orphanedTotal)}</TableCell>}
                 </TableRow>
               )}
               {stockRows.length === 0 && (
-                <TableRow><TableCell colSpan={5 + splits.length} className="text-center text-muted-foreground py-6">No stock expenditures yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={5 + splits.length + (hasOrphans ? 1 : 0)} className="text-center text-muted-foreground py-6">No stock expenditures yet.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
+          {hasOrphans && (
+            <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 mt-2">
+              <span className="font-semibold">{fmtUSD(orphanedTotal)} of personal stock is ORPHANED</span> — its beneficiary no longer
+              matches a split party, so it is deducted from no one's payout and counts toward no one's contribution. Reassign it on the Products page.
+            </div>
+          )}
           <p className="text-[11px] text-muted-foreground mt-2">
             Group-stock rows (planner commits and direct group-stock adjustments) split by the profit split; personal rows belong entirely to their party. Values are the cost+freight snapshots taken when each row was created.
           </p>
