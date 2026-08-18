@@ -42,7 +42,9 @@ function listVendorProductProgress() {
       LEFT JOIN (
         -- per-kind adjustment kits, same inclusion rule as demand:
         -- preordered at-cost rows contribute NO demand, so they are not
-        -- part of the purchase numbers and stay out of this breakdown
+        -- part of the purchase numbers and stay out of this breakdown.
+        -- Campaign-scoped BEFORE aggregating (like the kits_paid subquery)
+        -- so the page never scans other campaigns' adjustment history.
         SELECT t.group_buy_product_id,
                jsonb_agg(jsonb_build_object('kind', t.kind, 'qty', t.qty) ORDER BY t.kind) AS adj_detail
         FROM (
@@ -53,6 +55,8 @@ function listVendorProductProgress() {
                       ELSE 'outside sale' END AS kind,
                  SUM(a.qty) AS qty
           FROM admin_adjustments a
+          JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
+            AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
           WHERE NOT (a.pricing = 'cost' AND a.preordered)
           GROUP BY 1, 2
         ) t
