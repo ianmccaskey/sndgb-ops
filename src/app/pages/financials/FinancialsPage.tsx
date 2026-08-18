@@ -206,10 +206,15 @@ export function FinancialsPage() {
                 <span className="text-red-600">−{fmtUSD(pnl?.stock_cost_usd)}</span>
               </div>
             )}
-            {Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd) > 0 && (
+            {/* sign-aware and shown for ANY non-zero delta: a lowered GB
+                price or risen cost can push it negative, and hiding it
+                would leave the visible lines composing to the wrong net */}
+            {Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd) !== 0 && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground" title="Product profit above counts the stock kits as if sold at GB price — this cancels that hypothetical margin, since group stock is never sold. Also absorbs any cost/freight drift since commit: the line above shows the committed snapshot, while the books track the live vendor cost (what we will actually pay).">Group stock margin (never sold)</span>
-                <span className="text-red-600">−{fmtUSD(Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd))}</span>
+                {Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd) > 0
+                  ? <span className="text-red-600">−{fmtUSD(Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd))}</span>
+                  : <span className="text-green-700">+{fmtUSD(Number(pnl?.stock_cost_usd) - Number(pnl?.stock_retail_usd))}</span>}
               </div>
             )}
             {Number(pnl?.adj_both_usd) !== 0 && (
