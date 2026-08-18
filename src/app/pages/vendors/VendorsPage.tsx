@@ -91,6 +91,16 @@ export function VendorsPage() {
 
   const overpaid = balances.filter(b => b.pay_status === 'OVERPAID');
 
+  // what buying the REST actually costs, per vendor: each product's
+  // remaining kits × its (blended) per-kit cost, clamped at zero per
+  // product — unlike the netted Balance column, an over-payment on one
+  // product can never make the other products' remaining kits look cheaper
+  const remainingProductUsd = (vendorCode: string) =>
+    Math.round(productProgress
+      .filter(pp => pp.vendor_code === vendorCode)
+      .reduce((s, pp) =>
+        s + Math.max(Number(pp.kits_demand) - Number(pp.kits_paid), 0) * Number(pp.per_kit_cost_usd), 0) * 100) / 100;
+
   // a COA vendor's campaign products are ALL COA-prefixed (the same SKU
   // convention the wallet-coverage math scopes by); a vendor with any real
   // product line stays in the product section
@@ -264,7 +274,22 @@ export function VendorsPage() {
                   <TableCell className="font-medium">{b.vendor_code}</TableCell>
                   <TableCell className="text-right">{fmtUSD(b.owed_usd)}</TableCell>
                   <TableCell className="text-right">{fmtUSD(b.paid_usd)}</TableCell>
-                  <TableCell className={`text-right font-medium ${parseFloat(b.balance_usd) < 0 ? 'text-red-600' : ''}`}>{fmtUSD(b.balance_usd)}</TableCell>
+                  <TableCell className={`text-right font-medium ${parseFloat(b.balance_usd) < 0 ? 'text-red-600' : ''}`}>
+                    {fmtUSD(b.balance_usd)}
+                    {(() => {
+                      const rem = remainingProductUsd(b.vendor_code);
+                      // only shown when it differs from the netted balance —
+                      // that difference is exactly the over-payments hiding
+                      // inside the aggregate (plus freight, tracked in its
+                      // own column)
+                      return rem > 0 ? (
+                        <span className="block text-[10px] text-violet-700 font-normal whitespace-nowrap"
+                          title="Sum over products of remaining kits × per-kit cost, clamped at zero per product — what buying the rest actually costs. Over-payments on one product do not offset other products here; freight is tracked separately in Freight left.">
+                          product left to buy {fmtUSD(rem)}
+                        </span>
+                      ) : null;
+                    })()}
+                  </TableCell>
                   <TableCell className="text-right">
                     {(() => {
                       const left = Number(b.kits_demand) - Number(b.kits_paid);
@@ -317,7 +342,19 @@ export function VendorsPage() {
                           </span>
                         ))}
                       </TableCell>
-                      <TableCell className="text-right text-sm text-muted-foreground">{fmtUSD(pp.vendor_order_value_usd, { cents: false })}</TableCell>
+                      <TableCell className="text-right text-sm text-muted-foreground">
+                        {fmtUSD(pp.vendor_order_value_usd, { cents: false })}
+                        {(() => {
+                          const remKits = Math.max(Number(pp.kits_demand) - Number(pp.kits_paid), 0);
+                          const remUsd = Math.round(remKits * Number(pp.per_kit_cost_usd) * 100) / 100;
+                          return remUsd > 0 ? (
+                            <span className="block text-[10px] text-violet-700 whitespace-nowrap"
+                              title={`${fmtNum(remKits)} kits still to buy × ${fmtUSD(pp.per_kit_cost_usd)}/kit`}>
+                              left to buy {fmtUSD(remUsd, { cents: false })}
+                            </span>
+                          ) : null;
+                        })()}
+                      </TableCell>
                       <TableCell />
                       <TableCell />
                       <TableCell className="text-right text-sm">
