@@ -9,10 +9,14 @@ import { action } from '@uibakery/data';
  * inventory. The partial unique index refuses a second ACTIVE package on
  * the same (carrier, tracking) — the page catches the 23505 throw and
  * explains. Carrier is a Shippo token (usps/ups/fedex/...). The vendor
- * tag (optional) is enforced HERE, not just in the picker: it must be an
- * active, non-JM vendor with a live non-COA product line in the selected
- * campaign — a stale tab or replayed request cannot tag a package with
- * an excluded or cross-campaign vendor. Audited.
+ * tag (optional) is quality-checked HERE, not just in the picker: it
+ * must be an active, non-JM vendor with a live non-COA product line in
+ * the SUBMITTED campaign — COA vendors, JM, and product-less vendor rows
+ * are unrepresentable regardless of client state. Which campaign the
+ * pair is validated against is client-supplied (the selected campaign
+ * exists only as client state in this two-admin app), so cross-campaign
+ * binding is UX-level per the app's client-trust precedent; the tag
+ * itself is informational with no money impact. Audited.
  */
 function createInboundPackage() {
   return action('createInboundPackage', 'SQL', {
