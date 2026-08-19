@@ -65,6 +65,24 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const refundInFlight = useRef(false);
   const [purchasing, setPurchasing] = useState(false);
 
+  // EVERY post-purchase finalize goes through here: a THROWN action
+  // failure (transport error, timeout) is treated exactly like a zero-row
+  // refusal, so the caller's recovery branch (pendingFinalize + label URL
+  // + transaction id) always runs — a charged label must never lose its
+  // recovery handles to an exception path
+  const persistFinalize = async (transferId: number, result: PurchaseResult, rateFallback: string): Promise<boolean> => {
+    try {
+      const fin = await doFinalize({
+        transfer_id: transferId, transaction_id: result.transactionId,
+        tracking_number: result.trackingNumber, label_url: result.labelUrl,
+        rate_id: result.rateId || rateFallback, actor: userName,
+      }) as unknown[] | null;
+      return Array.isArray(fin) ? fin.length > 0 : !!fin;
+    } catch {
+      return false;
+    }
+  };
+
   const destAddress = (): ShippoAddress | null => {
     if (fDest === '__custom__') {
       if (!custom.name || !custom.street1 || !custom.city || !custom.state || !custom.zip) return null;
@@ -263,16 +281,9 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         reloadTransfers();
         return;
       }
-      // 4. persist — retryable from memory if this write fails
-      const fin = await doFinalize({
-        transfer_id: draftId, transaction_id: result.transactionId,
-        tracking_number: result.trackingNumber, label_url: result.labelUrl,
-        // finalize proves rate ownership server-side; Shippo's reported rate
-        // first, with the rate we POSTed as the fallback (same rate by
-        // construction — we bought exactly rate.object_id)
-        rate_id: result.rateId || rate.object_id, actor: userName,
-      }) as unknown[] | null;
-      if (!(Array.isArray(fin) ? fin.length > 0 : !!fin)) {
+      // 4. persist — retryable from memory if this write fails or THROWS
+      const finOk = await persistFinalize(draftId, result, rate.object_id);
+      if (!finOk) {
         setPendingFinalize(m => ({ ...m, [draftId!]: result }));
         setPurchaseMsg(`LABEL PURCHASED (transaction ${result.transactionId}) but saving failed — label: ${result.labelUrl} — use "Retry save" on the draft below; do NOT purchase again.`);
         reloadTransfers();
@@ -290,8 +301,8 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const retryFinalize = async (t: TransferRow) => {
     const pending = pendingFinalize[t.id];
     if (!pending) return;
-    const fin = await doFinalize({ transfer_id: t.id, transaction_id: pending.transactionId, tracking_number: pending.trackingNumber, label_url: pending.labelUrl, rate_id: pending.rateId || t.shippo_rate_id || '', actor: userName }) as unknown[] | null;
-    if (Array.isArray(fin) ? fin.length > 0 : !!fin) {
+    const finOk = await persistFinalize(t.id, pending, t.shippo_rate_id || '');
+    if (finOk) {
       setPendingFinalize(m => { const n = { ...m }; delete n[t.id]; return n; });
       setDraftMsg(m => ({ ...m, [t.id]: '' }));
       reloadTransfers();
@@ -311,8 +322,8 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         setDraftMsg(m => ({ ...m, [t.id]: `That transaction was purchased against a different rate than this draft (transaction rate ${result.rateId || 'unknown'}, draft rate ${t.shippo_rate_id || 'missing'}) — refusing to attach it. Find the right transaction in the Shippo dashboard.` }));
         return;
       }
-      const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, rate_id: result.rateId || '', actor: userName }) as unknown[] | null;
-      if (Array.isArray(fin) ? fin.length > 0 : !!fin) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
+      const finOk = await persistFinalize(t.id, result, result.rateId || '');
+      if (finOk) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
       else setDraftMsg(m => ({ ...m, [t.id]: 'Transaction found but saving failed — retry.' }));
     } catch (e: unknown) {
       setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Recovery failed' }));
@@ -334,8 +345,8 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         return;
       }
       if (existing) {
-        const fin0 = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, rate_id: existing.rateId || t.shippo_rate_id, actor: userName }) as unknown[] | null;
-        if (Array.isArray(fin0) ? fin0.length > 0 : !!fin0) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
+        const fin0Ok = await persistFinalize(t.id, existing, t.shippo_rate_id);
+        if (fin0Ok) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
         else setDraftMsg(m => ({ ...m, [t.id]: `An existing label was found (${existing.transactionId}) but saving failed — retry.` }));
         return;
       }
@@ -360,8 +371,8 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         }
         throw e;
       }
-      const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, rate_id: result.rateId || t.shippo_rate_id, actor: userName }) as unknown[] | null;
-      if (Array.isArray(fin) ? fin.length > 0 : !!fin) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
+      const finOk = await persistFinalize(t.id, result, t.shippo_rate_id);
+      if (finOk) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
       else {
         setPendingFinalize(m => ({ ...m, [t.id]: result }));
         setDraftMsg(m => ({ ...m, [t.id]: `Label purchased (${result.transactionId}) but saving failed — ${result.labelUrl} — use Retry save.` }));
@@ -389,10 +400,10 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     try {
       const existing = await findTransactionByRate(shippoKey, t.shippo_rate_id, t.created_at);
       if (existing) {
-        const fin = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, rate_id: existing.rateId || t.shippo_rate_id, actor: userName }) as unknown[] | null;
-        setDraftMsg(m => ({ ...m, [t.id]: (Array.isArray(fin) && fin.length > 0)
+        const finOk = await persistFinalize(t.id, existing, t.shippo_rate_id);
+        setDraftMsg(m => ({ ...m, [t.id]: finOk
           ? ''
-          : `A PURCHASED label exists for this draft (${existing.transactionId}) — recovered instead of deleting${!(Array.isArray(fin) && fin.length > 0) ? ', but saving failed — retry' : ''}.` }));
+          : `A PURCHASED label exists for this draft (${existing.transactionId}) — recovered instead of deleting, but saving failed — retry.` }));
         reloadTransfers();
         return;
       }
@@ -423,7 +434,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       setDraftMsg(m => ({ ...m, [t.id]: 'No Shippo API token is set (Settings) — the refund request cannot be sent.' }));
       return;
     }
-    if (!window.confirm(`Request a refund for this label (${fmtUSD(t.rate_amount)})? USPS refunds settle over days — final status shows in the Shippo dashboard. The transfer stays in the log marked refund-requested; its items still count as transferred until you delete the transfer via Shippo support if the shipment never went.`)) return;
+    if (!window.confirm(`Request a refund for this label (${fmtUSD(t.rate_amount)})? Carrier refunds settle over days and only succeed for UNUSED labels. The transfer stays in the log; its items count as transferred until "Re-check" records a SUCCESS refund — at that point the shipment provably never moved and the items return to on-hand automatically.`)) return;
     refundInFlight.current = true;
     try {
       // persist the intent BEFORE the POST — a one-way compare-and-set
@@ -700,7 +711,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
                     <TableCell>
                       {t.refund_status
                         ? <span className="inline-flex items-center gap-1">
-                            <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Check the Shippo dashboard for the final refund outcome">refund {t.refund_status}</span>
+                            <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Re-check records the final outcome — a SUCCESS refund returns the items to on-hand (the label was never used)">refund {t.refund_status}</span>
                             <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Ask Shippo for this refund's real status — records it, or clears the marker if no refund exists" onClick={() => recheckRefund(t)}>Re-check</Button>
                           </span>
                         : shippoKey
