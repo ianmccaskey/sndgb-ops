@@ -5,7 +5,7 @@ import addTransferItem from '@/actions/receiving/addTransferItem';
 import finalizeTransfer from '@/actions/receiving/finalizeTransfer';
 import deleteTransferDraft from '@/actions/receiving/deleteTransferDraft';
 import setTransferRefund from '@/actions/receiving/setTransferRefund';
-import { getRates, purchaseLabel, getTransaction, requestRefund } from '@/lib/shippo';
+import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import { useApp } from '@/app/AppContext';
 import { fmtUSD, fmtNum, fmtDate } from '@/lib/fmt';
@@ -205,9 +205,25 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
 
   const retryPurchase = async (t: TransferRow) => {
     if (purchaseInFlight.current || !t.shippo_rate_id) return;
-    if (!window.confirm('Retry the purchase for this draft? ONLY do this if the previous attempt FAILED — if a label may already exist (check the Shippo dashboard), use "Recover by transaction id" instead. Note: rates expire after ~7 days.')) return;
     purchaseInFlight.current = true;
     try {
+      // RELOAD-SAFE: ask Shippo whether this rate was already bought before
+      // any re-purchase — a label paid for in a lost browser session is
+      // recovered here instead of being bought twice
+      let existing: Awaited<ReturnType<typeof findTransactionByRate>>;
+      try {
+        existing = await findTransactionByRate(shippoKey, t.shippo_rate_id);
+      } catch (e: unknown) {
+        setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Could not verify with Shippo — not purchasing.' }));
+        return;
+      }
+      if (existing) {
+        const fin0 = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, actor: userName }) as unknown[] | null;
+        if (Array.isArray(fin0) ? fin0.length > 0 : !!fin0) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
+        else setDraftMsg(m => ({ ...m, [t.id]: `An existing label was found (${existing.transactionId}) but saving failed — retry.` }));
+        return;
+      }
+      if (!window.confirm('No existing label found at Shippo for this rate. Buy it now? Note: rates expire after ~7 days.')) return;
       const result = await purchaseLabel(shippoKey, t.shippo_rate_id);
       const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, actor: userName }) as unknown[] | null;
       if (Array.isArray(fin) ? fin.length > 0 : !!fin) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
@@ -223,7 +239,25 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   };
 
   const deleteDraft = async (t: TransferRow) => {
-    if (!window.confirm(`Delete this draft transfer from ${t.from_label}? Nothing was purchased for it (if a label exists, recover it instead).`)) return;
+    // never delete a draft whose rate was actually purchased in a lost
+    // session — check Shippo first when we can
+    if (shippoKey && t.shippo_rate_id) {
+      try {
+        const existing = await findTransactionByRate(shippoKey, t.shippo_rate_id);
+        if (existing) {
+          const fin = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, actor: userName }) as unknown[] | null;
+          setDraftMsg(m => ({ ...m, [t.id]: (Array.isArray(fin) && fin.length > 0)
+            ? ''
+            : `A PURCHASED label exists for this draft (${existing.transactionId}) — recovered instead of deleting${!(Array.isArray(fin) && fin.length > 0) ? ', but saving failed — retry' : ''}.` }));
+          reloadTransfers();
+          return;
+        }
+      } catch (e: unknown) {
+        setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Could not verify with Shippo — not deleting.' }));
+        return;
+      }
+    }
+    if (!window.confirm(`Delete this draft transfer from ${t.from_label}? ${shippoKey ? 'Shippo confirmed no label was purchased for it.' : 'No Shippo key is set, so this could NOT be verified against Shippo — only delete if you are sure nothing was purchased.'}`)) return;
     await doDeleteDraft({ transfer_id: t.id, actor: userName });
     reloadTransfers();
   };
@@ -390,7 +424,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
                 <div className="flex flex-wrap gap-1.5 items-center">
                   {pendingFinalize[t.id]
                     ? <Button size="sm" className="h-7 text-xs" onClick={() => retryFinalize(t)}>Retry save (label already purchased)</Button>
-                    : <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => retryPurchase(t)}>Retry purchase</Button>}
+                    : <Button size="sm" variant="outline" className="h-7 text-xs" title="Checks Shippo for an already-purchased label first — recovers it if found, only buys if none exists" onClick={() => retryPurchase(t)}>Check Shippo & retry</Button>}
                   <Input placeholder="…or recover by transaction id" value={recoverTxn[t.id] || ''} onChange={e => setRecoverTxn(m => ({ ...m, [t.id]: e.target.value }))} className="h-7 w-56 text-xs font-mono" />
                   <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => recoverByTxn(t)}>Recover</Button>
                   {!pendingFinalize[t.id] && <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" onClick={() => deleteDraft(t)}>Delete draft</Button>}

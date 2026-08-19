@@ -12,8 +12,14 @@ function createTransfer() {
     datasourceName: 'SND GB DB',
     query: `
       WITH ins AS (
-        INSERT INTO transfers (from_address_id, destination_label, destination, parcel, carrier, servicelevel, rate_amount, rate_currency, shippo_rate_id, note, created_by)
-        SELECT {{params.from_address_id}}::bigint,
+        INSERT INTO transfers (from_address_id, from_label, from_address, destination_label, destination, parcel, carrier, servicelevel, rate_amount, rate_currency, shippo_rate_id, note, created_by)
+        SELECT ra.id,
+               -- ship-from SNAPSHOT at draft time: editing the address later
+               -- must not rewrite what the purchased label actually said
+               ra.label,
+               jsonb_build_object('name', ra.name, 'street1', ra.street1, 'street2', ra.street2,
+                                  'city', ra.city, 'state', ra.state, 'zip', ra.zip,
+                                  'country', ra.country, 'phone', ra.phone, 'email', ra.email),
                TRIM({{params.destination_label}}),
                {{params.destination}}::jsonb,
                {{params.parcel}}::jsonb,
@@ -24,9 +30,10 @@ function createTransfer() {
                NULLIF({{params.shippo_rate_id}}::text, ''),
                NULLIF(TRIM({{params.note}}::text), ''),
                {{params.actor}}
-        WHERE TRIM({{params.destination_label}}) <> ''
+        FROM receive_addresses ra
+        WHERE ra.id = {{params.from_address_id}}::bigint
+          AND TRIM({{params.destination_label}}) <> ''
           AND NULLIF({{params.shippo_rate_id}}::text, '') IS NOT NULL
-          AND EXISTS (SELECT 1 FROM receive_addresses ra WHERE ra.id = {{params.from_address_id}}::bigint)
         RETURNING id, from_address_id, destination_label, carrier, servicelevel, rate_amount
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

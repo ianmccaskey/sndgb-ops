@@ -27,6 +27,7 @@ export type InvRow = {
 };
 export type TransferRow = {
   id: number; from_address_id: number; from_label: string;
+  from_address: Record<string, string | null> | null;
   destination_label: string; destination: Record<string, string | null>;
   parcel: Record<string, string>; carrier: string | null; servicelevel: string | null;
   rate_amount: string | null; rate_currency: string | null;
