@@ -41,7 +41,7 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
   hasKey: boolean;
   testMode: boolean;
 }) {
-  const { userName } = useApp();
+  const { userName, groupBuyId } = useApp();
   const [doCreate] = useMutateAction(createInboundPackage);
   const [doAddItem] = useMutateAction(addPackageItem);
   const [doDelItem] = useMutateAction(deletePackageItem);
@@ -143,6 +143,8 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
       try {
         res = await doCreate({
           receive_address_id: Number(fAddr), vendor_id: fVendor || '',
+          // the action re-checks vendor eligibility against THIS campaign
+          group_buy_id: groupBuyId ?? '',
           carrier: carrierToken, tracking_number: fTracking.trim(), note: fNote.trim(),
           items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
           actor: userName,
@@ -155,7 +157,7 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
         return;
       }
       const pkgId = Array.isArray(res) && res.length > 0 ? Number((res[0] as { id: string }).id) : null;
-      if (!pkgId) { setFMsg('Not created — nothing was saved. Check the address is active, carrier/tracking are filled, and every line has a positive count.'); return; }
+      if (!pkgId) { setFMsg('Not created — nothing was saved. Check the address is active, carrier/tracking are filled, every line has a positive count, and the vendor ships product in this campaign.'); return; }
       setFMsg('');
       setFTracking(''); setFNote(''); setFLines([{ product: '', qty: '' }]);
       afterChange();

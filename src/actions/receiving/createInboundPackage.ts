@@ -8,7 +8,11 @@ import { action } from '@uibakery/data';
  * package that later commits with missing contents would understate
  * inventory. The partial unique index refuses a second ACTIVE package on
  * the same (carrier, tracking) — the page catches the 23505 throw and
- * explains. Carrier is a Shippo token (usps/ups/fedex/...). Audited.
+ * explains. Carrier is a Shippo token (usps/ups/fedex/...). The vendor
+ * tag (optional) is enforced HERE, not just in the picker: it must be an
+ * active, non-JM vendor with a live non-COA product line in the selected
+ * campaign — a stale tab or replayed request cannot tag a package with
+ * an excluded or cross-campaign vendor. Audited.
  */
 function createInboundPackage() {
   return action('createInboundPackage', 'SQL', {
@@ -36,6 +40,18 @@ function createInboundPackage() {
                {{params.actor}}
         WHERE TRIM({{params.carrier}}) <> '' AND TRIM({{params.tracking_number}}) <> ''
           AND EXISTS (SELECT 1 FROM receive_addresses ra WHERE ra.id = {{params.receive_address_id}}::bigint AND ra.active)
+          AND (NULLIF({{params.vendor_id}}::text, '') IS NULL
+               OR EXISTS (
+                 SELECT 1 FROM vendors v
+                 JOIN group_buy_products gbp ON gbp.vendor_id = v.id
+                 JOIN products pr ON pr.id = gbp.product_id
+                 WHERE v.id = NULLIF({{params.vendor_id}}::text, '')::bigint
+                   AND v.active
+                   AND UPPER(v.code) <> 'JM'
+                   AND gbp.group_buy_id = NULLIF({{params.group_buy_id}}::text, '')::bigint
+                   AND gbp.status = 'active'
+                   AND pr.sku_code !~* '^coa'
+               ))
           AND (SELECT n > 0 AND all_valid FROM ok)
         RETURNING id, receive_address_id, carrier, tracking_number
       ),
