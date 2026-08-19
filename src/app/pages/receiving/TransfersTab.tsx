@@ -263,25 +263,33 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   };
 
   const deleteDraft = async (t: TransferRow) => {
-    // never delete a draft whose rate was actually purchased in a lost
-    // session — check Shippo first when we can
-    if (shippoKey && t.shippo_rate_id) {
-      try {
-        const existing = await findTransactionByRate(shippoKey, t.shippo_rate_id);
-        if (existing) {
-          const fin = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, actor: userName }) as unknown[] | null;
-          setDraftMsg(m => ({ ...m, [t.id]: (Array.isArray(fin) && fin.length > 0)
-            ? ''
-            : `A PURCHASED label exists for this draft (${existing.transactionId}) — recovered instead of deleting${!(Array.isArray(fin) && fin.length > 0) ? ', but saving failed — retry' : ''}.` }));
-          reloadTransfers();
-          return;
-        }
-      } catch (e: unknown) {
-        setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Could not verify with Shippo — not deleting.' }));
+    // HARD GUARD: a draft may only be deleted after Shippo PROVES no label
+    // was purchased against its rate — the draft's rate id is the ONLY
+    // recovery handle for a label paid in a lost session, and deleting it
+    // unverified would orphan real money. No key = no verification = no delete.
+    if (!shippoKey) {
+      setDraftMsg(m => ({ ...m, [t.id]: 'Not deleted — no Shippo API token is set, so it cannot be verified that no label was purchased for this draft. Add the token in Settings, then delete.' }));
+      return;
+    }
+    if (!t.shippo_rate_id) {
+      setDraftMsg(m => ({ ...m, [t.id]: 'Not deleted — this draft has no rate id to verify against Shippo. Check the Shippo dashboard manually.' }));
+      return;
+    }
+    try {
+      const existing = await findTransactionByRate(shippoKey, t.shippo_rate_id);
+      if (existing) {
+        const fin = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, actor: userName }) as unknown[] | null;
+        setDraftMsg(m => ({ ...m, [t.id]: (Array.isArray(fin) && fin.length > 0)
+          ? ''
+          : `A PURCHASED label exists for this draft (${existing.transactionId}) — recovered instead of deleting${!(Array.isArray(fin) && fin.length > 0) ? ', but saving failed — retry' : ''}.` }));
+        reloadTransfers();
         return;
       }
+    } catch (e: unknown) {
+      setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Could not verify with Shippo — not deleting.' }));
+      return;
     }
-    if (!window.confirm(`Delete this draft transfer from ${t.from_label}? ${shippoKey ? 'Shippo confirmed no label was purchased for it.' : 'No Shippo key is set, so this could NOT be verified against Shippo — only delete if you are sure nothing was purchased.'}`)) return;
+    if (!window.confirm(`Delete this draft transfer from ${t.from_label}? Shippo confirmed no label was purchased for it.`)) return;
     await doDeleteDraft({ transfer_id: t.id, actor: userName });
     reloadTransfers();
   };

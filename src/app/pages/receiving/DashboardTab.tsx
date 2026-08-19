@@ -112,32 +112,29 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
     }
     setFSaving(true);
     try {
+      // ATOMIC: package + every content line in ONE statement — either the
+      // whole package saves or nothing does, so a transient failure can
+      // never leave a partial package that later commits with missing
+      // contents and understates inventory
       let res: unknown[] | null;
       try {
         res = await doCreate({
           receive_address_id: Number(fAddr), vendor_id: fVendor || '',
-          carrier: carrierToken, tracking_number: fTracking.trim(), note: fNote.trim(), actor: userName,
+          carrier: carrierToken, tracking_number: fTracking.trim(), note: fNote.trim(),
+          items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
+          actor: userName,
         }) as unknown[] | null;
       } catch (e: unknown) {
         const m = e instanceof Error ? e.message : '';
         setFMsg(m.includes('inbound_packages_active_tracking_uniq')
           ? 'An ACTIVE package with this carrier + tracking number already exists.'
-          : m || 'Failed to create the package.');
+          : (m || 'Failed to create the package.') + ' Nothing was saved — the form is unchanged, retry.');
         return;
       }
       const pkgId = Array.isArray(res) && res.length > 0 ? Number((res[0] as { id: string }).id) : null;
-      if (!pkgId) { setFMsg('Not created — check the address is active and carrier/tracking are filled.'); return; }
-      const failed: string[] = [];
-      for (const l of lines) {
-        const ok = await doAddItem({ package_id: pkgId, product_id: Number(l.product), qty: l.qty.trim(), actor: userName }) as unknown[] | null;
-        if (!(Array.isArray(ok) ? ok.length > 0 : !!ok)) failed.push(products.find(p => String(p.id) === l.product)?.sku_code || '?');
-      }
-      if (failed.length > 0) {
-        setFMsg(`Package created but these lines failed: ${failed.join(', ')} — add them on the package card before committing.`);
-      } else {
-        setFMsg('');
-        setFTracking(''); setFNote(''); setFLines([{ product: '', qty: '' }]);
-      }
+      if (!pkgId) { setFMsg('Not created — nothing was saved. Check the address is active, carrier/tracking are filled, and every line has a positive count.'); return; }
+      setFMsg('');
+      setFTracking(''); setFNote(''); setFLines([{ product: '', qty: '' }]);
       afterChange();
     } finally {
       setFSaving(false);
