@@ -2,10 +2,11 @@ import React, { useRef, useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import createTransfer from '@/actions/receiving/createTransfer';
 import markTransferPurchaseStarted from '@/actions/receiving/markTransferPurchaseStarted';
+import clearTransferPurchaseLease from '@/actions/receiving/clearTransferPurchaseLease';
 import finalizeTransfer from '@/actions/receiving/finalizeTransfer';
 import deleteTransferDraft from '@/actions/receiving/deleteTransferDraft';
 import setTransferRefund from '@/actions/receiving/setTransferRefund';
-import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction } from '@/lib/shippo';
+import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import { useApp } from '@/app/AppContext';
 import { fmtUSD, fmtNum, fmtDate } from '@/lib/fmt';
@@ -36,6 +37,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const { userName } = useApp();
   const [doCreate] = useMutateAction(createTransfer);
   const [doClaimPurchase] = useMutateAction(markTransferPurchaseStarted);
+  const [doClearLease] = useMutateAction(clearTransferPurchaseLease);
   const [doFinalize] = useMutateAction(finalizeTransfer);
   const [doDeleteDraft] = useMutateAction(deleteTransferDraft);
   const [doSetRefund] = useMutateAction(setTransferRefund);
@@ -57,9 +59,10 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const [pendingFinalize, setPendingFinalize] = useState<Record<number, PurchaseResult>>({});
   const [recoverTxn, setRecoverTxn] = useState<Record<number, string>>({});
   const [draftMsg, setDraftMsg] = useState<Record<number, string>>({});
-  // ref, not state: React re-renders lag double-clicks, and this button
-  // spends REAL money
+  // refs, not state: React re-renders lag double-clicks, and these buttons
+  // spend REAL money
   const purchaseInFlight = useRef(false);
+  const refundInFlight = useRef(false);
   const [purchasing, setPurchasing] = useState(false);
 
   const destAddress = (): ShippoAddress | null => {
@@ -191,6 +194,12 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       try {
         result = await purchaseLabel(shippoKey, rate.object_id);
       } catch (e: unknown) {
+        // a DEFINITIVE Shippo refusal (no charge, no label) releases the
+        // lease so the draft is immediately retryable/deletable; ambiguous
+        // failures keep it — money may have moved
+        if (e instanceof ShippoPurchaseRefusedError) {
+          await doClearLease({ transfer_id: draftId, actor: userName }).catch(() => null);
+        }
         setPurchaseMsg((e instanceof Error ? e.message : 'Purchase failed') + ' — the draft is saved below; retry or delete it there.');
         reloadTransfers();
         return;
@@ -272,16 +281,25 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         return;
       }
       if (!window.confirm('No existing label found at Shippo for this rate. Buy it now? Note: rates expire after ~7 days.')) return;
-      // re-claim the purchase lease BEFORE money moves: zero rows means the
-      // draft was deleted or finalized in another session — abort; a claim
-      // also blocks concurrent deletion for the next 10 minutes
+      // claim the EXCLUSIVE purchase lease BEFORE money moves: zero rows
+      // means the draft is gone (deleted/finalized elsewhere) OR another
+      // fresh purchase attempt holds the lease — either way, abort with no
+      // money spent; two admins racing this end with ONE Shippo POST
       const claim = await doClaimPurchase({ transfer_id: t.id, actor: userName }) as unknown[] | null;
       if (!(Array.isArray(claim) ? claim.length > 0 : !!claim)) {
-        setDraftMsg(m => ({ ...m, [t.id]: 'This draft no longer exists (deleted or finalized in another session) — nothing was purchased. Reload the page.' }));
+        setDraftMsg(m => ({ ...m, [t.id]: 'Not purchased — either this draft no longer exists, or another purchase attempt (this draft\'s original try, or the other admin) is still fresh (<10 min). An explicit Shippo refusal frees it immediately; otherwise wait a few minutes and use "Check Shippo & retry" again.' }));
         reloadTransfers();
         return;
       }
-      const result = await purchaseLabel(shippoKey, t.shippo_rate_id);
+      let result: PurchaseResult;
+      try {
+        result = await purchaseLabel(shippoKey, t.shippo_rate_id);
+      } catch (e: unknown) {
+        if (e instanceof ShippoPurchaseRefusedError) {
+          await doClearLease({ transfer_id: t.id, actor: userName }).catch(() => null);
+        }
+        throw e;
+      }
       const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, rate_id: result.rateId || t.shippo_rate_id, actor: userName }) as unknown[] | null;
       if (Array.isArray(fin) ? fin.length > 0 : !!fin) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
       else {
@@ -337,6 +355,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
 
   const refund = async (t: TransferRow) => {
     if (!t.shippo_transaction_id) return;
+    if (refundInFlight.current) return;   // synchronous double-click guard
     // no key = no request could possibly reach Shippo — refuse BEFORE the
     // REQUESTING marker, or the row would durably look refund-in-flight
     // when nothing was ever sent
@@ -345,21 +364,28 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       return;
     }
     if (!window.confirm(`Request a refund for this label (${fmtUSD(t.rate_amount)})? USPS refunds settle over days — final status shows in the Shippo dashboard. The transfer stays in the log marked refund-requested; its items still count as transferred until you delete the transfer via Shippo support if the shipment never went.`)) return;
-    // persist the intent BEFORE the POST — if the browser dies mid-request
-    // the row shows REQUESTING (which hides the refund button) instead of
-    // silently looking refundable while Shippo may already hold a request
-    const mark = await doSetRefund({ transfer_id: t.id, refund_status: 'REQUESTING', actor: userName }) as unknown[] | null;
-    if (!(Array.isArray(mark) ? mark.length > 0 : !!mark)) {
-      setDraftMsg(m => ({ ...m, [t.id]: 'Could not record the refund request — nothing was sent to Shippo. Retry.' }));
-      return;
-    }
-    reloadTransfers();
+    refundInFlight.current = true;
     try {
-      const status = await requestRefund(shippoKey, t.shippo_transaction_id);
-      await doSetRefund({ transfer_id: t.id, refund_status: status, actor: userName });
+      // persist the intent BEFORE the POST — a one-way compare-and-set
+      // ('REQUESTING' only lands on a row with no status), so a concurrent
+      // admin's click loses here with zero rows and NEVER reaches Shippo;
+      // a browser death after this leaves durable REQUESTING evidence
+      const mark = await doSetRefund({ transfer_id: t.id, refund_status: 'REQUESTING', actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(mark) ? mark.length > 0 : !!mark)) {
+        setDraftMsg(m => ({ ...m, [t.id]: 'Not sent — a refund for this label was already requested (possibly by the other admin just now). Use "Re-check" to see its status.' }));
+        reloadTransfers();
+        return;
+      }
       reloadTransfers();
-    } catch (e: unknown) {
-      setDraftMsg(m => ({ ...m, [t.id]: (e instanceof Error ? e.message : 'Refund request failed') + ' The row stays marked REQUESTING — use "Re-check" to reconcile with Shippo; do not assume it failed.' }));
+      try {
+        const status = await requestRefund(shippoKey, t.shippo_transaction_id);
+        await doSetRefund({ transfer_id: t.id, refund_status: status, actor: userName });
+        reloadTransfers();
+      } catch (e: unknown) {
+        setDraftMsg(m => ({ ...m, [t.id]: (e instanceof Error ? e.message : 'Refund request failed') + ' The row stays marked REQUESTING — use "Re-check" to reconcile with Shippo; do not assume it failed.' }));
+      }
+    } finally {
+      refundInFlight.current = false;
     }
   };
 
@@ -368,10 +394,12 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   // (clear the marker so the button returns)
   const recheckRefund = async (t: TransferRow) => {
     if (!t.shippo_transaction_id) return;
+    if (refundInFlight.current) return;
     if (!shippoKey) {
       setDraftMsg(m => ({ ...m, [t.id]: 'No Shippo API token is set (Settings) — cannot check the refund status.' }));
       return;
     }
+    refundInFlight.current = true;
     try {
       const status = await findRefundByTransaction(shippoKey, t.shippo_transaction_id);
       if (status) {
@@ -384,6 +412,8 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       reloadTransfers();
     } catch (e: unknown) {
       setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Refund check failed' }));
+    } finally {
+      refundInFlight.current = false;
     }
   };
 

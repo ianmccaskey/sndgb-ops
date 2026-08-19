@@ -1,12 +1,16 @@
 import { action } from '@uibakery/data';
 
 /**
- * Re-claim the PURCHASE LEASE on a draft right before a retry-purchase
- * POSTs to Shippo. Two jobs: (1) deleteTransferDraft refuses while the
- * lease is fresh, so a concurrent admin cannot delete the draft in the
- * window where a label purchase may be in flight; (2) ZERO ROWS back
- * means the draft no longer exists (deleted or finalized in another
- * session) — the caller must ABORT before any money moves. Audited.
+ * Claim the PURCHASE LEASE on a draft right before a retry-purchase
+ * POSTs to Shippo. EXCLUSIVE compare-and-swap: while another fresh lease
+ * (<10 min) exists, the claim refuses — two admins racing retry-purchase
+ * end with ONE Shippo POST, not two. ZERO ROWS back therefore means
+ * either the draft no longer exists (deleted/finalized) or someone
+ * else's purchase attempt is still fresh — the caller must ABORT before
+ * any money moves. A definitive Shippo refusal clears the lease
+ * (clearTransferPurchaseLease) so an honest retry needn't wait out the
+ * window; ambiguous failures keep it, because money may have moved.
+ * deleteTransferDraft refuses under the same fresh-lease rule. Audited.
  */
 function markTransferPurchaseStarted() {
   return action('markTransferPurchaseStarted', 'SQL', {
@@ -17,6 +21,7 @@ function markTransferPurchaseStarted() {
         SET purchase_started_at = now()
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
+          AND (t.purchase_started_at IS NULL OR t.purchase_started_at < now() - interval '10 minutes')
         RETURNING t.id, t.shippo_rate_id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

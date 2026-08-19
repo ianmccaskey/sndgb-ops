@@ -113,6 +113,15 @@ export async function getRates(key: string, from: ShippoAddress, to: ShippoAddre
   };
 }
 
+/**
+ * Thrown ONLY when Shippo returned an explicit ERROR-status transaction —
+ * a DEFINITIVE refusal: no charge, no label. Callers may safely release
+ * the purchase lease on this error. Every other purchase failure
+ * (network drop, 5xx, poll timeout) throws a plain Error and must be
+ * treated as AMBIGUOUS — money may have moved.
+ */
+export class ShippoPurchaseRefusedError extends Error {}
+
 export type PurchaseResult = {
   transactionId: string; trackingNumber: string; labelUrl: string;
   // the rate the label was ACTUALLY purchased against — recovery flows
@@ -165,7 +174,11 @@ async function resolveTransaction(key: string, res: Response): Promise<PurchaseR
   if (txn && (txn.status === 'QUEUED' || txn.status === 'WAITING')) {
     throw new Error(`Label purchase is still processing at Shippo (transaction ${txn.object_id}). Do NOT purchase again — use "Retry purchase" in a minute; it will pick up this transaction.`);
   }
-  throw new Error(`Shippo refused the label purchase${msgs ? `: ${msgs}` : ''}${msgs.toLowerCase().includes('rate') ? ' — the rate may have expired; re-fetch rates.' : ''}`);
+  if (txn && txn.status === 'ERROR') {
+    // DEFINITIVE refusal — no charge, no label; safe to release the lease
+    throw new ShippoPurchaseRefusedError(`Shippo refused the label purchase${msgs ? `: ${msgs}` : ''}${msgs.toLowerCase().includes('rate') ? ' — the rate may have expired; re-fetch rates.' : ''}`);
+  }
+  throw new Error(`Shippo did not confirm the label purchase${msgs ? ` (${msgs})` : ''} — treat it as UNKNOWN: check the Shippo dashboard or use "Check Shippo & retry" before buying again.`);
 }
 
 /**

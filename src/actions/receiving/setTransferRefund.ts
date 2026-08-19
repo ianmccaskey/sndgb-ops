@@ -19,6 +19,11 @@ function setTransferRefund() {
         SET refund_status = NULLIF(TRIM({{params.refund_status}}::text), '')
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NOT NULL
+          -- 'REQUESTING' is a one-way COMPARE-AND-SET: it only lands on a
+          -- row with no refund status, so two admins racing the button end
+          -- with ONE Shippo refund POST (the loser gets zero rows). Real
+          -- statuses and clears (from the POST result / Re-check) are free.
+          AND (NULLIF(TRIM({{params.refund_status}}::text), '') IS DISTINCT FROM 'REQUESTING' OR t.refund_status IS NULL)
         RETURNING t.id, t.refund_status, t.shippo_transaction_id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
