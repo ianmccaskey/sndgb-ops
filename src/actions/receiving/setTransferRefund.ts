@@ -21,10 +21,15 @@ function setTransferRefund() {
                                        THEN now() ELSE t.refund_requested_at END
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NOT NULL
-          -- 'REQUESTING' is a one-way COMPARE-AND-SET: it only lands on a
-          -- row with no refund status, so two admins racing the button end
-          -- with ONE Shippo refund POST (the loser gets zero rows).
-          AND (NULLIF(TRIM({{params.refund_status}}::text), '') IS DISTINCT FROM 'REQUESTING' OR t.refund_status IS NULL)
+          -- 'REQUESTING' is a one-way COMPARE-AND-SET: it lands only on a
+          -- row with no refund status (first request — two admins racing
+          -- end with ONE Shippo POST) or on the caller's OWN standing
+          -- marker (heartbeat: prior_requested_at matches exactly), which
+          -- re-stamps it just before the POST so a tab that slept past the
+          -- window learns its marker was cleared/superseded and aborts
+          AND (NULLIF(TRIM({{params.refund_status}}::text), '') IS DISTINCT FROM 'REQUESTING'
+               OR t.refund_status IS NULL
+               OR ({{params.prior_requested_at}}::text <> '' AND t.refund_status = 'REQUESTING' AND t.refund_requested_at = {{params.prior_requested_at}}::timestamptz))
           -- a CLEAR (empty status) refuses while a REQUESTING marker is
           -- fresher than 10 minutes: another session's Shippo POST may be
           -- in flight and not yet listed — wiping its marker would
@@ -33,13 +38,14 @@ function setTransferRefund() {
                OR t.refund_status IS DISTINCT FROM 'REQUESTING'
                OR t.refund_requested_at IS NULL
                OR t.refund_requested_at < now() - interval '10 minutes')
-        RETURNING t.id, t.refund_status, t.shippo_transaction_id
+        RETURNING t.id, t.refund_status, t.shippo_transaction_id, t.refund_requested_at
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
       SELECT 'transfers', up.id::text, 'transfer_refund_status_set', {{params.actor}},
-             jsonb_build_object('refund_status', up.refund_status, 'shippo_transaction_id', up.shippo_transaction_id)
+             jsonb_build_object('refund_status', up.refund_status, 'shippo_transaction_id', up.shippo_transaction_id,
+                                'requested_at', up.refund_requested_at)
       FROM up
-      RETURNING row_pk AS id
+      RETURNING row_pk AS id, (new_data->>'requested_at') AS requested_at
     `,
   });
 }

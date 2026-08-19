@@ -21,7 +21,14 @@ function markTransferPurchaseStarted() {
         SET purchase_started_at = now()
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
-          AND (t.purchase_started_at IS NULL OR t.purchase_started_at < now() - interval '10 minutes')
+          -- exclusive CAS with an OWN-TOKEN refresh: the current holder
+          -- (presenting its exact claimed_at) may re-stamp the lease as a
+          -- pre-POST HEARTBEAT — a tab that slept past the window learns
+          -- here (zero rows) that its draft was deleted or re-claimed and
+          -- aborts BEFORE any money moves
+          AND (t.purchase_started_at IS NULL
+               OR t.purchase_started_at < now() - interval '10 minutes'
+               OR ({{params.prior_claimed_at}}::text <> '' AND t.purchase_started_at = {{params.prior_claimed_at}}::timestamptz))
         RETURNING t.id, t.shippo_rate_id, t.purchase_started_at
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

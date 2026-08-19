@@ -204,7 +204,21 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         return;
       }
       if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Check every line has a positive count; if inventory shifted since you loaded, a line may now exceed on-hand — retry to re-confirm.'); return; }
-      // 2. buy the label (single attempt inside)
+      // 2. HEARTBEAT immediately before money moves: if this tab slept
+      //    long enough for the birth lease to age out and another session
+      //    deleted or re-claimed the draft, the own-token refresh returns
+      //    zero rows and we abort with NO Shippo POST
+      if (claimedAt) {
+        const hb = await doClaimPurchase({ transfer_id: draftId, prior_claimed_at: claimedAt, actor: userName }) as unknown[] | null;
+        const hbRow = Array.isArray(hb) && hb.length > 0 ? hb[0] as { claimed_at?: string } : null;
+        if (!hbRow) {
+          setPurchaseMsg('Not purchased — this draft was deleted or claimed by another session while this page was idle. Reload the page; nothing was charged.');
+          reloadTransfers();
+          return;
+        }
+        claimedAt = hbRow.claimed_at || claimedAt;
+      }
+      // 3. buy the label (single attempt inside)
       let result: PurchaseResult;
       try {
         result = await purchaseLabel(shippoKey, rate.object_id);
@@ -220,7 +234,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         reloadTransfers();
         return;
       }
-      // 3. persist — retryable from memory if this write fails
+      // 4. persist — retryable from memory if this write fails
       const fin = await doFinalize({
         transfer_id: draftId, transaction_id: result.transactionId,
         tracking_number: result.trackingNumber, label_url: result.labelUrl,
@@ -301,7 +315,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       // means the draft is gone (deleted/finalized elsewhere) OR another
       // fresh purchase attempt holds the lease — either way, abort with no
       // money spent; two admins racing this end with ONE Shippo POST
-      const claim = await doClaimPurchase({ transfer_id: t.id, actor: userName }) as unknown[] | null;
+      const claim = await doClaimPurchase({ transfer_id: t.id, prior_claimed_at: '', actor: userName }) as unknown[] | null;
       const claimRow = Array.isArray(claim) && claim.length > 0 ? claim[0] as { id: string; claimed_at?: string } : null;
       if (!claimRow) {
         setDraftMsg(m => ({ ...m, [t.id]: 'Not purchased — either this draft no longer exists, or another purchase attempt (this draft\'s original try, or the other admin) is still fresh (<10 min). An explicit Shippo refusal frees it immediately; otherwise wait a few minutes and use "Check Shippo & retry" again.' }));
@@ -387,16 +401,29 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       // ('REQUESTING' only lands on a row with no status), so a concurrent
       // admin's click loses here with zero rows and NEVER reaches Shippo;
       // a browser death after this leaves durable REQUESTING evidence
-      const mark = await doSetRefund({ transfer_id: t.id, refund_status: 'REQUESTING', actor: userName }) as unknown[] | null;
-      if (!(Array.isArray(mark) ? mark.length > 0 : !!mark)) {
+      const mark = await doSetRefund({ transfer_id: t.id, refund_status: 'REQUESTING', prior_requested_at: '', actor: userName }) as unknown[] | null;
+      const markRow = Array.isArray(mark) && mark.length > 0 ? mark[0] as { requested_at?: string } : null;
+      if (!markRow) {
         setDraftMsg(m => ({ ...m, [t.id]: 'Not sent — a refund for this label was already requested (possibly by the other admin just now). Use "Re-check" to see its status.' }));
         reloadTransfers();
         return;
       }
       reloadTransfers();
+      // HEARTBEAT immediately before the POST: if this tab slept past the
+      // marker's freshness window and another session cleared or
+      // re-requested, the own-token re-stamp returns zero rows — abort
+      // with NO Shippo POST
+      if (markRow.requested_at) {
+        const hb = await doSetRefund({ transfer_id: t.id, refund_status: 'REQUESTING', prior_requested_at: markRow.requested_at, actor: userName }) as unknown[] | null;
+        if (!(Array.isArray(hb) && hb.length > 0)) {
+          setDraftMsg(m => ({ ...m, [t.id]: 'Not sent — this request marker was cleared or superseded while the page was idle. Use "Re-check" before requesting again.' }));
+          reloadTransfers();
+          return;
+        }
+      }
       try {
         const status = await requestRefund(shippoKey, t.shippo_transaction_id);
-        await doSetRefund({ transfer_id: t.id, refund_status: status, actor: userName });
+        await doSetRefund({ transfer_id: t.id, refund_status: status, prior_requested_at: '', actor: userName });
         reloadTransfers();
       } catch (e: unknown) {
         setDraftMsg(m => ({ ...m, [t.id]: (e instanceof Error ? e.message : 'Refund request failed') + ' The row stays marked REQUESTING — use "Re-check" to reconcile with Shippo; do not assume it failed.' }));
@@ -420,13 +447,13 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     try {
       const status = await findRefundByTransaction(shippoKey, t.shippo_transaction_id, t.created_at);
       if (status) {
-        await doSetRefund({ transfer_id: t.id, refund_status: status, actor: userName });
+        await doSetRefund({ transfer_id: t.id, refund_status: status, prior_requested_at: '', actor: userName });
         setDraftMsg(m => ({ ...m, [t.id]: '' }));
       } else {
         // the action refuses this clear while a REQUESTING marker is
         // fresher than 10 minutes — another session's POST may be in
         // flight and not yet listed at Shippo
-        const cleared = await doSetRefund({ transfer_id: t.id, refund_status: '', actor: userName }) as unknown[] | null;
+        const cleared = await doSetRefund({ transfer_id: t.id, refund_status: '', prior_requested_at: '', actor: userName }) as unknown[] | null;
         setDraftMsg(m => ({ ...m, [t.id]: (Array.isArray(cleared) && cleared.length > 0)
           ? 'Shippo has NO refund for this label — the earlier request never landed. You can request again.'
           : 'Shippo lists no refund YET, but the request marker is under 10 minutes old — a request may still be in flight (possibly the other admin\'s). Re-check again in a few minutes.' }));
