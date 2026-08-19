@@ -3,6 +3,7 @@ import { useMutateAction } from '@uibakery/data';
 import createTransfer from '@/actions/receiving/createTransfer';
 import markTransferPurchaseStarted from '@/actions/receiving/markTransferPurchaseStarted';
 import clearTransferPurchaseLease from '@/actions/receiving/clearTransferPurchaseLease';
+import clearTransferAttemptVerified from '@/actions/receiving/clearTransferAttemptVerified';
 import finalizeTransfer from '@/actions/receiving/finalizeTransfer';
 import deleteTransferDraft from '@/actions/receiving/deleteTransferDraft';
 import setTransferRefund from '@/actions/receiving/setTransferRefund';
@@ -38,6 +39,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const [doCreate] = useMutateAction(createTransfer);
   const [doClaimPurchase] = useMutateAction(markTransferPurchaseStarted);
   const [doClearLease] = useMutateAction(clearTransferPurchaseLease);
+  const [doClearAttempt] = useMutateAction(clearTransferAttemptVerified);
   const [doFinalize] = useMutateAction(finalizeTransfer);
   const [doDeleteDraft] = useMutateAction(deleteTransferDraft);
   const [doSetRefund] = useMutateAction(setTransferRefund);
@@ -350,6 +352,10 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         else setDraftMsg(m => ({ ...m, [t.id]: `An existing label was found (${existing.transactionId}) but saving failed — retry.` }));
         return;
       }
+      // Shippo just PROVED no label exists — downgrade any stale 30-day
+      // "attempted" reservation to the short window (a pre-dispatch client
+      // failure must not hold stock for a month once verified)
+      await doClearAttempt({ transfer_id: t.id, actor: userName }).catch(() => null);
       if (!window.confirm('No existing label found at Shippo for this rate. Buy it now? Note: rates expire after ~7 days.')) return;
       // claim the EXCLUSIVE purchase lease BEFORE money moves: zero rows
       // means the draft is gone (deleted/finalized elsewhere) OR another
@@ -411,6 +417,9 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Could not verify with Shippo — not deleting.' }));
       return;
     }
+    // verified no-label: downgrade any stale attempted-reservation even if
+    // the operator cancels the delete confirm below
+    await doClearAttempt({ transfer_id: t.id, actor: userName }).catch(() => null);
     if (!window.confirm(`Delete this draft transfer from ${t.from_label}? Shippo confirmed no label was purchased for it.`)) return;
     // the action refuses while the purchase lease is fresh (<10 min) — a
     // purchase may be in flight in another session and this rate id is its
