@@ -259,7 +259,9 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
               <SelectTrigger className="h-9 w-32"><SelectValue placeholder="Vendor" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">No vendor</SelectItem>
-                {vendors.filter(v => v.active).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
+                {/* NEW packages: live shipping vendors only — historical-
+                    only rows exist for the filter, never the picker */}
+                {vendors.filter(v => v.shippable).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={fCarrier} onValueChange={setFCarrier}>

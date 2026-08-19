@@ -39,7 +39,7 @@ export type TransferRow = {
   items: { product_id: number; sku_code: string; qty: string }[] | null;
 };
 export type CatalogProduct = { id: number; sku_code: string; name: string; mass_label: string | null; active: boolean };
-export type VendorRow = { id: number; code: string; active: boolean };
+export type VendorRow = { id: number; code: string; active: boolean; shippable: boolean };
 
 // stable per-product chip colors — LITERAL class strings (Tailwind purge
 // cannot see dynamic names); assignment by product id so a product keeps
