@@ -72,8 +72,11 @@ export function ReceivingPage() {
       // must never move real inventory. Checked against BOTH the fresh fetch
       // and the row's prior status, so a package stuck DELIVERED-but-
       // unreceived (a previously failed auto-receive) recovers on any
-      // refresh instead of being stranded.
-      if (!testMode && !p.received_at && (r.status === 'DELIVERED' || p.tracking_status === 'DELIVERED')) {
+      // refresh instead of being stranded. A manual un-receive sets
+      // auto_receive_suppressed so it STICKS — the action also refuses
+      // 'auto' mode DB-side while suppressed (this check just avoids the
+      // pointless call).
+      if (!testMode && !p.received_at && !p.auto_receive_suppressed && (r.status === 'DELIVERED' || p.tracking_status === 'DELIVERED')) {
         await doMarkReceived({ package_id: p.id, actor: userName, mode: 'auto' });
         reloadInventory();
       }

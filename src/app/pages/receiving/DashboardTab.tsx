@@ -375,6 +375,9 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
                     {p.received_at && p.tracking_status === 'RETURNED' && (
                       <p className="text-[11px] rounded border border-amber-300 bg-amber-50 text-amber-900 p-1.5">Received but tracking now says RETURNED — un-receive if the box left.</p>
                     )}
+                    {!p.received_at && p.auto_receive_suppressed && (
+                      <p className="text-[11px] text-muted-foreground">Auto-receive is OFF for this package (it was un-received) — use Mark received when it's really here.</p>
+                    )}
                     <div className="flex flex-wrap gap-1">
                       {(p.items || []).map(i => (
                         <span key={i.product_id} className={`rounded text-[10px] font-semibold px-1.5 py-0.5 ${productChipClass(Number(i.product_id))}`}>

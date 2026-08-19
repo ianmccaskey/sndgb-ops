@@ -14,7 +14,7 @@ function listInboundPackages() {
              v.code AS vendor_code, p.carrier, p.tracking_number, p.note,
              p.committed_at, p.tracking_status, p.tracking_substatus, p.tracking_detail,
              p.tracking_error, p.tracking_location, p.eta, p.status_date, p.last_checked_at,
-             p.received_at, p.received_by, p.created_by, p.created_at,
+             p.received_at, p.received_by, p.auto_receive_suppressed, p.created_by, p.created_at,
              COALESCE(items.items, '[]'::jsonb) AS items
       FROM inbound_packages p
       JOIN receive_addresses ra ON ra.id = p.receive_address_id

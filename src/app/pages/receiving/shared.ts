@@ -17,7 +17,8 @@ export type Pkg = {
   tracking_detail: string | null; tracking_error: string | null;
   tracking_location: { city?: string; state?: string } | null;
   eta: string | null; status_date: string | null; last_checked_at: string | null;
-  received_at: string | null; received_by: string | null; created_by: string; created_at: string;
+  received_at: string | null; received_by: string | null; auto_receive_suppressed: boolean;
+  created_by: string; created_at: string;
   items: PkgItem[] | null;
 };
 export type InvRow = {

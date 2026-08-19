@@ -4,15 +4,29 @@ import { action } from '@uibakery/data';
  * Create a transfer DRAFT — BEFORE the label is purchased, so a failed or
  * interrupted purchase never leaves a paid label with no record, and the
  * inventory view (finalized_at IS NOT NULL) never moves on a draft. The
- * chosen rate travels with the draft; UNIQUE(shippo_rate_id) is the DB
- * backstop against a double-clicked purchase creating two rows. Audited.
+ * draft and ALL its item lines insert ATOMICALLY (items = jsonb array;
+ * every line valid or nothing saves) — a purchased label must never
+ * outlive an empty or partial item set. The chosen rate travels with the
+ * draft; UNIQUE(shippo_rate_id) is the DB backstop against a
+ * double-clicked purchase creating two rows. purchase_started_at stamps
+ * the PURCHASE LEASE at birth: the purchase POST follows immediately, and
+ * deleteTransferDraft refuses while the lease is fresh. Audited.
  */
 function createTransfer() {
   return action('createTransfer', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH ins AS (
-        INSERT INTO transfers (from_address_id, from_label, from_address, destination_label, destination, parcel, carrier, servicelevel, rate_amount, rate_currency, shippo_rate_id, note, created_by)
+      WITH input_items AS (
+        SELECT (x->>'product_id')::bigint AS product_id, x->>'qty' AS qty_text
+        FROM jsonb_array_elements({{params.items}}::jsonb) x
+      ),
+      ok AS (
+        SELECT count(*) AS n,
+               bool_and(qty_text ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND qty_text::numeric > 0) AS all_valid
+        FROM input_items
+      ),
+      ins AS (
+        INSERT INTO transfers (from_address_id, from_label, from_address, destination_label, destination, parcel, carrier, servicelevel, rate_amount, rate_currency, shippo_rate_id, note, created_by, purchase_started_at)
         SELECT ra.id,
                -- ship-from SNAPSHOT at draft time: editing the address later
                -- must not rewrite what the purchased label actually said
@@ -29,17 +43,27 @@ function createTransfer() {
                NULLIF({{params.rate_currency}}::text, ''),
                NULLIF({{params.shippo_rate_id}}::text, ''),
                NULLIF(TRIM({{params.note}}::text), ''),
-               {{params.actor}}
+               {{params.actor}},
+               now()
         FROM receive_addresses ra
         WHERE ra.id = {{params.from_address_id}}::bigint
           AND TRIM({{params.destination_label}}) <> ''
           AND NULLIF({{params.shippo_rate_id}}::text, '') IS NOT NULL
+          AND (SELECT n > 0 AND all_valid FROM ok)
         RETURNING id, from_address_id, destination_label, carrier, servicelevel, rate_amount
+      ),
+      items_ins AS (
+        INSERT INTO transfer_items (transfer_id, product_id, qty)
+        SELECT ins.id, ii.product_id, ii.qty_text::numeric
+        FROM ins, input_items ii
+        RETURNING id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
       SELECT 'transfers', ins.id::text, 'transfer_draft_created', {{params.actor}},
              jsonb_build_object('from_address_id', ins.from_address_id, 'destination_label', ins.destination_label,
-                                'carrier', ins.carrier, 'servicelevel', ins.servicelevel, 'rate_amount', ins.rate_amount)
+                                'carrier', ins.carrier, 'servicelevel', ins.servicelevel, 'rate_amount', ins.rate_amount,
+                                'items', (SELECT jsonb_agg(jsonb_build_object('product_id', product_id, 'qty', qty_text)) FROM input_items),
+                                'item_count', (SELECT count(*) FROM items_ins))
       FROM ins
       RETURNING row_pk AS id
     `,

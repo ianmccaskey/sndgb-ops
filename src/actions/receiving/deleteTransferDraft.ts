@@ -3,8 +3,12 @@ import { action } from '@uibakery/data';
 /**
  * Delete an UNFINALIZED draft (failed/abandoned purchase). A finalized
  * transfer is a real label + inventory movement and never deletes here —
- * the refund flow marks it instead. Items snapshot into old_data (CASCADE
- * would erase them silently). Audited.
+ * the refund flow marks it instead. PURCHASE LEASE: refuses while
+ * purchase_started_at is fresher than 10 minutes — a label purchase may
+ * be in flight (this session or the other admin's), and deleting the
+ * draft would orphan the rate id, the only recovery handle for a paid
+ * label. Items snapshot into old_data (CASCADE would erase them
+ * silently). Audited.
  */
 function deleteTransferDraft() {
   return action('deleteTransferDraft', 'SQL', {
@@ -17,6 +21,7 @@ function deleteTransferDraft() {
         FROM transfers t
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
+          AND (t.purchase_started_at IS NULL OR t.purchase_started_at < now() - interval '10 minutes')
       ), del AS (
         DELETE FROM transfers t
         USING snapshot s

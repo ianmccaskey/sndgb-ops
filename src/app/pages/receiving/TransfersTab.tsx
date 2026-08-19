@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import createTransfer from '@/actions/receiving/createTransfer';
-import addTransferItem from '@/actions/receiving/addTransferItem';
+import markTransferPurchaseStarted from '@/actions/receiving/markTransferPurchaseStarted';
 import finalizeTransfer from '@/actions/receiving/finalizeTransfer';
 import deleteTransferDraft from '@/actions/receiving/deleteTransferDraft';
 import setTransferRefund from '@/actions/receiving/setTransferRefund';
@@ -35,7 +35,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   void reloadDestinations;
   const { userName } = useApp();
   const [doCreate] = useMutateAction(createTransfer);
-  const [doAddItem] = useMutateAction(addTransferItem);
+  const [doClaimPurchase] = useMutateAction(markTransferPurchaseStarted);
   const [doFinalize] = useMutateAction(finalizeTransfer);
   const [doDeleteDraft] = useMutateAction(deleteTransferDraft);
   const [doSetRefund] = useMutateAction(setTransferRefund);
@@ -83,6 +83,23 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     if (ratesResult && ratesResult.sig !== quoteSig) { setRatesResult(null); setPickedRate(''); setPurchaseMsg(''); }
   }, [quoteSig, ratesResult]);
 
+  // shared by fetchRates AND purchase — the item lines are re-validated at
+  // purchase time because the operator can edit them after rates arrive; a
+  // label must never be bought for a transfer with zero or invalid lines
+  const validateLines = (): { lines: ItemLine[]; error: string | null } => {
+    const lines = fLines.filter(l => l.product && l.qty.trim());
+    if (lines.length === 0) return { lines, error: 'Add at least one product line — transfers decrement the address inventory.' };
+    for (const l of lines) {
+      if (!/^\d+(?:\.\d{1,2})?$/.test(l.qty.trim()) || !(Number(l.qty) > 0)) return { lines, error: 'Every line needs a positive count.' };
+    }
+    // duplicate SKUs would collide on the items UNIQUE — refuse before any
+    // money is near this form
+    if (new Set(lines.map(l => l.product)).size !== lines.length) {
+      return { lines, error: 'The same product appears on two lines — combine them into one line.' };
+    }
+    return { lines, error: null };
+  };
+
   const fetchRates = async () => {
     setFMsg(''); setRatesResult(null); setPickedRate('');
     if (!shippoKey) { setFMsg('Add your Shippo API token in Settings first.'); return; }
@@ -93,16 +110,8 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     for (const k of ['length', 'width', 'height', 'weight'] as const) {
       if (!/^\d+(?:\.\d{1,2})?$/.test(dims[k].trim()) || !(Number(dims[k]) > 0)) { setFMsg('Dimensions and weight must be positive numbers (inches / lbs).'); return; }
     }
-    const lines = fLines.filter(l => l.product && l.qty.trim());
-    if (lines.length === 0) { setFMsg('Add at least one product line — transfers decrement the address inventory.'); return; }
-    for (const l of lines) {
-      if (!/^\d+(?:\.\d{1,2})?$/.test(l.qty.trim()) || !(Number(l.qty) > 0)) { setFMsg('Every line needs a positive count.'); return; }
-    }
-    // duplicate SKUs would silently collapse to the LAST quantity in the
-    // item upsert — refuse before any money is near this form
-    if (new Set(lines.map(l => l.product)).size !== lines.length) {
-      setFMsg('The same product appears on two lines — combine them into one line.'); return;
-    }
+    const { error: lineError } = validateLines();
+    if (lineError) { setFMsg(lineError); return; }
     setRatesLoading(true);
     try {
       const res = await getRates(shippoKey, toShippoAddress(from), to, {
@@ -133,8 +142,15 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         setRatesResult(null); setPickedRate('');
         return;
       }
-      // 1. DRAFT FIRST: a failed purchase leaves a visible, deletable draft;
-      //    a succeeded purchase always has a home to finalize into
+      // the lines are re-validated NOW, not just at rate time — the
+      // operator can edit them after rates arrive, and a label must never
+      // be purchased for a transfer with zero or invalid contents
+      const { lines, error: lineError } = validateLines();
+      if (lineError) { setPurchaseMsg(lineError + ' Nothing was purchased.'); return; }
+      // 1. DRAFT FIRST, ATOMIC WITH ITS ITEMS: a failed purchase leaves a
+      //    visible draft with its full contents; a succeeded purchase
+      //    always has a complete home to finalize into. The insert also
+      //    stamps the purchase lease (blocks concurrent draft deletion).
       let draftId: number | null = null;
       try {
         const res = await doCreate({
@@ -143,6 +159,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
           parcel: JSON.stringify({ length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(), distance_unit: 'in', weight: dims.weight.trim(), mass_unit: 'lb' }),
           carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
           rate_amount: rate.amount, rate_currency: rate.currency, shippo_rate_id: rate.object_id,
+          items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
           note: fNote.trim(), actor: userName,
         }) as unknown[] | null;
         draftId = Array.isArray(res) && res.length > 0 ? Number((res[0] as { id: string }).id) : null;
@@ -150,22 +167,10 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         const m = e instanceof Error ? e.message : '';
         setPurchaseMsg(m.includes('transfers_rate_unique')
           ? 'This exact rate was already purchased (double-click?) — check the transfer log before buying again.'
-          : m || 'Failed to save the transfer draft.');
+          : (m || 'Failed to save the transfer draft.') + ' Nothing was saved or purchased.');
         return;
       }
-      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased.'); return; }
-      // every item line must VERIFIABLY persist BEFORE money moves — a
-      // transfer whose stored contents differ from what was entered would
-      // decrement inventory wrongly the moment it finalizes
-      const lines = fLines.filter(l => l.product && l.qty.trim());
-      for (const l of lines) {
-        const itemRes = await doAddItem({ transfer_id: draftId, product_id: Number(l.product), qty: l.qty.trim(), actor: userName }) as unknown[] | null;
-        if (!(Array.isArray(itemRes) ? itemRes.length > 0 : !!itemRes)) {
-          setPurchaseMsg('A content line failed to save — NOTHING was purchased. The draft is below; delete it and try again.');
-          reloadTransfers();
-          return;
-        }
-      }
+      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Check every line has a positive count.'); return; }
       // 2. buy the label (single attempt inside)
       let result: PurchaseResult;
       try {
@@ -248,6 +253,15 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         return;
       }
       if (!window.confirm('No existing label found at Shippo for this rate. Buy it now? Note: rates expire after ~7 days.')) return;
+      // re-claim the purchase lease BEFORE money moves: zero rows means the
+      // draft was deleted or finalized in another session — abort; a claim
+      // also blocks concurrent deletion for the next 10 minutes
+      const claim = await doClaimPurchase({ transfer_id: t.id, actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(claim) ? claim.length > 0 : !!claim)) {
+        setDraftMsg(m => ({ ...m, [t.id]: 'This draft no longer exists (deleted or finalized in another session) — nothing was purchased. Reload the page.' }));
+        reloadTransfers();
+        return;
+      }
       const result = await purchaseLabel(shippoKey, t.shippo_rate_id);
       const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, actor: userName }) as unknown[] | null;
       if (Array.isArray(fin) ? fin.length > 0 : !!fin) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
@@ -290,7 +304,15 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       return;
     }
     if (!window.confirm(`Delete this draft transfer from ${t.from_label}? Shippo confirmed no label was purchased for it.`)) return;
-    await doDeleteDraft({ transfer_id: t.id, actor: userName });
+    // the action refuses while the purchase lease is fresh (<10 min) — a
+    // purchase may be in flight in another session and this rate id is its
+    // only recovery handle
+    const del = await doDeleteDraft({ transfer_id: t.id, actor: userName }) as unknown[] | null;
+    if (!(Array.isArray(del) ? del.length > 0 : !!del)) {
+      setDraftMsg(m => ({ ...m, [t.id]: 'Not deleted — a purchase attempt for this draft started within the last 10 minutes (possibly in another session), or it was just finalized. Wait for it to settle, then use "Check Shippo & retry" or delete again.' }));
+      reloadTransfers();
+      return;
+    }
     reloadTransfers();
   };
 

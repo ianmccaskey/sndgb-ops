@@ -13,10 +13,14 @@ function markPackageReceived() {
     query: `
       WITH up AS (
         UPDATE inbound_packages p
-        SET received_at = now(), received_by = {{params.actor}}
+        -- a manual receive clears the suppression; an AUTO receive is
+        -- DB-refused while it is set, so a manual un-receive sticks no
+        -- matter which client refreshes next
+        SET received_at = now(), received_by = {{params.actor}}, auto_receive_suppressed = false
         WHERE p.id = {{params.package_id}}::bigint
           AND p.received_at IS NULL
           AND p.committed_at IS NOT NULL
+          AND ({{params.mode}}::text <> 'auto' OR NOT p.auto_receive_suppressed)
         RETURNING p.id, p.carrier, p.tracking_number
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

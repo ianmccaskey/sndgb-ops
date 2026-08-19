@@ -13,14 +13,16 @@ function unmarkPackageReceived() {
     query: `
       WITH up AS (
         UPDATE inbound_packages p
-        SET received_at = NULL, received_by = NULL
+        -- suppression makes the un-receive STICK: without it the next
+        -- refresh would see DELIVERED and silently re-receive
+        SET received_at = NULL, received_by = NULL, auto_receive_suppressed = true
         WHERE p.id = {{params.package_id}}::bigint
           AND p.received_at IS NOT NULL
         RETURNING p.id, p.carrier, p.tracking_number
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
       SELECT 'inbound_packages', up.id::text, 'package_unreceived', {{params.actor}},
-             jsonb_build_object('carrier', up.carrier, 'tracking_number', up.tracking_number)
+             jsonb_build_object('carrier', up.carrier, 'tracking_number', up.tracking_number, 'auto_receive_suppressed', true)
       FROM up
       RETURNING row_pk AS id
     `,
