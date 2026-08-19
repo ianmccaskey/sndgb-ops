@@ -163,34 +163,50 @@ async function resolveTransaction(key: string, res: Response): Promise<PurchaseR
 
 /**
  * RELOAD-SAFE recovery: Shippo itself is the durable store. Given a
- * draft's rate id, list recent transactions and find one purchased
- * against that rate — no browser memory or transaction-id note needed.
- * Returns the purchase when a SUCCESS transaction exists, null when NONE
- * exists (safe to purchase or delete), and THROWS when one is still
- * processing (do not re-purchase, do not delete).
+ * draft's rate id, list transactions and find one purchased against that
+ * rate — no browser memory or transaction-id note needed. Returns the
+ * purchase when a SUCCESS transaction exists (may return early), null
+ * ONLY after paginating the account's ENTIRE transaction history without
+ * a match (safe to purchase or delete), and THROWS when a match is still
+ * processing OR when the listing could not be walked to exhaustion — a
+ * partial listing must never authorize a re-purchase or a delete.
  */
 export async function findTransactionByRate(key: string, rateId: string): Promise<PurchaseResult | null> {
-  let res: Response;
-  try {
-    // read-only listing — retry freely
-    res = await fetchWithBackoff(`${BASE}/transactions/?results=100`, {
-      headers: { Authorization: `ShippoToken ${key.trim()}` },
-    });
-  } catch {
-    throw new Error('Could not reach Shippo to check for an existing label — do not re-purchase or delete until this check succeeds.');
+  // 50 pages × 100 = 5,000 transactions — far beyond this operation's
+  // volume; hitting it means something is wrong, so refuse rather than
+  // declare "no label" from an incomplete walk.
+  const MAX_PAGES = 50;
+  let url = `${BASE}/transactions/?results=100`;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    let res: Response;
+    try {
+      // read-only listing — retry freely
+      res = await fetchWithBackoff(url, { headers: { Authorization: `ShippoToken ${key.trim()}` } });
+    } catch {
+      throw new Error('Could not reach Shippo to check for an existing label — do not re-purchase or delete until this check succeeds.');
+    }
+    if (!res.ok) throw new Error(`Shippo transaction lookup failed (HTTP ${res.status}) — do not re-purchase or delete until this check succeeds.`);
+    const body = await res.json().catch(() => null) as {
+      results?: { object_id?: string; status?: string; tracking_number?: string; label_url?: string; rate?: string | { object_id?: string } }[];
+      next?: string | null;
+    } | null;
+    if (!body) throw new Error('Shippo transaction lookup returned an unreadable page — do not re-purchase or delete until this check succeeds.');
+    const matches = (body.results || []).filter(t =>
+      (typeof t.rate === 'string' ? t.rate : t.rate?.object_id) === rateId);
+    const success = matches.find(t => t.status === 'SUCCESS' && t.label_url);
+    if (success) return { transactionId: success.object_id || '', trackingNumber: success.tracking_number || '', labelUrl: success.label_url! };
+    if (matches.some(t => t.status === 'QUEUED' || t.status === 'WAITING')) {
+      throw new Error('A purchase for this rate is still processing at Shippo — wait a minute and check again; do NOT re-purchase or delete.');
+    }
+    // an ERROR-status match proves the purchase attempt failed — keep
+    // walking in case a later retry succeeded on the same rate
+    if (!body.next) return null; // walked every page — provably no label
+    if (!body.next.startsWith(BASE)) {
+      throw new Error('Shippo returned an unexpected pagination link — do not re-purchase or delete until this check succeeds.');
+    }
+    url = body.next;
   }
-  if (!res.ok) throw new Error(`Shippo transaction lookup failed (HTTP ${res.status}) — do not re-purchase or delete until this check succeeds.`);
-  const body = await res.json().catch(() => null) as {
-    results?: { object_id?: string; status?: string; tracking_number?: string; label_url?: string; rate?: string | { object_id?: string } }[];
-  } | null;
-  const matches = (body?.results || []).filter(t =>
-    (typeof t.rate === 'string' ? t.rate : t.rate?.object_id) === rateId);
-  const success = matches.find(t => t.status === 'SUCCESS' && t.label_url);
-  if (success) return { transactionId: success.object_id || '', trackingNumber: success.tracking_number || '', labelUrl: success.label_url! };
-  if (matches.some(t => t.status === 'QUEUED' || t.status === 'WAITING')) {
-    throw new Error('A purchase for this rate is still processing at Shippo — wait a minute and check again; do NOT re-purchase or delete.');
-  }
-  return null;
+  throw new Error(`Shippo transaction history exceeds ${MAX_PAGES * 100} entries — the existing-label check could not complete. Do not re-purchase or delete; find the label in the Shippo dashboard instead.`);
 }
 
 /** Re-check a known transaction (recovery path for QUEUED timeouts). */

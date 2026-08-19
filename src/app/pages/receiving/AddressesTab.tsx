@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import saveReceiveAddress from '@/actions/receiving/saveReceiveAddress';
 import setAddressActive from '@/actions/receiving/setAddressActive';
+import setDestinationActive from '@/actions/receiving/setDestinationActive';
 import saveDestination from '@/actions/receiving/saveDestination';
 import { useApp } from '@/app/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -79,6 +80,7 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
   const { userName } = useApp();
   const [doSaveAddress] = useMutateAction(saveReceiveAddress);
   const [doSetActive] = useMutateAction(setAddressActive);
+  const [doSetDestActive] = useMutateAction(setDestinationActive);
   const [doSaveDest] = useMutateAction(saveDestination);
   const [addrMsg, setAddrMsg] = useState('');
   const [destMsg, setDestMsg] = useState('');
@@ -116,7 +118,8 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
       <div className="space-y-4">
         <AddressForm title="Add / update saved destination" msg={destMsg} onSave={save('dest')}
           hint="The address book for transfer destinations, so you don't retype them." />
-        <AddressList title="Saved destinations" items={destinations} />
+        <AddressList title="Saved destinations" items={destinations}
+          onToggle={async a => { await doSetDestActive({ id: a.id, active: !a.active, actor: userName }); reloadDestinations(); }} />
       </div>
     </div>
   );
