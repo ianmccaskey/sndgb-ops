@@ -154,8 +154,8 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
   };
 
   const receivePkg = async (p: Pkg) => {
-    const res = await doReceive({ package_id: p.id, actor: userName, mode: 'manual' }) as unknown[] | null;
-    if (!(Array.isArray(res) ? res.length > 0 : !!res)) setRowMsg(m => ({ ...m, [p.id]: 'Not received — is it committed and not already received?' }));
+    const res = await doReceive({ package_id: p.id, carrier: p.carrier, tracking_number: p.tracking_number, actor: userName, mode: 'manual' }) as unknown[] | null;
+    if (!(Array.isArray(res) ? res.length > 0 : !!res)) setRowMsg(m => ({ ...m, [p.id]: 'Not received — is it committed, not already received, and unchanged since this page loaded? Reload and retry.' }));
     else setRowMsg(m => ({ ...m, [p.id]: '' }));
     afterChange();
   };

@@ -28,7 +28,10 @@ function createInboundPackage() {
         SELECT {{params.receive_address_id}}::bigint,
                NULLIF({{params.vendor_id}}::text, '')::bigint,
                LOWER(TRIM({{params.carrier}})),
-               TRIM({{params.tracking_number}}),
+               -- canonical UPPER: UPS-style numbers are case-insensitive,
+               -- and the active-uniqueness guard must see 1Z... and 1z...
+               -- as the same parcel
+               UPPER(TRIM({{params.tracking_number}})),
                NULLIF(TRIM({{params.note}}::text), ''),
                {{params.actor}}
         WHERE TRIM({{params.carrier}}) <> '' AND TRIM({{params.tracking_number}}) <> ''

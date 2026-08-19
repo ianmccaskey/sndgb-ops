@@ -21,6 +21,10 @@ function markPackageReceived() {
           AND p.received_at IS NULL
           AND p.committed_at IS NOT NULL
           AND ({{params.mode}}::text <> 'auto' OR NOT p.auto_receive_suppressed)
+          -- CAS on the tracking identity: a stale tab whose row was
+          -- corrected must not receive inventory for the OLD shipment
+          AND p.carrier = LOWER(TRIM({{params.carrier}}))
+          AND p.tracking_number = UPPER(TRIM({{params.tracking_number}}))
         RETURNING p.id, p.carrier, p.tracking_number
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

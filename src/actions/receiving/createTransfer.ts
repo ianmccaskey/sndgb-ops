@@ -35,9 +35,13 @@ function createTransfer() {
       -- subtracts finalized transfers), so a second draft against the same
       -- stock sees the first one's quantities and needs its own override —
       -- competing drafts cannot each pass the check against the same boxes.
-      -- Reservations EXPIRE with the rate (~7 days at Shippo): a stale
-      -- draft that can no longer be purchased must not hold stock hostage
-      -- (e.g. while the Shippo key is rotated and it cannot be deleted).
+      -- Reservation expiry is STATE-AWARE: a draft whose purchase lease is
+      -- held (possibly-paid — ambiguous failure or unfinalized label)
+      -- reserves for 30 days so a delayed recovery cannot meet consumed
+      -- stock; a lease-CLEARED draft (Shippo definitively refused — no
+      -- charge, no label) reserves only while its rate could still be
+      -- retried (~7 days, Shippo's rate lifetime). Both horizons keep a
+      -- keyless stranded draft from holding stock hostage forever.
       over AS (
         SELECT COALESCE(bool_or(ii.qty_text::numeric > COALESCE(inv.on_hand_qty, 0) - COALESCE(res.reserved, 0)), false) AS any_over
         FROM input_items ii
@@ -50,7 +54,8 @@ function createTransfer() {
           JOIN transfer_items ti ON ti.transfer_id = t.id AND ti.product_id = ii.product_id
           WHERE t.from_address_id = {{params.from_address_id}}::bigint
             AND t.finalized_at IS NULL
-            AND t.created_at > now() - interval '7 days'
+            AND t.created_at > now() - CASE WHEN t.purchase_started_at IS NOT NULL
+                                            THEN interval '30 days' ELSE interval '7 days' END
         ) res ON true
       ),
       ins AS (

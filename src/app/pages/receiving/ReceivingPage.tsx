@@ -62,12 +62,18 @@ export function ReceivingPage() {
     setRefreshingIds(s => new Set(s).add(p.id));
     try {
       const r = await trackPackage(shippoKey, p.carrier, p.tracking_number);
-      await doUpdateTracking({
-        package_id: p.id,
+      // carrier + tracking travel with the write: if another session
+      // corrected this package meanwhile, the CAS in the action refuses
+      // and this stale snapshot is discarded instead of poisoning the row
+      const wrote = await doUpdateTracking({
+        package_id: p.id, carrier: p.carrier, tracking_number: p.tracking_number,
         status: r.status || '', substatus: r.substatus || '', detail: r.detail || '',
         error: r.error || '', location: r.location ? JSON.stringify(r.location) : '',
         eta: r.eta || '', status_date: r.statusDate || '',
-      });
+      }) as unknown[] | null;
+      if (!(Array.isArray(wrote) ? wrote.length > 0 : !!wrote)) {
+        return 'This package\'s carrier/tracking was corrected in another session — refresh skipped; reload the page.';
+      }
       // auto-receive ONLY on a live key: test tokens simulate DELIVERED and
       // must never move real inventory. Checked against BOTH the fresh fetch
       // and the row's prior status, so a package stuck DELIVERED-but-
@@ -77,7 +83,7 @@ export function ReceivingPage() {
       // 'auto' mode DB-side while suppressed (this check just avoids the
       // pointless call).
       if (!testMode && !p.received_at && !p.auto_receive_suppressed && (r.status === 'DELIVERED' || p.tracking_status === 'DELIVERED')) {
-        await doMarkReceived({ package_id: p.id, actor: userName, mode: 'auto' });
+        await doMarkReceived({ package_id: p.id, carrier: p.carrier, tracking_number: p.tracking_number, actor: userName, mode: 'auto' });
         reloadInventory();
       }
       return r.error;

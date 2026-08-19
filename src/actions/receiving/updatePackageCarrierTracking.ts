@@ -18,7 +18,7 @@ function updatePackageCarrierTracking() {
       WITH up AS (
         UPDATE inbound_packages p
         SET carrier = LOWER(TRIM({{params.carrier}})),
-            tracking_number = TRIM({{params.tracking_number}}),
+            tracking_number = UPPER(TRIM({{params.tracking_number}})),
             tracking_status = NULL, tracking_substatus = NULL, tracking_detail = NULL,
             tracking_error = NULL, tracking_location = NULL, eta = NULL,
             status_date = NULL, last_checked_at = NULL,
