@@ -30,13 +30,24 @@ function createTransfer() {
       ),
       -- over-on-hand is a SUPPORTED exception, but only as an EXPLICIT
       -- override: the server re-checks live inventory here, so a stale
-      -- client or mis-keyed quantity refuses unless the operator confirmed
+      -- client or mis-keyed quantity refuses unless the operator confirmed.
+      -- Unfinalized drafts count as RESERVATIONS (v_address_inventory only
+      -- subtracts finalized transfers), so a second draft against the same
+      -- stock sees the first one's quantities and needs its own override —
+      -- competing drafts cannot each pass the check against the same boxes.
       over AS (
-        SELECT COALESCE(bool_or(ii.qty_text::numeric > COALESCE(inv.on_hand_qty, 0)), false) AS any_over
+        SELECT COALESCE(bool_or(ii.qty_text::numeric > COALESCE(inv.on_hand_qty, 0) - COALESCE(res.reserved, 0)), false) AS any_over
         FROM input_items ii
         LEFT JOIN v_address_inventory inv
           ON inv.receive_address_id = {{params.from_address_id}}::bigint
          AND inv.product_id = ii.product_id
+        LEFT JOIN LATERAL (
+          SELECT sum(ti.qty) AS reserved
+          FROM transfers t
+          JOIN transfer_items ti ON ti.transfer_id = t.id AND ti.product_id = ii.product_id
+          WHERE t.from_address_id = {{params.from_address_id}}::bigint
+            AND t.finalized_at IS NULL
+        ) res ON true
       ),
       ins AS (
         INSERT INTO transfers (from_address_id, from_label, from_address, destination_label, destination, parcel, carrier, servicelevel, rate_amount, rate_currency, shippo_rate_id, note, created_by, purchase_started_at)
