@@ -505,13 +505,18 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         await doSetRefund({ transfer_id: t.id, refund_status: status, prior_requested_at: '', actor: userName });
         setDraftMsg(m => ({ ...m, [t.id]: '' }));
       } else {
-        // the action refuses this clear while a REQUESTING marker is
-        // fresher than 10 minutes — another session's POST may be in
-        // flight and not yet listed at Shippo
+        // a null listing is NOT auto-cleared: the operator confirms
+        // explicitly (a lagging listing or a lost-response POST could
+        // otherwise reopen the button and double-request), and the action
+        // still refuses any clear while the marker is under 10 minutes old
+        if (!window.confirm('Shippo\'s FULL refund listing shows no refund for this label. Clear the marker so a refund can be requested again? Only confirm if you\'re confident the original request never reached Shippo — a duplicate request cannot be undone.')) {
+          setDraftMsg(m => ({ ...m, [t.id]: 'Marker kept — Re-check again later; Shippo listings can lag a lost-response request.' }));
+          return;
+        }
         const cleared = await doSetRefund({ transfer_id: t.id, refund_status: '', prior_requested_at: '', actor: userName }) as unknown[] | null;
         setDraftMsg(m => ({ ...m, [t.id]: (Array.isArray(cleared) && cleared.length > 0)
-          ? 'Shippo has NO refund for this label — the earlier request never landed. You can request again.'
-          : 'Shippo lists no refund YET, but the request marker is under 10 minutes old — a request may still be in flight (possibly the other admin\'s). Re-check again in a few minutes.' }));
+          ? 'Marker cleared — Shippo holds no refund for this label; you can request again.'
+          : 'Not cleared — the request marker is under 10 minutes old; a request may still be in flight (possibly the other admin\'s). Re-check again in a few minutes.' }));
       }
       reloadTransfers();
     } catch (e: unknown) {
