@@ -44,7 +44,10 @@ export function ReceivingPage() {
   // COA vendors, no niche/unused vendor rows) — see listShippingVendors.
   // Gated like every other campaign-scoped load: groupBuyId is null until
   // AppContext resolves the selection.
-  const [rawVendors] = useLoadAction(listShippingVendors, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
+  const [rawVendors, vendorsLoading, vendorsError] = useLoadAction(listShippingVendors, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
+  // the list is AUTHORITATIVE (safe to invalidate selections against, even
+  // when empty) only once it has resolved cleanly for the current campaign
+  const vendorsReady = groupBuyId != null && !vendorsLoading && !vendorsError;
 
   const addresses = rows<RxAddress>(rawAddresses);
   const packages = rows<Pkg>(rawPackages);
@@ -148,7 +151,7 @@ export function ReceivingPage() {
 
         <TabsContent value="dashboard" className="mt-4">
           <DashboardTab
-            addresses={addresses} packages={packages} products={products} vendors={vendors}
+            addresses={addresses} packages={packages} products={products} vendors={vendors} vendorsReady={vendorsReady}
             refreshOne={refreshOne} refreshAll={refreshAll} refreshingIds={refreshingIds}
             refreshAllProgress={refreshAllProgress} afterChange={afterPackageChange}
             hasKey={!!shippoKey} testMode={testMode}

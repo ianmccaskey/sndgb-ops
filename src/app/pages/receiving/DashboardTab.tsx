@@ -31,8 +31,8 @@ const CARRIERS = [
 
 type ItemLine = { product: string; qty: string };
 
-export function DashboardTab({ addresses, packages, products, vendors, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode }: {
-  addresses: RxAddress[]; packages: Pkg[]; products: CatalogProduct[]; vendors: VendorRow[];
+export function DashboardTab({ addresses, packages, products, vendors, vendorsReady, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode }: {
+  addresses: RxAddress[]; packages: Pkg[]; products: CatalogProduct[]; vendors: VendorRow[]; vendorsReady: boolean;
   refreshOne: (p: Pkg) => Promise<string | null>;
   refreshAll: () => Promise<void>;
   refreshingIds: Set<number>;
@@ -98,20 +98,20 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
 
   // a vendor picked before a campaign switch may no longer be shippable in
   // the newly selected buy — clear the stale selection instead of letting
-  // a hidden value bypass the picker's restriction. Only a RESOLVED,
-  // non-empty list is authoritative: while a reload is in flight (or has
-  // failed) the vendors prop collapses to [], and clearing on that would
-  // wipe valid state on every refetch — the submit-time guard still covers
-  // the never-resolves case.
+  // a hidden value bypass the picker's restriction. vendorsReady says the
+  // list RESOLVED CLEANLY for the current campaign (an in-flight or failed
+  // reload collapses to [] and must not wipe valid state), and a resolved
+  // list is authoritative even when empty — the submit-time and SQL guards
+  // still cover the never-resolves case.
   React.useEffect(() => {
-    if (vendors.length > 0 && fVendor && !vendors.some(v => v.shippable && String(v.id) === fVendor)) setFVendor('');
-  }, [vendors, fVendor]);
+    if (vendorsReady && fVendor && !vendors.some(v => v.shippable && String(v.id) === fVendor)) setFVendor('');
+  }, [vendorsReady, vendors, fVendor]);
   // the dashboard vendor FILTER gets the same treatment: a code that left
   // the option set after a campaign switch must not keep silently
   // filtering the page down to nothing
   React.useEffect(() => {
-    if (vendors.length > 0 && vendorFilter !== 'all' && !vendors.some(v => v.code === vendorFilter)) setVendorFilter('all');
-  }, [vendors, vendorFilter]);
+    if (vendorsReady && vendorFilter !== 'all' && !vendors.some(v => v.code === vendorFilter)) setVendorFilter('all');
+  }, [vendorsReady, vendors, vendorFilter]);
 
   const createPackage = async () => {
     setFMsg('');
