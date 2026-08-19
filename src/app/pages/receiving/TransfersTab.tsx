@@ -81,7 +81,13 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   // signature of every input the RATE depends on — a quote fetched for one
   // shipment must never buy a label while the form describes another. Any
   // edit to ship-from, destination, or parcel invalidates fetched rates.
-  const quoteSig = JSON.stringify({ fFrom, fDest, custom, dims });
+  // The ship-from and saved-destination CONTENTS are in the signature too:
+  // editing the address record (not just picking another) re-quotes.
+  const quoteSig = JSON.stringify({
+    fFrom, from: addresses.find(a => String(a.id) === fFrom) || null,
+    fDest, dest: destinations.find(d => String(d.id) === fDest) || null,
+    custom, dims,
+  });
   React.useEffect(() => {
     if (ratesResult && ratesResult.sig !== quoteSig) { setRatesResult(null); setPickedRate(''); setPurchaseMsg(''); }
   }, [quoteSig, ratesResult]);
@@ -168,6 +174,16 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       //    visible draft with its full contents; a succeeded purchase
       //    always has a complete home to finalize into. The insert also
       //    stamps the purchase lease (blocks concurrent draft deletion).
+      // the ship-from row the QUOTE was priced for — the server refuses the
+      // draft if the address was edited or archived since (another session
+      // can change it without this tab's props ever updating)
+      const fromRow = addresses.find(a => String(a.id) === fFrom);
+      if (!fromRow) { setPurchaseMsg('Ship-from address not found — reload the page.'); return; }
+      const expectedFrom = {
+        name: fromRow.name, street1: fromRow.street1, street2: fromRow.street2,
+        city: fromRow.city, state: fromRow.state, zip: fromRow.zip,
+        country: fromRow.country, phone: fromRow.phone, email: fromRow.email,
+      };
       let draftId: number | null = null;
       let claimedAt = '';
       const draftParams = (allow: boolean) => ({
@@ -178,6 +194,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         rate_amount: rate.amount, rate_currency: rate.currency, shippo_rate_id: rate.object_id,
         items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
         allow_over_onhand: allow,
+        expected_from: JSON.stringify(expectedFrom),
         note: fNote.trim(), actor: userName,
       });
       try {
@@ -203,7 +220,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
           : (m || 'Failed to save the transfer draft.') + ' Nothing was saved or purchased.');
         return;
       }
-      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Check every line has a positive count; if inventory shifted since you loaded, a line may now exceed on-hand — retry to re-confirm.'); return; }
+      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a line exceeds on-hand (retry to re-confirm), or the ship-from address was edited or archived since rates were fetched — reload and re-quote.'); return; }
       // 2. HEARTBEAT immediately before money moves: if this tab slept
       //    long enough for the birth lease to age out and another session
       //    deleted or re-claimed the draft, the own-token refresh returns

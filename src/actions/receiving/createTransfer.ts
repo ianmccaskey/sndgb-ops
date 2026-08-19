@@ -84,6 +84,16 @@ function createTransfer() {
                now()
         FROM receive_addresses ra
         WHERE ra.id = {{params.from_address_id}}::bigint
+          -- archived addresses must not originate NEW labels — the archive
+          -- toggle is authoritative on the money path
+          AND ra.active
+          -- the quote was priced for a specific ship-from: refuse if the
+          -- address row was edited since (the client sends the contents it
+          -- quoted with; jsonb equality is key-order independent)
+          AND jsonb_build_object('name', ra.name, 'street1', ra.street1, 'street2', ra.street2,
+                                 'city', ra.city, 'state', ra.state, 'zip', ra.zip,
+                                 'country', ra.country, 'phone', ra.phone, 'email', ra.email)
+              = {{params.expected_from}}::jsonb
           AND TRIM({{params.destination_label}}) <> ''
           AND NULLIF({{params.shippo_rate_id}}::text, '') IS NOT NULL
           AND (SELECT n > 0 AND all_valid FROM ok)
