@@ -54,8 +54,12 @@ function createTransfer() {
           JOIN transfer_items ti ON ti.transfer_id = t.id AND ti.product_id = ii.product_id
           WHERE t.from_address_id = {{params.from_address_id}}::bigint
             AND t.finalized_at IS NULL
-            AND t.created_at > now() - CASE WHEN t.purchase_started_at IS NOT NULL
-                                            THEN interval '30 days' ELSE interval '7 days' END
+            -- a HELD lease measures its 30 days from the LEASE timestamp
+            -- (a retry re-claim refreshes protection for the possibly-paid
+            -- label); a CLEARED lease (definitive refusal) falls back to
+            -- the draft's age and the rate's ~7-day retry window
+            AND ((t.purchase_started_at IS NOT NULL AND t.purchase_started_at > now() - interval '30 days')
+                 OR (t.purchase_started_at IS NULL AND t.created_at > now() - interval '7 days'))
         ) res ON true
       ),
       ins AS (

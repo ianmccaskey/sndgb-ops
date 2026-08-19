@@ -15,13 +15,19 @@ function updatePackageTracking() {
     datasourceName: 'SND GB DB',
     query: `
       UPDATE inbound_packages
-      SET tracking_status = NULLIF({{params.status}}::text, ''),
-          tracking_substatus = NULLIF({{params.substatus}}::text, ''),
-          tracking_detail = NULLIF({{params.detail}}::text, ''),
+      -- a FAILED lookup (error non-empty) records only the error + check
+      -- time and PRESERVES the last good snapshot: a transient Shippo/
+      -- network problem must not erase out-for-delivery or attention
+      -- signals. A clean fetch (error empty) writes the full snapshot —
+      -- including legitimate nulls for a label with no scans yet — and
+      -- clears any prior error.
+      SET tracking_status = CASE WHEN {{params.error}}::text <> '' THEN tracking_status ELSE NULLIF({{params.status}}::text, '') END,
+          tracking_substatus = CASE WHEN {{params.error}}::text <> '' THEN tracking_substatus ELSE NULLIF({{params.substatus}}::text, '') END,
+          tracking_detail = CASE WHEN {{params.error}}::text <> '' THEN tracking_detail ELSE NULLIF({{params.detail}}::text, '') END,
           tracking_error = NULLIF({{params.error}}::text, ''),
-          tracking_location = NULLIF({{params.location}}::text, '')::jsonb,
-          eta = NULLIF({{params.eta}}::text, '')::timestamptz,
-          status_date = NULLIF({{params.status_date}}::text, '')::timestamptz,
+          tracking_location = CASE WHEN {{params.error}}::text <> '' THEN tracking_location ELSE NULLIF({{params.location}}::text, '')::jsonb END,
+          eta = CASE WHEN {{params.error}}::text <> '' THEN eta ELSE NULLIF({{params.eta}}::text, '')::timestamptz END,
+          status_date = CASE WHEN {{params.error}}::text <> '' THEN status_date ELSE NULLIF({{params.status_date}}::text, '')::timestamptz END,
           last_checked_at = now()
       WHERE id = {{params.package_id}}::bigint
         AND carrier = LOWER(TRIM({{params.carrier}}))
