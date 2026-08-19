@@ -269,7 +269,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       // recovered here instead of being bought twice
       let existing: Awaited<ReturnType<typeof findTransactionByRate>>;
       try {
-        existing = await findTransactionByRate(shippoKey, t.shippo_rate_id);
+        existing = await findTransactionByRate(shippoKey, t.shippo_rate_id, t.created_at);
       } catch (e: unknown) {
         setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Could not verify with Shippo — not purchasing.' }));
         return;
@@ -327,7 +327,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       return;
     }
     try {
-      const existing = await findTransactionByRate(shippoKey, t.shippo_rate_id);
+      const existing = await findTransactionByRate(shippoKey, t.shippo_rate_id, t.created_at);
       if (existing) {
         const fin = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, rate_id: existing.rateId || t.shippo_rate_id, actor: userName }) as unknown[] | null;
         setDraftMsg(m => ({ ...m, [t.id]: (Array.isArray(fin) && fin.length > 0)
@@ -401,7 +401,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     }
     refundInFlight.current = true;
     try {
-      const status = await findRefundByTransaction(shippoKey, t.shippo_transaction_id);
+      const status = await findRefundByTransaction(shippoKey, t.shippo_transaction_id, t.created_at);
       if (status) {
         await doSetRefund({ transfer_id: t.id, refund_status: status, actor: userName });
         setDraftMsg(m => ({ ...m, [t.id]: '' }));

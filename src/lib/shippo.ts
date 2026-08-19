@@ -186,16 +186,22 @@ async function resolveTransaction(key: string, res: Response): Promise<PurchaseR
  * draft's rate id, list transactions and find one purchased against that
  * rate — no browser memory or transaction-id note needed. Returns the
  * purchase when a SUCCESS transaction exists (may return early), null
- * ONLY after paginating the account's ENTIRE transaction history without
- * a match (safe to purchase or delete), and THROWS when a match is still
- * processing OR when the listing could not be walked to exhaustion — a
- * partial listing must never authorize a re-purchase or a delete.
+ * ONLY when the walk PROVES no label exists (safe to purchase or
+ * delete), and THROWS when a match is still processing OR when the
+ * listing could not be walked to proof — a partial listing must never
+ * authorize a re-purchase or a delete.
+ *
+ * The walk stays bounded by the DRAFT's age, not the account's size:
+ * a transaction against this rate cannot predate the draft that stored
+ * it, and Shippo lists newest-first, so once a whole page is older than
+ * createdAfter (minus a 24h clock-skew margin) the remaining history is
+ * provably irrelevant. Old accounts therefore terminate in a page or
+ * two; the page cap is a backstop that in practice only fires when no
+ * createdAfter is available.
  */
-export async function findTransactionByRate(key: string, rateId: string): Promise<PurchaseResult | null> {
-  // 50 pages × 100 = 5,000 transactions — far beyond this operation's
-  // volume; hitting it means something is wrong, so refuse rather than
-  // declare "no label" from an incomplete walk.
+export async function findTransactionByRate(key: string, rateId: string, createdAfter?: string): Promise<PurchaseResult | null> {
   const MAX_PAGES = 50;
+  const cutoffMs = createdAfter ? Date.parse(createdAfter) - 24 * 3600 * 1000 : NaN;
   let url = `${BASE}/transactions/?results=100`;
   for (let page = 0; page < MAX_PAGES; page++) {
     let res: Response;
@@ -207,7 +213,7 @@ export async function findTransactionByRate(key: string, rateId: string): Promis
     }
     if (!res.ok) throw new Error(`Shippo transaction lookup failed (HTTP ${res.status}) — do not re-purchase or delete until this check succeeds.`);
     const body = await res.json().catch(() => null) as {
-      results?: { object_id?: string; status?: string; tracking_number?: string; label_url?: string; rate?: string | { object_id?: string } }[];
+      results?: { object_id?: string; object_created?: string; status?: string; tracking_number?: string; label_url?: string; rate?: string | { object_id?: string } }[];
       next?: string | null;
     } | null;
     if (!body) throw new Error('Shippo transaction lookup returned an unreadable page — do not re-purchase or delete until this check succeeds.');
@@ -221,6 +227,11 @@ export async function findTransactionByRate(key: string, rateId: string): Promis
     // an ERROR-status match proves the purchase attempt failed — keep
     // walking in case a later retry succeeded on the same rate
     if (!body.next) return null; // walked every page — provably no label
+    const rows = body.results || [];
+    if (!Number.isNaN(cutoffMs) && rows.length > 0 &&
+        rows.every(t => t.object_created && Date.parse(t.object_created) < cutoffMs)) {
+      return null; // newest-first: everything beyond this page predates the draft
+    }
     if (!body.next.startsWith(BASE)) {
       throw new Error('Shippo returned an unexpected pagination link — do not re-purchase or delete until this check succeeds.');
     }
@@ -238,15 +249,18 @@ export async function getTransaction(key: string, transactionId: string): Promis
 }
 
 /**
- * Refund reconciliation, same exhaustive discipline as
- * findTransactionByRate: list the account's refunds page by page and
- * find one for this transaction. Returns its status when found, null
- * ONLY after the FULL listing proves no refund exists (safe to
- * re-request), and THROWS when the walk could not complete — a partial
- * listing must never authorize a repeat refund request.
+ * Refund reconciliation, same discipline as findTransactionByRate: list
+ * the account's refunds page by page and find one for this transaction.
+ * Returns its status when found, null ONLY when the walk proves no
+ * refund exists (safe to re-request), and THROWS when the walk could
+ * not reach proof — a partial listing must never authorize a repeat
+ * refund request. createdAfter (the transfer's creation time) bounds the
+ * walk by the TRANSFER's age: a refund for this label cannot predate
+ * it, so a page entirely older than that (minus 24h skew) ends the walk.
  */
-export async function findRefundByTransaction(key: string, transactionId: string): Promise<string | null> {
+export async function findRefundByTransaction(key: string, transactionId: string, createdAfter?: string): Promise<string | null> {
   const MAX_PAGES = 50;
+  const cutoffMs = createdAfter ? Date.parse(createdAfter) - 24 * 3600 * 1000 : NaN;
   let url = `${BASE}/refunds/?results=100`;
   for (let page = 0; page < MAX_PAGES; page++) {
     let res: Response;
@@ -258,7 +272,7 @@ export async function findRefundByTransaction(key: string, transactionId: string
     }
     if (!res.ok) throw new Error(`Shippo refund lookup failed (HTTP ${res.status}) — do not re-request until this check succeeds.`);
     const body = await res.json().catch(() => null) as {
-      results?: { object_id?: string; status?: string; transaction?: string | { object_id?: string } }[];
+      results?: { object_id?: string; object_created?: string; status?: string; transaction?: string | { object_id?: string } }[];
       next?: string | null;
     } | null;
     if (!body) throw new Error('Shippo refund lookup returned an unreadable page — do not re-request until this check succeeds.');
@@ -266,6 +280,11 @@ export async function findRefundByTransaction(key: string, transactionId: string
       (typeof r.transaction === 'string' ? r.transaction : r.transaction?.object_id) === transactionId);
     if (match) return match.status || 'PENDING';
     if (!body.next) return null; // walked every page — provably no refund
+    const rows = body.results || [];
+    if (!Number.isNaN(cutoffMs) && rows.length > 0 &&
+        rows.every(r => r.object_created && Date.parse(r.object_created) < cutoffMs)) {
+      return null; // newest-first: everything beyond this page predates the transfer
+    }
     if (!body.next.startsWith(BASE)) {
       throw new Error('Shippo returned an unexpected pagination link — do not re-request until this check succeeds.');
     }
