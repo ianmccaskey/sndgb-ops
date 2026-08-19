@@ -18,7 +18,11 @@ function markTransferPurchaseStarted() {
     query: `
       WITH up AS (
         UPDATE transfers t
-        SET purchase_started_at = now()
+        -- purchase_attempted_at is the durable "a Shippo POST was actually
+        -- dispatched after this" marker — it alone drives the long (30-day)
+        -- inventory reservation; a draft that was merely created (tab died
+        -- pre-POST) never gets it and stops reserving on the short window
+        SET purchase_started_at = now(), purchase_attempted_at = now()
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
           -- exclusive CAS with an OWN-TOKEN refresh: the current holder

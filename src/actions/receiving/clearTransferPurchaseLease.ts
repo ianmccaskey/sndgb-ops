@@ -18,7 +18,10 @@ function clearTransferPurchaseLease() {
     query: `
       WITH up AS (
         UPDATE transfers t
-        SET purchase_started_at = NULL
+        -- a definitive refusal proves no charge: both the lease AND the
+        -- attempted marker clear, dropping the draft to the short
+        -- reservation window
+        SET purchase_started_at = NULL, purchase_attempted_at = NULL
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
           AND t.purchase_started_at = {{params.claimed_at}}::timestamptz
