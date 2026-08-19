@@ -90,6 +90,11 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     for (const l of lines) {
       if (!/^\d+(?:\.\d{1,2})?$/.test(l.qty.trim()) || !(Number(l.qty) > 0)) { setFMsg('Every line needs a positive count.'); return; }
     }
+    // duplicate SKUs would silently collapse to the LAST quantity in the
+    // item upsert — refuse before any money is near this form
+    if (new Set(lines.map(l => l.product)).size !== lines.length) {
+      setFMsg('The same product appears on two lines — combine them into one line.'); return;
+    }
     setRatesLoading(true);
     try {
       const res = await getRates(shippoKey, toShippoAddress(from), to, {
@@ -133,9 +138,17 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         return;
       }
       if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased.'); return; }
+      // every item line must VERIFIABLY persist BEFORE money moves — a
+      // transfer whose stored contents differ from what was entered would
+      // decrement inventory wrongly the moment it finalizes
       const lines = fLines.filter(l => l.product && l.qty.trim());
       for (const l of lines) {
-        await doAddItem({ transfer_id: draftId, product_id: Number(l.product), qty: l.qty.trim(), actor: userName });
+        const itemRes = await doAddItem({ transfer_id: draftId, product_id: Number(l.product), qty: l.qty.trim(), actor: userName }) as unknown[] | null;
+        if (!(Array.isArray(itemRes) ? itemRes.length > 0 : !!itemRes)) {
+          setPurchaseMsg('A content line failed to save — NOTHING was purchased. The draft is below; delete it and try again.');
+          reloadTransfers();
+          return;
+        }
       }
       // 2. buy the label (single attempt inside)
       let result: PurchaseResult;

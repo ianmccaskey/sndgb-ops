@@ -69,8 +69,11 @@ export function ReceivingPage() {
         eta: r.eta || '', status_date: r.statusDate || '',
       });
       // auto-receive ONLY on a live key: test tokens simulate DELIVERED and
-      // must never move real inventory
-      if (!testMode && r.status === 'DELIVERED' && !p.received_at) {
+      // must never move real inventory. Checked against BOTH the fresh fetch
+      // and the row's prior status, so a package stuck DELIVERED-but-
+      // unreceived (a previously failed auto-receive) recovers on any
+      // refresh instead of being stranded.
+      if (!testMode && !p.received_at && (r.status === 'DELIVERED' || p.tracking_status === 'DELIVERED')) {
         await doMarkReceived({ package_id: p.id, actor: userName, mode: 'auto' });
         reloadInventory();
       }
@@ -83,9 +86,10 @@ export function ReceivingPage() {
   };
 
   const refreshAll = async () => {
-    // skip terminal packages — received or already-DELIVERED rows can't
-    // produce new information and just burn rate limit
-    const targets = packages.filter(p => p.committed_at && !p.received_at && p.tracking_status !== 'DELIVERED');
+    // skip only truly terminal rows (received). DELIVERED-but-unreceived
+    // stays IN the set: it means an earlier auto-receive failed (or test
+    // mode), and skipping it would strand inventory understated forever.
+    const targets = packages.filter(p => p.committed_at && !p.received_at);
     if (targets.length === 0) { setRefreshAllProgress('Nothing to refresh.'); return; }
     let done = 0;
     for (const p of targets) {

@@ -107,6 +107,9 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
       if (!l.product) { setFMsg('Every line needs a product.'); return; }
       if (!/^\d+(?:\.\d{1,2})?$/.test(l.qty.trim()) || !(Number(l.qty) > 0)) { setFMsg('Every line needs a positive count (max 2 decimals).'); return; }
     }
+    if (new Set(lines.map(l => l.product)).size !== lines.length) {
+      setFMsg('The same product appears on two lines — combine them into one line.'); return;
+    }
     setFSaving(true);
     try {
       let res: unknown[] | null;
