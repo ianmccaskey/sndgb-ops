@@ -6,7 +6,11 @@ import { action } from '@uibakery/data';
  * clearing purchase_attempted_at drops the draft from the 30-day
  * "money may have moved" window to the 7-day rate-lifetime window, so a
  * pre-dispatch client failure cannot hold stock for a month once anyone
- * has run "Check Shippo & retry". The delete-guard lease
+ * has run "Check Shippo & retry". COMPARE-AND-SET: the caller presents
+ * the exact purchase_attempted_at it observed when the proof ran — if
+ * another session claimed a fresh purchase attempt meanwhile (newer
+ * timestamp), this stale clear refuses instead of downgrading the
+ * reservation under an in-flight label. The delete-guard lease
  * (purchase_started_at) is left untouched. Audited.
  */
 function clearTransferAttemptVerified() {
@@ -18,7 +22,7 @@ function clearTransferAttemptVerified() {
         SET purchase_attempted_at = NULL
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
-          AND t.purchase_attempted_at IS NOT NULL
+          AND t.purchase_attempted_at = {{params.observed_attempted_at}}::timestamptz
         RETURNING t.id, t.shippo_rate_id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

@@ -354,8 +354,11 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       }
       // Shippo just PROVED no label exists — downgrade any stale 30-day
       // "attempted" reservation to the short window (a pre-dispatch client
-      // failure must not hold stock for a month once verified)
-      await doClearAttempt({ transfer_id: t.id, actor: userName }).catch(() => null);
+      // failure must not hold stock for a month once verified). CAS on the
+      // OBSERVED attempt: a newer session's fresh claim refuses this clear.
+      if (t.purchase_attempted_at) {
+        await doClearAttempt({ transfer_id: t.id, observed_attempted_at: t.purchase_attempted_at, actor: userName }).catch(() => null);
+      }
       if (!window.confirm('No existing label found at Shippo for this rate. Buy it now? Note: rates expire after ~7 days.')) return;
       // claim the EXCLUSIVE purchase lease BEFORE money moves: zero rows
       // means the draft is gone (deleted/finalized elsewhere) OR another
@@ -418,8 +421,11 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       return;
     }
     // verified no-label: downgrade any stale attempted-reservation even if
-    // the operator cancels the delete confirm below
-    await doClearAttempt({ transfer_id: t.id, actor: userName }).catch(() => null);
+    // the operator cancels the delete confirm below (CAS on the observed
+    // attempt — a newer session's fresh claim refuses this clear)
+    if (t.purchase_attempted_at) {
+      await doClearAttempt({ transfer_id: t.id, observed_attempted_at: t.purchase_attempted_at, actor: userName }).catch(() => null);
+    }
     if (!window.confirm(`Delete this draft transfer from ${t.from_label}? Shippo confirmed no label was purchased for it.`)) return;
     // the action refuses while the purchase lease is fresh (<10 min) — a
     // purchase may be in flight in another session and this rate id is its

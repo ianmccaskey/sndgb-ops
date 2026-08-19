@@ -35,6 +35,7 @@ export type TransferRow = {
   shippo_rate_id: string | null; shippo_transaction_id: string | null;
   tracking_number: string | null; label_url: string | null; refund_status: string | null;
   note: string | null; finalized_at: string | null; created_by: string; created_at: string;
+  purchase_attempted_at: string | null;
   items: { product_id: number; sku_code: string; qty: string }[] | null;
 };
 export type CatalogProduct = { id: number; sku_code: string; name: string; mass_label: string | null; active: boolean };
