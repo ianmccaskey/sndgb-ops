@@ -41,8 +41,10 @@ export function ReceivingPage() {
   const [rawDestinations, , , reloadDestinations] = useLoadAction(listDestinations, [], {});
   const [rawProducts] = useLoadAction(listProducts, [], {});
   // only vendors that actually ship product IN THE SELECTED CAMPAIGN (no
-  // COA vendors, no niche/unused vendor rows) — see listShippingVendors
-  const [rawVendors] = useLoadAction(listShippingVendors, [groupBuyId], { group_buy_id: groupBuyId });
+  // COA vendors, no niche/unused vendor rows) — see listShippingVendors.
+  // Gated like every other campaign-scoped load: groupBuyId is null until
+  // AppContext resolves the selection.
+  const [rawVendors] = useLoadAction(listShippingVendors, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
 
   const addresses = rows<RxAddress>(rawAddresses);
   const packages = rows<Pkg>(rawPackages);
