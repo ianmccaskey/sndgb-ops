@@ -98,15 +98,19 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
 
   // a vendor picked before a campaign switch may no longer be shippable in
   // the newly selected buy — clear the stale selection instead of letting
-  // a hidden value bypass the picker's restriction
+  // a hidden value bypass the picker's restriction. Only a RESOLVED,
+  // non-empty list is authoritative: while a reload is in flight (or has
+  // failed) the vendors prop collapses to [], and clearing on that would
+  // wipe valid state on every refetch — the submit-time guard still covers
+  // the never-resolves case.
   React.useEffect(() => {
-    if (fVendor && !vendors.some(v => v.shippable && String(v.id) === fVendor)) setFVendor('');
+    if (vendors.length > 0 && fVendor && !vendors.some(v => v.shippable && String(v.id) === fVendor)) setFVendor('');
   }, [vendors, fVendor]);
   // the dashboard vendor FILTER gets the same treatment: a code that left
   // the option set after a campaign switch must not keep silently
   // filtering the page down to nothing
   React.useEffect(() => {
-    if (vendorFilter !== 'all' && !vendors.some(v => v.code === vendorFilter)) setVendorFilter('all');
+    if (vendors.length > 0 && vendorFilter !== 'all' && !vendors.some(v => v.code === vendorFilter)) setVendorFilter('all');
   }, [vendors, vendorFilter]);
 
   const createPackage = async () => {
