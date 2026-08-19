@@ -10,7 +10,10 @@ import { action } from '@uibakery/data';
  * draft; UNIQUE(shippo_rate_id) is the DB backstop against a
  * double-clicked purchase creating two rows. purchase_started_at stamps
  * the PURCHASE LEASE at birth: the purchase POST follows immediately, and
- * deleteTransferDraft refuses while the lease is fresh. Audited.
+ * deleteTransferDraft refuses while the lease is fresh. Sending more than
+ * is on hand refuses unless allow_over_onhand (the operator's explicit
+ * confirmation) travels with the write — checked against LIVE inventory
+ * here, and the override is audited. Audited.
  */
 function createTransfer() {
   return action('createTransfer', 'SQL', {
@@ -24,6 +27,16 @@ function createTransfer() {
         SELECT count(*) AS n,
                bool_and(qty_text ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND qty_text::numeric > 0) AS all_valid
         FROM input_items
+      ),
+      -- over-on-hand is a SUPPORTED exception, but only as an EXPLICIT
+      -- override: the server re-checks live inventory here, so a stale
+      -- client or mis-keyed quantity refuses unless the operator confirmed
+      over AS (
+        SELECT COALESCE(bool_or(ii.qty_text::numeric > COALESCE(inv.on_hand_qty, 0)), false) AS any_over
+        FROM input_items ii
+        LEFT JOIN v_address_inventory inv
+          ON inv.receive_address_id = {{params.from_address_id}}::bigint
+         AND inv.product_id = ii.product_id
       ),
       ins AS (
         INSERT INTO transfers (from_address_id, from_label, from_address, destination_label, destination, parcel, carrier, servicelevel, rate_amount, rate_currency, shippo_rate_id, note, created_by, purchase_started_at)
@@ -50,6 +63,7 @@ function createTransfer() {
           AND TRIM({{params.destination_label}}) <> ''
           AND NULLIF({{params.shippo_rate_id}}::text, '') IS NOT NULL
           AND (SELECT n > 0 AND all_valid FROM ok)
+          AND (NOT (SELECT any_over FROM over) OR {{params.allow_over_onhand}}::boolean)
         RETURNING id, from_address_id, destination_label, carrier, servicelevel, rate_amount
       ),
       items_ins AS (
@@ -63,7 +77,8 @@ function createTransfer() {
              jsonb_build_object('from_address_id', ins.from_address_id, 'destination_label', ins.destination_label,
                                 'carrier', ins.carrier, 'servicelevel', ins.servicelevel, 'rate_amount', ins.rate_amount,
                                 'items', (SELECT jsonb_agg(jsonb_build_object('product_id', product_id, 'qty', qty_text)) FROM input_items),
-                                'item_count', (SELECT count(*) FROM items_ins))
+                                'item_count', (SELECT count(*) FROM items_ins),
+                                'over_onhand_override', (SELECT any_over FROM over))
       FROM ins
       RETURNING row_pk AS id
     `,

@@ -147,6 +147,20 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       // be purchased for a transfer with zero or invalid contents
       const { lines, error: lineError } = validateLines();
       if (lineError) { setPurchaseMsg(lineError + ' Nothing was purchased.'); return; }
+      // over-on-hand needs the operator's EXPLICIT confirmation, which then
+      // travels with the write — the server re-checks live inventory and
+      // refuses an unconfirmed overage (mis-keyed quantities can't slip
+      // through, and the override lands in the audit trail)
+      const overLines = lines.filter(l => Number(l.qty) > onHand(Number(l.product)));
+      let allowOver = false;
+      if (overLines.length > 0) {
+        const detail = overLines.map(l => `${products.find(p => String(p.id) === l.product)?.sku_code || '?'}: sending ${l.qty}, only ${fmtNum(onHand(Number(l.product)))} on hand`).join('; ');
+        if (!window.confirm(`This transfer sends MORE than is on hand at this address (${detail}). On-hand will go negative. Send anyway?`)) {
+          setPurchaseMsg('Cancelled — nothing was purchased.');
+          return;
+        }
+        allowOver = true;
+      }
       // 1. DRAFT FIRST, ATOMIC WITH ITS ITEMS: a failed purchase leaves a
       //    visible draft with its full contents; a succeeded purchase
       //    always has a complete home to finalize into. The insert also
@@ -160,6 +174,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
           carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
           rate_amount: rate.amount, rate_currency: rate.currency, shippo_rate_id: rate.object_id,
           items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
+          allow_over_onhand: allowOver,
           note: fNote.trim(), actor: userName,
         }) as unknown[] | null;
         draftId = Array.isArray(res) && res.length > 0 ? Number((res[0] as { id: string }).id) : null;
@@ -170,7 +185,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
           : (m || 'Failed to save the transfer draft.') + ' Nothing was saved or purchased.');
         return;
       }
-      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Check every line has a positive count.'); return; }
+      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Check every line has a positive count; if inventory shifted since you loaded, a line may now exceed on-hand — retry to re-confirm.'); return; }
       // 2. buy the label (single attempt inside)
       let result: PurchaseResult;
       try {
@@ -322,6 +337,13 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
 
   const refund = async (t: TransferRow) => {
     if (!t.shippo_transaction_id) return;
+    // no key = no request could possibly reach Shippo — refuse BEFORE the
+    // REQUESTING marker, or the row would durably look refund-in-flight
+    // when nothing was ever sent
+    if (!shippoKey) {
+      setDraftMsg(m => ({ ...m, [t.id]: 'No Shippo API token is set (Settings) — the refund request cannot be sent.' }));
+      return;
+    }
     if (!window.confirm(`Request a refund for this label (${fmtUSD(t.rate_amount)})? USPS refunds settle over days — final status shows in the Shippo dashboard. The transfer stays in the log marked refund-requested; its items still count as transferred until you delete the transfer via Shippo support if the shipment never went.`)) return;
     // persist the intent BEFORE the POST — if the browser dies mid-request
     // the row shows REQUESTING (which hides the refund button) instead of
@@ -346,6 +368,10 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   // (clear the marker so the button returns)
   const recheckRefund = async (t: TransferRow) => {
     if (!t.shippo_transaction_id) return;
+    if (!shippoKey) {
+      setDraftMsg(m => ({ ...m, [t.id]: 'No Shippo API token is set (Settings) — cannot check the refund status.' }));
+      return;
+    }
     try {
       const status = await findRefundByTransaction(shippoKey, t.shippo_transaction_id);
       if (status) {
@@ -417,7 +443,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
                 {fLines.length > 1 && <Button size="sm" variant="ghost" className="h-9 px-2 text-red-600" onClick={() => setFLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>}
                 {l.product && fFrom && (
                   <span className={`text-[11px] ${over ? 'text-amber-700 font-medium' : 'text-muted-foreground'}`}>
-                    {over ? `only ${fmtNum(oh ?? 0)} on hand — sending more is allowed but check the box` : `${fmtNum(oh ?? 0)} on hand`}
+                    {over ? `only ${fmtNum(oh ?? 0)} on hand — sending more asks for confirmation at purchase` : `${fmtNum(oh ?? 0)} on hand`}
                   </span>
                 )}
               </div>
@@ -569,7 +595,9 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
                             <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Check the Shippo dashboard for the final refund outcome">refund {t.refund_status}</span>
                             <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Ask Shippo for this refund's real status — records it, or clears the marker if no refund exists" onClick={() => recheckRefund(t)}>Re-check</Button>
                           </span>
-                        : <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => refund(t)}>Request refund</Button>}
+                        : shippoKey
+                          ? <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => refund(t)}>Request refund</Button>
+                          : <span className="text-[11px] text-muted-foreground whitespace-nowrap" title="Add the Shippo API token in Settings to request refunds">refund needs key</span>}
                       {draftMsg[t.id] && <p className="text-[11px] text-red-600">{draftMsg[t.id]}</p>}
                     </TableCell>
                   </TableRow>
