@@ -224,6 +224,43 @@ export async function getTransaction(key: string, transactionId: string): Promis
   return await resolveTransaction(key, res);
 }
 
+/**
+ * Refund reconciliation, same exhaustive discipline as
+ * findTransactionByRate: list the account's refunds page by page and
+ * find one for this transaction. Returns its status when found, null
+ * ONLY after the FULL listing proves no refund exists (safe to
+ * re-request), and THROWS when the walk could not complete — a partial
+ * listing must never authorize a repeat refund request.
+ */
+export async function findRefundByTransaction(key: string, transactionId: string): Promise<string | null> {
+  const MAX_PAGES = 50;
+  let url = `${BASE}/refunds/?results=100`;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    let res: Response;
+    try {
+      // read-only listing — retry freely
+      res = await fetchWithBackoff(url, { headers: { Authorization: `ShippoToken ${key.trim()}` } });
+    } catch {
+      throw new Error('Could not reach Shippo to check for an existing refund — do not re-request until this check succeeds.');
+    }
+    if (!res.ok) throw new Error(`Shippo refund lookup failed (HTTP ${res.status}) — do not re-request until this check succeeds.`);
+    const body = await res.json().catch(() => null) as {
+      results?: { object_id?: string; status?: string; transaction?: string | { object_id?: string } }[];
+      next?: string | null;
+    } | null;
+    if (!body) throw new Error('Shippo refund lookup returned an unreadable page — do not re-request until this check succeeds.');
+    const match = (body.results || []).find(r =>
+      (typeof r.transaction === 'string' ? r.transaction : r.transaction?.object_id) === transactionId);
+    if (match) return match.status || 'PENDING';
+    if (!body.next) return null; // walked every page — provably no refund
+    if (!body.next.startsWith(BASE)) {
+      throw new Error('Shippo returned an unexpected pagination link — do not re-request until this check succeeds.');
+    }
+    url = body.next;
+  }
+  throw new Error(`Shippo refund history exceeds ${MAX_PAGES * 100} entries — the check could not complete; use the Shippo dashboard.`);
+}
+
 /** Request a refund for a purchased label. Single attempt. */
 export async function requestRefund(key: string, transactionId: string): Promise<string> {
   let res: Response;

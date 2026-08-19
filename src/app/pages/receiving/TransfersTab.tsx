@@ -5,7 +5,7 @@ import markTransferPurchaseStarted from '@/actions/receiving/markTransferPurchas
 import finalizeTransfer from '@/actions/receiving/finalizeTransfer';
 import deleteTransferDraft from '@/actions/receiving/deleteTransferDraft';
 import setTransferRefund from '@/actions/receiving/setTransferRefund';
-import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund } from '@/lib/shippo';
+import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import { useApp } from '@/app/AppContext';
 import { fmtUSD, fmtNum, fmtDate } from '@/lib/fmt';
@@ -183,7 +183,11 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       // 3. persist — retryable from memory if this write fails
       const fin = await doFinalize({
         transfer_id: draftId, transaction_id: result.transactionId,
-        tracking_number: result.trackingNumber, label_url: result.labelUrl, actor: userName,
+        tracking_number: result.trackingNumber, label_url: result.labelUrl,
+        // finalize proves rate ownership server-side; Shippo's reported rate
+        // first, with the rate we POSTed as the fallback (same rate by
+        // construction — we bought exactly rate.object_id)
+        rate_id: result.rateId || rate.object_id, actor: userName,
       }) as unknown[] | null;
       if (!(Array.isArray(fin) ? fin.length > 0 : !!fin)) {
         setPendingFinalize(m => ({ ...m, [draftId!]: result }));
@@ -203,7 +207,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const retryFinalize = async (t: TransferRow) => {
     const pending = pendingFinalize[t.id];
     if (!pending) return;
-    const fin = await doFinalize({ transfer_id: t.id, transaction_id: pending.transactionId, tracking_number: pending.trackingNumber, label_url: pending.labelUrl, actor: userName }) as unknown[] | null;
+    const fin = await doFinalize({ transfer_id: t.id, transaction_id: pending.transactionId, tracking_number: pending.trackingNumber, label_url: pending.labelUrl, rate_id: pending.rateId || t.shippo_rate_id || '', actor: userName }) as unknown[] | null;
     if (Array.isArray(fin) ? fin.length > 0 : !!fin) {
       setPendingFinalize(m => { const n = { ...m }; delete n[t.id]; return n; });
       setDraftMsg(m => ({ ...m, [t.id]: '' }));
@@ -224,7 +228,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         setDraftMsg(m => ({ ...m, [t.id]: `That transaction was purchased against a different rate than this draft (transaction rate ${result.rateId || 'unknown'}, draft rate ${t.shippo_rate_id || 'missing'}) — refusing to attach it. Find the right transaction in the Shippo dashboard.` }));
         return;
       }
-      const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, actor: userName }) as unknown[] | null;
+      const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, rate_id: result.rateId || '', actor: userName }) as unknown[] | null;
       if (Array.isArray(fin) ? fin.length > 0 : !!fin) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
       else setDraftMsg(m => ({ ...m, [t.id]: 'Transaction found but saving failed — retry.' }));
     } catch (e: unknown) {
@@ -247,7 +251,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         return;
       }
       if (existing) {
-        const fin0 = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, actor: userName }) as unknown[] | null;
+        const fin0 = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, rate_id: existing.rateId || t.shippo_rate_id, actor: userName }) as unknown[] | null;
         if (Array.isArray(fin0) ? fin0.length > 0 : !!fin0) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
         else setDraftMsg(m => ({ ...m, [t.id]: `An existing label was found (${existing.transactionId}) but saving failed — retry.` }));
         return;
@@ -263,7 +267,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         return;
       }
       const result = await purchaseLabel(shippoKey, t.shippo_rate_id);
-      const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, actor: userName }) as unknown[] | null;
+      const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, rate_id: result.rateId || t.shippo_rate_id, actor: userName }) as unknown[] | null;
       if (Array.isArray(fin) ? fin.length > 0 : !!fin) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
       else {
         setPendingFinalize(m => ({ ...m, [t.id]: result }));
@@ -292,7 +296,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     try {
       const existing = await findTransactionByRate(shippoKey, t.shippo_rate_id);
       if (existing) {
-        const fin = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, actor: userName }) as unknown[] | null;
+        const fin = await doFinalize({ transfer_id: t.id, transaction_id: existing.transactionId, tracking_number: existing.trackingNumber, label_url: existing.labelUrl, rate_id: existing.rateId || t.shippo_rate_id, actor: userName }) as unknown[] | null;
         setDraftMsg(m => ({ ...m, [t.id]: (Array.isArray(fin) && fin.length > 0)
           ? ''
           : `A PURCHASED label exists for this draft (${existing.transactionId}) — recovered instead of deleting${!(Array.isArray(fin) && fin.length > 0) ? ', but saving failed — retry' : ''}.` }));
@@ -319,12 +323,41 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const refund = async (t: TransferRow) => {
     if (!t.shippo_transaction_id) return;
     if (!window.confirm(`Request a refund for this label (${fmtUSD(t.rate_amount)})? USPS refunds settle over days — final status shows in the Shippo dashboard. The transfer stays in the log marked refund-requested; its items still count as transferred until you delete the transfer via Shippo support if the shipment never went.`)) return;
+    // persist the intent BEFORE the POST — if the browser dies mid-request
+    // the row shows REQUESTING (which hides the refund button) instead of
+    // silently looking refundable while Shippo may already hold a request
+    const mark = await doSetRefund({ transfer_id: t.id, refund_status: 'REQUESTING', actor: userName }) as unknown[] | null;
+    if (!(Array.isArray(mark) ? mark.length > 0 : !!mark)) {
+      setDraftMsg(m => ({ ...m, [t.id]: 'Could not record the refund request — nothing was sent to Shippo. Retry.' }));
+      return;
+    }
+    reloadTransfers();
     try {
       const status = await requestRefund(shippoKey, t.shippo_transaction_id);
       await doSetRefund({ transfer_id: t.id, refund_status: status, actor: userName });
       reloadTransfers();
     } catch (e: unknown) {
-      setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Refund request failed' }));
+      setDraftMsg(m => ({ ...m, [t.id]: (e instanceof Error ? e.message : 'Refund request failed') + ' The row stays marked REQUESTING — use "Re-check" to reconcile with Shippo; do not assume it failed.' }));
+    }
+  };
+
+  // reconcile a stuck/uncertain refund with Shippo: an exhaustive listing
+  // either finds the refund (record its real status) or proves none exists
+  // (clear the marker so the button returns)
+  const recheckRefund = async (t: TransferRow) => {
+    if (!t.shippo_transaction_id) return;
+    try {
+      const status = await findRefundByTransaction(shippoKey, t.shippo_transaction_id);
+      if (status) {
+        await doSetRefund({ transfer_id: t.id, refund_status: status, actor: userName });
+        setDraftMsg(m => ({ ...m, [t.id]: '' }));
+      } else {
+        await doSetRefund({ transfer_id: t.id, refund_status: '', actor: userName });
+        setDraftMsg(m => ({ ...m, [t.id]: 'Shippo has NO refund for this label — the earlier request never landed. You can request again.' }));
+      }
+      reloadTransfers();
+    } catch (e: unknown) {
+      setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Refund check failed' }));
     }
   };
 
@@ -532,7 +565,10 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
                     </TableCell>
                     <TableCell>
                       {t.refund_status
-                        ? <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Check the Shippo dashboard for the final refund outcome">refund {t.refund_status}</span>
+                        ? <span className="inline-flex items-center gap-1">
+                            <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Check the Shippo dashboard for the final refund outcome">refund {t.refund_status}</span>
+                            <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Ask Shippo for this refund's real status — records it, or clears the marker if no refund exists" onClick={() => recheckRefund(t)}>Re-check</Button>
+                          </span>
                         : <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => refund(t)}>Request refund</Button>}
                       {draftMsg[t.id] && <p className="text-[11px] text-red-600">{draftMsg[t.id]}</p>}
                     </TableCell>

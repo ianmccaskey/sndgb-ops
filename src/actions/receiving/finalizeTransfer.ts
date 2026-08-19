@@ -2,9 +2,14 @@ import { action } from '@uibakery/data';
 
 /**
  * Record the purchased label onto its draft — the transfer becomes real
- * (inventory decrements from here). Retryable: a purchase-succeeded-but-
- * finalize-failed draft can call this again with the same transaction
- * data; the finalized guard makes a double-fire refuse harmlessly. Audited.
+ * (inventory decrements from here). OWNERSHIP CHECK: params.rate_id is
+ * the rate the Shippo transaction was actually purchased against (as
+ * reported by Shippo), and the update refuses unless it equals the
+ * draft's stored shippo_rate_id — a mismatched transaction from a stale
+ * client or bad retry can never finalize the wrong draft. Retryable: a
+ * purchase-succeeded-but-finalize-failed draft can call this again with
+ * the same transaction data; the finalized guard makes a double-fire
+ * refuse harmlessly. Audited.
  */
 function finalizeTransfer() {
   return action('finalizeTransfer', 'SQL', {
@@ -20,6 +25,7 @@ function finalizeTransfer() {
           AND t.finalized_at IS NULL
           AND TRIM({{params.transaction_id}}) <> ''
           AND TRIM({{params.label_url}}) <> ''
+          AND t.shippo_rate_id = TRIM({{params.rate_id}})
         RETURNING t.id, t.shippo_transaction_id, t.tracking_number, t.label_url, t.rate_amount
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
