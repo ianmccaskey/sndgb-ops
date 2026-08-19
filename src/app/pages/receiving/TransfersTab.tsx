@@ -170,17 +170,29 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       //    stamps the purchase lease (blocks concurrent draft deletion).
       let draftId: number | null = null;
       let claimedAt = '';
+      const draftParams = (allow: boolean) => ({
+        from_address_id: Number(fFrom), destination_label: destLabel,
+        destination: JSON.stringify(to),
+        parcel: JSON.stringify({ length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(), distance_unit: 'in', weight: dims.weight.trim(), mass_unit: 'lb' }),
+        carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
+        rate_amount: rate.amount, rate_currency: rate.currency, shippo_rate_id: rate.object_id,
+        items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
+        allow_over_onhand: allow,
+        note: fNote.trim(), actor: userName,
+      });
       try {
-        const res = await doCreate({
-          from_address_id: Number(fFrom), destination_label: destLabel,
-          destination: JSON.stringify(to),
-          parcel: JSON.stringify({ length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(), distance_unit: 'in', weight: dims.weight.trim(), mass_unit: 'lb' }),
-          carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
-          rate_amount: rate.amount, rate_currency: rate.currency, shippo_rate_id: rate.object_id,
-          items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
-          allow_over_onhand: allowOver,
-          note: fNote.trim(), actor: userName,
-        }) as unknown[] | null;
+        let res = await doCreate(draftParams(allowOver)) as unknown[] | null;
+        // the server ALSO subtracts unfinalized-draft RESERVATIONS this
+        // page's on-hand numbers can't see — a refusal with no override yet
+        // gets the same explicit confirm-and-retry the visible overage does,
+        // so reserved stock never dead-ends a legitimate transfer
+        if (!(Array.isArray(res) && res.length > 0) && !allowOver) {
+          if (!window.confirm('The server reports less available stock than this page shows — other unfinished transfer drafts may be reserving some of it. Send anyway? On-hand can go negative if those drafts complete.')) {
+            setPurchaseMsg('Cancelled — nothing was purchased.');
+            return;
+          }
+          res = await doCreate(draftParams(true)) as unknown[] | null;
+        }
         const row = Array.isArray(res) && res.length > 0 ? res[0] as { id: string; claimed_at?: string } : null;
         draftId = row ? Number(row.id) : null;
         claimedAt = row?.claimed_at || '';

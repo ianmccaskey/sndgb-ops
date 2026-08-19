@@ -185,8 +185,14 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
     if (!correcting) return;
     setCMsg('');
     try {
-      const res = await doCorrect({ package_id: correcting.id, carrier: cCarrier.trim().toLowerCase(), tracking_number: cTracking.trim(), actor: userName }) as unknown[] | null;
-      if (!(Array.isArray(res) ? res.length > 0 : !!res)) { setCMsg('Not saved — received packages are locked; carrier and tracking must be non-blank.'); return; }
+      const res = await doCorrect({
+        package_id: correcting.id, carrier: cCarrier.trim().toLowerCase(), tracking_number: cTracking.trim(),
+        // the identity this dialog OPENED with — the action refuses a stale
+        // save if another session corrected the package meanwhile
+        expected_carrier: correcting.carrier, expected_tracking: correcting.tracking_number,
+        actor: userName,
+      }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) { setCMsg('Not saved — either it was received, a field is blank, or another session already corrected this package. Reload and retry.'); return; }
       setCorrecting(null);
       afterChange();
     } catch (e: unknown) {

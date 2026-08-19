@@ -27,6 +27,11 @@ function updatePackageCarrierTracking() {
         WHERE p.id = old.id
           AND p.received_at IS NULL
           AND TRIM({{params.carrier}}) <> '' AND TRIM({{params.tracking_number}}) <> ''
+          -- CAS on the identity the dialog OPENED with: if another session
+          -- corrected this package meanwhile, this stale save refuses
+          -- instead of silently repointing the row a second time
+          AND old.old_carrier = LOWER(TRIM({{params.expected_carrier}}))
+          AND old.old_tracking = UPPER(TRIM({{params.expected_tracking}}))
         RETURNING p.id, old.old_carrier, old.old_tracking, p.carrier, p.tracking_number
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, old_data, new_data)
