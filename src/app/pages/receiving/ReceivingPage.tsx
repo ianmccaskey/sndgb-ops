@@ -6,7 +6,7 @@ import listAddressInventory from '@/actions/receiving/listAddressInventory';
 import listTransfers from '@/actions/receiving/listTransfers';
 import listDestinations from '@/actions/receiving/listDestinations';
 import listProducts from '@/actions/products/listProducts';
-import listVendors from '@/actions/vendors/listVendors';
+import listShippingVendors from '@/actions/receiving/listShippingVendors';
 import updatePackageTracking from '@/actions/receiving/updatePackageTracking';
 import markPackageReceived from '@/actions/receiving/markPackageReceived';
 import { trackPackage, isTestKey } from '@/lib/shippo';
@@ -40,7 +40,9 @@ export function ReceivingPage() {
   const [rawTransfers, , , reloadTransfers] = useLoadAction(listTransfers, [], {});
   const [rawDestinations, , , reloadDestinations] = useLoadAction(listDestinations, [], {});
   const [rawProducts] = useLoadAction(listProducts, [], {});
-  const [rawVendors] = useLoadAction(listVendors, [], {});
+  // only vendors that actually ship product (no COA vendors, no niche/
+  // unused vendor rows) — see listShippingVendors
+  const [rawVendors] = useLoadAction(listShippingVendors, [], {});
 
   const addresses = rows<RxAddress>(rawAddresses);
   const packages = rows<Pkg>(rawPackages);
