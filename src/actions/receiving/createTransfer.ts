@@ -84,7 +84,7 @@ function createTransfer() {
           AND NULLIF({{params.shippo_rate_id}}::text, '') IS NOT NULL
           AND (SELECT n > 0 AND all_valid FROM ok)
           AND (NOT (SELECT any_over FROM over) OR {{params.allow_over_onhand}}::boolean)
-        RETURNING id, from_address_id, destination_label, carrier, servicelevel, rate_amount
+        RETURNING id, from_address_id, destination_label, carrier, servicelevel, rate_amount, purchase_started_at
       ),
       items_ins AS (
         INSERT INTO transfer_items (transfer_id, product_id, qty)
@@ -98,9 +98,12 @@ function createTransfer() {
                                 'carrier', ins.carrier, 'servicelevel', ins.servicelevel, 'rate_amount', ins.rate_amount,
                                 'items', (SELECT jsonb_agg(jsonb_build_object('product_id', product_id, 'qty', qty_text)) FROM input_items),
                                 'item_count', (SELECT count(*) FROM items_ins),
-                                'over_onhand_override', (SELECT any_over FROM over))
+                                'over_onhand_override', (SELECT any_over FROM over),
+                                'claimed_at', ins.purchase_started_at)
       FROM ins
-      RETURNING row_pk AS id
+      -- claimed_at (the birth purchase lease) travels back so a definitive
+      -- Shippo refusal can release exactly THIS claim and no newer one
+      RETURNING row_pk AS id, (new_data->>'claimed_at') AS claimed_at
     `,
   });
 }

@@ -22,13 +22,16 @@ function markTransferPurchaseStarted() {
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
           AND (t.purchase_started_at IS NULL OR t.purchase_started_at < now() - interval '10 minutes')
-        RETURNING t.id, t.shippo_rate_id
+        RETURNING t.id, t.shippo_rate_id, t.purchase_started_at
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
       SELECT 'transfers', up.id::text, 'transfer_purchase_claimed', {{params.actor}},
-             jsonb_build_object('shippo_rate_id', up.shippo_rate_id)
+             jsonb_build_object('shippo_rate_id', up.shippo_rate_id, 'claimed_at', up.purchase_started_at)
       FROM up
-      RETURNING row_pk AS id
+      -- claimed_at travels back to the caller: releasing the lease later
+      -- requires presenting this exact value (compare-and-set), so a stale
+      -- clear can never wipe a NEWER session's claim
+      RETURNING row_pk AS id, (new_data->>'claimed_at') AS claimed_at
     `,
   });
 }
