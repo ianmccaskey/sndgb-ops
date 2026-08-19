@@ -4,7 +4,11 @@ import { action } from '@uibakery/data';
  * Correct a typo'd carrier/tracking on a committed package WITHOUT losing
  * its audit trail — allowed while unreceived. Clears the stale Shippo
  * snapshot in the same statement so the old carrier's status can't linger
- * under the new number. Audited with old and new values. A collision with
+ * under the new number, and RESETS auto_receive_suppressed: suppression
+ * was the operator's verdict on the OLD tracking identity (un-received a
+ * bad number); the corrected number is fresh reality and must auto-receive
+ * normally, or a fixed typo would strand the package understating
+ * inventory forever. Audited with old and new values. A collision with
  * another active package throws 23505 — the page explains.
  */
 function updatePackageCarrierTracking() {
@@ -17,7 +21,8 @@ function updatePackageCarrierTracking() {
             tracking_number = TRIM({{params.tracking_number}}),
             tracking_status = NULL, tracking_substatus = NULL, tracking_detail = NULL,
             tracking_error = NULL, tracking_location = NULL, eta = NULL,
-            status_date = NULL, last_checked_at = NULL
+            status_date = NULL, last_checked_at = NULL,
+            auto_receive_suppressed = false
         FROM (SELECT id, carrier AS old_carrier, tracking_number AS old_tracking FROM inbound_packages WHERE id = {{params.package_id}}::bigint) old
         WHERE p.id = old.id
           AND p.received_at IS NULL
