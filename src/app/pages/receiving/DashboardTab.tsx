@@ -96,10 +96,23 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
 
   const carrierToken = fCarrier === '__other__' ? fCarrierOther.trim().toLowerCase() : fCarrier;
 
+  // a vendor picked before a campaign switch may no longer be shippable in
+  // the newly selected buy — clear the stale selection instead of letting
+  // a hidden value bypass the picker's restriction
+  React.useEffect(() => {
+    if (fVendor && !vendors.some(v => v.shippable && String(v.id) === fVendor)) setFVendor('');
+  }, [vendors, fVendor]);
+
   const createPackage = async () => {
     setFMsg('');
     const lines = fLines.filter(l => l.product || l.qty.trim());
     if (!fAddr) { setFMsg('Pick a receive address.'); return; }
+    // belt for the race the effect can't win: never submit a vendor that
+    // isn't shippable in the currently selected campaign
+    if (fVendor && !vendors.some(v => v.shippable && String(v.id) === fVendor)) {
+      setFMsg('The selected vendor is not available in this campaign — re-pick it or use "No vendor".');
+      return;
+    }
     if (!carrierToken) { setFMsg('Pick a carrier (or enter its Shippo token).'); return; }
     if (!fTracking.trim()) { setFMsg('Tracking number required.'); return; }
     if (lines.length === 0) { setFMsg('Add at least one product line — the contents feed inventory.'); return; }
