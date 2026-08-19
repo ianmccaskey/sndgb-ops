@@ -20,6 +20,9 @@ function markPackageReceived() {
         WHERE p.id = {{params.package_id}}::bigint
           AND p.received_at IS NULL
           AND p.committed_at IS NOT NULL
+          -- a package with no lines would "receive" zero inventory —
+          -- refuse until it has contents again
+          AND EXISTS (SELECT 1 FROM inbound_package_items i WHERE i.package_id = p.id)
           AND ({{params.mode}}::text <> 'auto' OR NOT p.auto_receive_suppressed)
           -- CAS on the tracking identity: a stale tab whose row was
           -- corrected must not receive inventory for the OLD shipment

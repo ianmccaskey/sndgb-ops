@@ -90,7 +90,7 @@ export function DashboardTab({ addresses, packages, products, vendors, refreshOn
 
   const removeItemFromCard = async (p: Pkg, itemId: number) => {
     const res = await doDelItem({ item_id: itemId, actor: userName }) as unknown[] | null;
-    if (!(Array.isArray(res) ? res.length > 0 : !!res)) setRowMsg(m => ({ ...m, [p.id]: 'Not removed — received packages are locked.' }));
+    if (!(Array.isArray(res) ? res.length > 0 : !!res)) setRowMsg(m => ({ ...m, [p.id]: 'Not removed — received packages are locked, and a committed package must keep at least one line (delete the whole package instead).' }));
     afterChange();
   };
 
