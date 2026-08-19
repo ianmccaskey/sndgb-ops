@@ -10,6 +10,7 @@ import {
   Truck,
   BarChart3,
   GitBranch,
+  PackageOpen,
   Settings,
 } from 'lucide-react';
 import {
@@ -46,6 +47,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Fulfillment', href: '/fulfillment', icon: Truck },
   { label: 'Financials', href: '/financials', icon: BarChart3 },
   { label: 'Planner', href: '/planner', icon: GitBranch },
+  { label: 'Receiving', href: '/receiving', icon: PackageOpen },
   { label: 'Settings', href: '/settings', icon: Settings },
 ];
 

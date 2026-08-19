@@ -53,6 +53,10 @@ export function SettingsPage() {
   const [b44Token, setB44Token] = useState('');
   const [b44Msg, setB44Msg] = useState('');
 
+  // shippo (package tracking + transfer labels)
+  const [shippoKey, setShippoKey] = useState('');
+  const [shippoMsg, setShippoMsg] = useState('');
+
   // campaign form
   const [gbName, setGbName] = useState('');
   const [gbStatus, setGbStatus] = useState('draft');
@@ -84,6 +88,21 @@ export function SettingsPage() {
     setB44AppId(settings.base44_app_id || '');
     setB44Token(settings.base44_token || '');
   }, [settings.base44_app_id, settings.base44_token]);
+
+  useEffect(() => {
+    setShippoKey(settings.shippo_api_key || '');
+  }, [settings.shippo_api_key]);
+
+  const saveShippo = async () => {
+    setShippoMsg('');
+    try {
+      await doSaveSetting({ key: 'shippo_api_key', value: shippoKey.trim() });
+      reloadSettings();
+      setShippoMsg('Saved.');
+    } catch (e: unknown) {
+      setShippoMsg(e instanceof Error ? e.message : 'Failed to save');
+    }
+  };
 
   useEffect(() => {
     if (groupBuy) {
@@ -258,6 +277,25 @@ export function SettingsPage() {
           <Button size="sm" onClick={saveB44}>Save ordering app</Button>
           <p className="text-xs text-muted-foreground">
             Used by Products → Ordering app to pull each campaign's product list. Leave App ID blank to use the default.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-base">Shippo (package tracking & transfer labels)</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Field label="Shippo API token" value={shippoKey} onChange={setShippoKey} type="password" placeholder="shippo_live_… or shippo_test_…" />
+          </div>
+          {shippoKey.trim().toLowerCase().startsWith('shippo_test') && (
+            <p className="text-xs rounded border border-amber-300 bg-amber-50 text-amber-900 p-2">
+              TEST token — tracking data on the Receiving page will be simulated and auto-receive is disabled; labels purchased are test labels.
+            </p>
+          )}
+          {shippoMsg && <p className="text-sm text-muted-foreground">{shippoMsg}</p>}
+          <Button size="sm" onClick={saveShippo}>Save Shippo token</Button>
+          <p className="text-xs text-muted-foreground">
+            Powers inbound package tracking and transfer label purchases on the Receiving page. Enable UPS in your Shippo dashboard (Carriers) to see UPS rates.
           </p>
         </CardContent>
       </Card>

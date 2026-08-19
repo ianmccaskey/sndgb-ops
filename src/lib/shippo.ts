@@ -1,0 +1,187 @@
+import { fetchWithBackoff } from './http';
+
+/*
+ * Shippo client (browser-direct: api.goshippo.com serves ACAO * with the
+ * authorization header allowed — verified). Key lives in app_settings as
+ * shippo_api_key, entered by the operator in Settings.
+ *
+ * REAL-MONEY DISCIPLINE:
+ *  - purchaseLabel and requestRefund use a SINGLE attempt (plain fetch,
+ *    never fetchWithBackoff): a retried 5xx or dropped connection after
+ *    Shippo already charged would buy a SECOND label — Shippo has no
+ *    idempotency key. Rate creation and tracking are read-only-priced
+ *    and retry freely.
+ *  - a QUEUED/WAITING transaction is polled by GET (never re-POSTed).
+ *  - test keys (shippo_test_...) return SIMULATED tracking — callers must
+ *    check isTestKey() and suppress auto-receive so fake DELIVERED events
+ *    can never move real inventory.
+ */
+
+const BASE = 'https://api.goshippo.com';
+
+export function isTestKey(key: string): boolean {
+  return key.trim().toLowerCase().startsWith('shippo_test');
+}
+
+function headers(key: string): Record<string, string> {
+  return { Authorization: `ShippoToken ${key.trim()}`, 'Content-Type': 'application/json' };
+}
+
+export type TrackResult = {
+  status: string | null;        // PRE_TRANSIT | TRANSIT | DELIVERED | RETURNED | FAILURE | UNKNOWN | null (no scans yet)
+  substatus: string | null;     // substatus.code, e.g. out_for_delivery
+  detail: string | null;        // human status_details
+  location: { city?: string; state?: string; zip?: string; country?: string } | null;
+  statusDate: string | null;
+  eta: string | null;
+  error: string | null;         // human-readable fetch/lookup problem; row is not poisoned
+};
+
+export async function trackPackage(key: string, carrier: string, trackingNumber: string): Promise<TrackResult> {
+  const empty: TrackResult = { status: null, substatus: null, detail: null, location: null, statusDate: null, eta: null, error: null };
+  let res: Response;
+  try {
+    res = await fetchWithBackoff(`${BASE}/tracks/${encodeURIComponent(carrier.trim())}/${encodeURIComponent(trackingNumber.trim())}`, {
+      headers: { Authorization: `ShippoToken ${key.trim()}` },
+    });
+  } catch {
+    return { ...empty, error: 'Could not reach Shippo — check your network connection.' };
+  }
+  if (!res.ok) {
+    if (res.status === 401) return { ...empty, error: 'Shippo rejected the API key (401) — check Settings.' };
+    if (res.status === 404 || res.status === 400) return { ...empty, error: `Carrier/tracking not recognized by Shippo (HTTP ${res.status}) — check the carrier token and number.` };
+    return { ...empty, error: `Shippo tracking failed (HTTP ${res.status}).` };
+  }
+  const body = await res.json().catch(() => null) as {
+    tracking_status?: { status?: string; substatus?: { code?: string } | null; status_details?: string; status_date?: string; location?: TrackResult['location'] } | null;
+    eta?: string | null;
+  } | null;
+  const ts = body?.tracking_status;
+  return {
+    status: ts?.status || null,
+    substatus: ts?.substatus?.code || null,
+    detail: ts?.status_details || null,
+    location: ts?.location || null,
+    statusDate: ts?.status_date || null,
+    eta: body?.eta || null,
+    error: null,
+  };
+}
+
+export type ShippoAddress = {
+  name: string; street1: string; street2?: string | null;
+  city: string; state: string; zip: string; country: string;
+  phone?: string | null; email?: string | null;
+};
+export type ShippoParcel = {
+  length: string; width: string; height: string; distance_unit: 'in';
+  weight: string; mass_unit: 'lb';
+};
+export type ShippoRate = {
+  object_id: string; provider: string; servicelevel: { name?: string; token?: string };
+  amount: string; currency: string; estimated_days?: number | null; duration_terms?: string;
+};
+
+const ALLOWED_PROVIDERS = ['USPS', 'UPS'];
+
+export async function getRates(key: string, from: ShippoAddress, to: ShippoAddress, parcel: ShippoParcel): Promise<{ rates: ShippoRate[]; allRateCount: number; messages: string[] }> {
+  let res: Response;
+  try {
+    // rate creation costs nothing — safe to retry
+    res = await fetchWithBackoff(`${BASE}/shipments/`, {
+      method: 'POST',
+      headers: headers(key),
+      body: JSON.stringify({ address_from: from, address_to: to, parcels: [parcel], async: false }),
+    });
+  } catch {
+    throw new Error('Could not reach Shippo — check your network connection.');
+  }
+  if (!res.ok) {
+    if (res.status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
+    const body = await res.json().catch(() => null) as Record<string, unknown> | null;
+    throw new Error(`Shippo rate request failed (HTTP ${res.status})${body ? `: ${JSON.stringify(body).slice(0, 300)}` : ''}`);
+  }
+  const body = await res.json().catch(() => null) as {
+    rates?: ShippoRate[];
+    messages?: { source?: string; code?: string; text?: string }[];
+  } | null;
+  const all = body?.rates || [];
+  return {
+    rates: all.filter(r => ALLOWED_PROVIDERS.includes((r.provider || '').toUpperCase())),
+    allRateCount: all.length,
+    messages: (body?.messages || []).map(m => [m.source, m.code, m.text].filter(Boolean).join(' ')).filter(Boolean),
+  };
+}
+
+export type PurchaseResult = {
+  transactionId: string; trackingNumber: string; labelUrl: string;
+};
+
+/**
+ * Buys a REAL label. Single attempt; QUEUED/WAITING is polled by GET.
+ * Throws with operator-readable messages on failure — and when a
+ * transaction id is known, the message INCLUDES it so a
+ * purchased-but-unconfirmed label is manually recoverable.
+ */
+export async function purchaseLabel(key: string, rateObjectId: string): Promise<PurchaseResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/transactions/`, {
+      method: 'POST',
+      headers: headers(key),
+      body: JSON.stringify({ rate: rateObjectId, label_file_type: 'PDF_4x6', async: false }),
+    });
+  } catch {
+    throw new Error('Network dropped during the label purchase. DO NOT retry blindly — check the Shippo dashboard for a purchased label first, then retry from the draft if none exists.');
+  }
+  return await resolveTransaction(key, res);
+}
+
+async function resolveTransaction(key: string, res: Response): Promise<PurchaseResult> {
+  type Txn = { object_id?: string; status?: string; tracking_number?: string; label_url?: string; messages?: { text?: string; code?: string; source?: string }[] };
+  if (!res.ok && res.status !== 400) {
+    // 400s still carry a transaction body with messages; other statuses don't
+    if (res.status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
+    throw new Error(`Shippo purchase failed (HTTP ${res.status}). Check the Shippo dashboard before retrying — the label may still have been created.`);
+  }
+  let txn = await res.json().catch(() => null) as Txn | null;
+  // QUEUED/WAITING resolves within seconds — poll by GET, never re-POST
+  for (let i = 0; i < 5 && txn && (txn.status === 'QUEUED' || txn.status === 'WAITING'); i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const poll = await fetch(`${BASE}/transactions/${txn.object_id}`, { headers: { Authorization: `ShippoToken ${key.trim()}` } }).catch(() => null);
+    if (poll?.ok) txn = await poll.json().catch(() => txn) as Txn;
+  }
+  if (txn && txn.status === 'SUCCESS' && txn.label_url) {
+    return { transactionId: txn.object_id || '', trackingNumber: txn.tracking_number || '', labelUrl: txn.label_url };
+  }
+  const msgs = (txn?.messages || []).map(m => m.text || m.code || '').filter(Boolean).join('; ');
+  if (txn && (txn.status === 'QUEUED' || txn.status === 'WAITING')) {
+    throw new Error(`Label purchase is still processing at Shippo (transaction ${txn.object_id}). Do NOT purchase again — use "Retry purchase" in a minute; it will pick up this transaction.`);
+  }
+  throw new Error(`Shippo refused the label purchase${msgs ? `: ${msgs}` : ''}${msgs.toLowerCase().includes('rate') ? ' — the rate may have expired; re-fetch rates.' : ''}`);
+}
+
+/** Re-check a known transaction (recovery path for QUEUED timeouts). */
+export async function getTransaction(key: string, transactionId: string): Promise<PurchaseResult> {
+  const res = await fetch(`${BASE}/transactions/${encodeURIComponent(transactionId)}`, {
+    headers: { Authorization: `ShippoToken ${key.trim()}` },
+  });
+  return await resolveTransaction(key, res);
+}
+
+/** Request a refund for a purchased label. Single attempt. */
+export async function requestRefund(key: string, transactionId: string): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/refunds/`, {
+      method: 'POST',
+      headers: headers(key),
+      body: JSON.stringify({ transaction: transactionId, async: false }),
+    });
+  } catch {
+    throw new Error('Network dropped during the refund request — check the Shippo dashboard before retrying.');
+  }
+  const body = await res.json().catch(() => null) as { status?: string } | null;
+  if (!res.ok) throw new Error(`Shippo refund request failed (HTTP ${res.status}).`);
+  return body?.status || 'REFUNDPENDING';
+}

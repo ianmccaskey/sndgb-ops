@@ -15,6 +15,7 @@ import { ProductsPage } from '@/app/pages/products/ProductsPage';
 import { FulfillmentPage } from '@/app/pages/fulfillment/FulfillmentPage';
 import { FinancialsPage } from '@/app/pages/financials/FinancialsPage';
 import { PlannerPage } from '@/app/pages/planner/PlannerPage';
+import { ReceivingPage } from '@/app/pages/receiving/ReceivingPage';
 import { SettingsPage } from '@/app/pages/settings/SettingsPage';
 
 function App() {
@@ -33,6 +34,7 @@ function App() {
             <Route path="/fulfillment" element={<FulfillmentPage />} />
             <Route path="/financials" element={<FinancialsPage />} />
             <Route path="/planner" element={<PlannerPage />} />
+            <Route path="/receiving" element={<ReceivingPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
           <ImportProgressWidget />
