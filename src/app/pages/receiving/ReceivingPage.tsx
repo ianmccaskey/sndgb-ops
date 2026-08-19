@@ -30,7 +30,7 @@ import type { RxAddress, Pkg, InvRow, TransferRow, CatalogProduct, VendorRow } f
  */
 
 export function ReceivingPage() {
-  const { userName, settings } = useApp();
+  const { userName, settings, groupBuyId } = useApp();
   const shippoKey = settings.shippo_api_key || '';
   const testMode = shippoKey !== '' && isTestKey(shippoKey);
 
@@ -40,9 +40,9 @@ export function ReceivingPage() {
   const [rawTransfers, , , reloadTransfers] = useLoadAction(listTransfers, [], {});
   const [rawDestinations, , , reloadDestinations] = useLoadAction(listDestinations, [], {});
   const [rawProducts] = useLoadAction(listProducts, [], {});
-  // only vendors that actually ship product (no COA vendors, no niche/
-  // unused vendor rows) — see listShippingVendors
-  const [rawVendors] = useLoadAction(listShippingVendors, [], {});
+  // only vendors that actually ship product IN THE SELECTED CAMPAIGN (no
+  // COA vendors, no niche/unused vendor rows) — see listShippingVendors
+  const [rawVendors] = useLoadAction(listShippingVendors, [groupBuyId], { group_buy_id: groupBuyId });
 
   const addresses = rows<RxAddress>(rawAddresses);
   const packages = rows<Pkg>(rawPackages);
