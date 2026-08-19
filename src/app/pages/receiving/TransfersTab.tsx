@@ -184,6 +184,16 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         city: fromRow.city, state: fromRow.state, zip: fromRow.zip,
         country: fromRow.country, phone: fromRow.phone, email: fromRow.email,
       };
+      // the SAVED destination the quote was priced for — the server refuses
+      // if that row was edited or archived since; custom destinations skip
+      // this (they only exist in this form)
+      const destRow = fDest !== '__custom__' ? destinations.find(d => String(d.id) === fDest) : null;
+      if (fDest !== '__custom__' && !destRow) { setPurchaseMsg('Destination not found — reload the page.'); return; }
+      const expectedDest = destRow ? {
+        name: destRow.name, street1: destRow.street1, street2: destRow.street2,
+        city: destRow.city, state: destRow.state, zip: destRow.zip,
+        country: destRow.country, phone: destRow.phone, email: destRow.email,
+      } : null;
       let draftId: number | null = null;
       let claimedAt = '';
       const draftParams = (allow: boolean) => ({
@@ -195,6 +205,8 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
         allow_over_onhand: allow,
         expected_from: JSON.stringify(expectedFrom),
+        destination_id: destRow ? String(destRow.id) : '',
+        expected_destination: expectedDest ? JSON.stringify(expectedDest) : '',
         note: fNote.trim(), actor: userName,
       });
       try {
