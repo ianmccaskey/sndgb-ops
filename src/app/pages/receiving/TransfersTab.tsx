@@ -48,7 +48,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const [fNote, setFNote] = useState('');
   const [fMsg, setFMsg] = useState('');
   const [ratesLoading, setRatesLoading] = useState(false);
-  const [ratesResult, setRatesResult] = useState<{ rates: ShippoRate[]; allRateCount: number; messages: string[] } | null>(null);
+  const [ratesResult, setRatesResult] = useState<{ rates: ShippoRate[]; allRateCount: number; messages: string[]; sig: string } | null>(null);
   const [pickedRate, setPickedRate] = useState('');
   const [purchaseMsg, setPurchaseMsg] = useState('');
   const [success, setSuccess] = useState<PurchaseResult | null>(null);
@@ -74,6 +74,14 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
 
   const onHand = (productId: number) =>
     Number(inventory.find(r => String(r.receive_address_id) === fFrom && r.product_id === productId)?.on_hand_qty || 0);
+
+  // signature of every input the RATE depends on — a quote fetched for one
+  // shipment must never buy a label while the form describes another. Any
+  // edit to ship-from, destination, or parcel invalidates fetched rates.
+  const quoteSig = JSON.stringify({ fFrom, fDest, custom, dims });
+  React.useEffect(() => {
+    if (ratesResult && ratesResult.sig !== quoteSig) { setRatesResult(null); setPickedRate(''); setPurchaseMsg(''); }
+  }, [quoteSig, ratesResult]);
 
   const fetchRates = async () => {
     setFMsg(''); setRatesResult(null); setPickedRate('');
@@ -101,7 +109,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(),
         distance_unit: 'in', weight: dims.weight.trim(), mass_unit: 'lb',
       });
-      setRatesResult(res);
+      setRatesResult({ ...res, sig: quoteSig });
     } catch (e: unknown) {
       setFMsg(e instanceof Error ? e.message : 'Failed to fetch rates');
     } finally {
@@ -117,6 +125,14 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       const rate = ratesResult?.rates.find(r => r.object_id === pickedRate);
       const to = destAddress();
       if (!rate || !to) { setPurchaseMsg('Pick a rate first.'); return; }
+      // belt for races the invalidation effect can't win: the quote must
+      // describe EXACTLY the shipment on screen, or Shippo is charged for
+      // one shipment while the log records another
+      if (ratesResult!.sig !== quoteSig) {
+        setPurchaseMsg('The shipment details changed after these rates were fetched — re-fetch rates.');
+        setRatesResult(null); setPickedRate('');
+        return;
+      }
       // 1. DRAFT FIRST: a failed purchase leaves a visible, deletable draft;
       //    a succeeded purchase always has a home to finalize into
       let draftId: number | null = null;
@@ -195,6 +211,14 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     if (!txn) { setDraftMsg(m => ({ ...m, [t.id]: 'Paste the transaction id from the error message or the Shippo dashboard.' })); return; }
     try {
       const result = await getTransaction(shippoKey, txn);
+      // RATE-BOUND: a pasted id can be any label in the account — attaching
+      // one bought against a different rate would finalize the WRONG draft
+      // and decrement the wrong inventory. The draft's stored rate is the
+      // proof of ownership.
+      if (!t.shippo_rate_id || result.rateId !== t.shippo_rate_id) {
+        setDraftMsg(m => ({ ...m, [t.id]: `That transaction was purchased against a different rate than this draft (transaction rate ${result.rateId || 'unknown'}, draft rate ${t.shippo_rate_id || 'missing'}) — refusing to attach it. Find the right transaction in the Shippo dashboard.` }));
+        return;
+      }
       const fin = await doFinalize({ transfer_id: t.id, transaction_id: result.transactionId, tracking_number: result.trackingNumber, label_url: result.labelUrl, actor: userName }) as unknown[] | null;
       if (Array.isArray(fin) ? fin.length > 0 : !!fin) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
       else setDraftMsg(m => ({ ...m, [t.id]: 'Transaction found but saving failed — retry.' }));

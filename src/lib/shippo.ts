@@ -115,6 +115,10 @@ export async function getRates(key: string, from: ShippoAddress, to: ShippoAddre
 
 export type PurchaseResult = {
   transactionId: string; trackingNumber: string; labelUrl: string;
+  // the rate the label was ACTUALLY purchased against — recovery flows
+  // must match this to the draft's stored rate before attaching, or a
+  // pasted transaction id could finalize the wrong transfer
+  rateId: string | null;
 };
 
 /**
@@ -138,7 +142,7 @@ export async function purchaseLabel(key: string, rateObjectId: string): Promise<
 }
 
 async function resolveTransaction(key: string, res: Response): Promise<PurchaseResult> {
-  type Txn = { object_id?: string; status?: string; tracking_number?: string; label_url?: string; messages?: { text?: string; code?: string; source?: string }[] };
+  type Txn = { object_id?: string; status?: string; tracking_number?: string; label_url?: string; rate?: string | { object_id?: string }; messages?: { text?: string; code?: string; source?: string }[] };
   if (!res.ok && res.status !== 400) {
     // 400s still carry a transaction body with messages; other statuses don't
     if (res.status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
@@ -152,7 +156,10 @@ async function resolveTransaction(key: string, res: Response): Promise<PurchaseR
     if (poll?.ok) txn = await poll.json().catch(() => txn) as Txn;
   }
   if (txn && txn.status === 'SUCCESS' && txn.label_url) {
-    return { transactionId: txn.object_id || '', trackingNumber: txn.tracking_number || '', labelUrl: txn.label_url };
+    return {
+      transactionId: txn.object_id || '', trackingNumber: txn.tracking_number || '', labelUrl: txn.label_url,
+      rateId: (typeof txn.rate === 'string' ? txn.rate : txn.rate?.object_id) || null,
+    };
   }
   const msgs = (txn?.messages || []).map(m => m.text || m.code || '').filter(Boolean).join('; ');
   if (txn && (txn.status === 'QUEUED' || txn.status === 'WAITING')) {
@@ -194,7 +201,7 @@ export async function findTransactionByRate(key: string, rateId: string): Promis
     const matches = (body.results || []).filter(t =>
       (typeof t.rate === 'string' ? t.rate : t.rate?.object_id) === rateId);
     const success = matches.find(t => t.status === 'SUCCESS' && t.label_url);
-    if (success) return { transactionId: success.object_id || '', trackingNumber: success.tracking_number || '', labelUrl: success.label_url! };
+    if (success) return { transactionId: success.object_id || '', trackingNumber: success.tracking_number || '', labelUrl: success.label_url!, rateId };
     if (matches.some(t => t.status === 'QUEUED' || t.status === 'WAITING')) {
       throw new Error('A purchase for this rate is still processing at Shippo — wait a minute and check again; do NOT re-purchase or delete.');
     }
