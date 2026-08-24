@@ -3,7 +3,12 @@ import { action } from '@uibakery/data';
 /**
  * Create or update a reusable receive address, keyed on its label (the
  * short UI name). All Shippo-required fields enforced non-blank so a
- * saved address can always be used as a label ship-from. Audited.
+ * saved address can always be used as a label ship-from. Updating an
+ * ARCHIVED label refuses (zero rows): this upsert never reactivates,
+ * so a "saved" on an archived label would look like success while the
+ * label stayed unusable — restore it first (Addresses tab). Enforced
+ * here, not just in previews, so a concurrent archive between preview
+ * and import cannot slip through. Audited.
  */
 function saveReceiveAddress() {
   return action('saveReceiveAddress', 'SQL', {
@@ -23,6 +28,7 @@ function saveReceiveAddress() {
           name = EXCLUDED.name, street1 = EXCLUDED.street1, street2 = EXCLUDED.street2,
           city = EXCLUDED.city, state = EXCLUDED.state, zip = EXCLUDED.zip,
           country = EXCLUDED.country, phone = EXCLUDED.phone, email = EXCLUDED.email
+        WHERE receive_addresses.active
         RETURNING id, label
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

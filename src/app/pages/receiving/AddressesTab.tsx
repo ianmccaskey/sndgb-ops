@@ -96,7 +96,7 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
         phone: d.phone, email: d.email, actor: userName,
       }) as unknown[] | null;
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
-        setMsg('Not saved — label, recipient, street, city, state, and zip are required (Shippo needs a complete address).');
+        setMsg('Not saved — label, recipient, street, city, state, and zip are required (Shippo needs a complete address). If this label is archived, Restore it first.');
         return false;
       }
       (kind === 'address' ? reloadAddresses : reloadDestinations)();

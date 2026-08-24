@@ -3,7 +3,9 @@ import { useMutateAction } from '@uibakery/data';
 import saveReceiveAddress from '@/actions/receiving/saveReceiveAddress';
 import createInboundPackage from '@/actions/receiving/createInboundPackage';
 import commitInboundPackage from '@/actions/receiving/commitInboundPackage';
+import listReceiveAddresses from '@/actions/receiving/listReceiveAddresses';
 import { parseCsv, headerIndex } from '@/lib/csv';
+import { rows as actionRows } from '@/lib/rows';
 import { useApp } from '@/app/AppContext';
 import { fmtNum } from '@/lib/fmt';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -59,6 +61,20 @@ function rowWidthError(rows: string[][]): string | null {
   return `Column-count mismatch — the header has ${width} columns but ${bad.slice(0, 5).join(', ')}${bad.length > 5 ? `, … (${bad.length} rows total)` : ''}. A stray unquoted comma or a missing field shifts data under the wrong headers; quote fields containing commas and keep every column (empty is fine).`;
 }
 
+// the ONE label→address contract, shared by preview and import-time
+// revalidation: labels are unique CASE-SENSITIVELY, so prefer the
+// exact-case match; a case-insensitive match is accepted only when it
+// is UNAMBIGUOUS — multiple candidates refuse rather than guess
+// (mis-routed inventory is expensive to unwind)
+function resolveAddress(list: RxAddress[], label: string): { addr: RxAddress | undefined; ambiguous: RxAddress[] } {
+  const ci = list.filter(a => a.active && a.label.toLowerCase() === label.toLowerCase());
+  const exact = ci.find(a => a.label === label);
+  return {
+    addr: exact || (ci.length === 1 ? ci[0] : undefined),
+    ambiguous: !exact && ci.length > 1 ? ci : [],
+  };
+}
+
 function qtyToCents(raw: string): number | null {
   const t = raw.trim();
   if (!/^\d+(?:\.\d{1,2})?$/.test(t) || !(Number(t) > 0)) return null;
@@ -74,6 +90,10 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
   const [doSaveAddress] = useMutateAction(saveReceiveAddress);
   const [doCreatePkg] = useMutateAction(createInboundPackage);
   const [doCommitPkg] = useMutateAction(commitInboundPackage);
+  // imperative fetch for import-time revalidation (a SELECT through the
+  // mutate hook) — the addresses prop is a preview-time snapshot that a
+  // second admin can invalidate before Import is clicked
+  const [fetchAddresses] = useMutateAction(listReceiveAddresses);
 
   // ---------- addresses ----------
   const [aText, setAText] = useState('');
@@ -189,7 +209,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
         }) as unknown[] | null;
         results.push(Array.isArray(res) && res.length > 0
           ? `line ${row.line} (${row.label}): saved`
-          : `line ${row.line} (${row.label}): REFUSED — check required fields`);
+          : `line ${row.line} (${row.label}): REFUSED — check required fields, or the label is ARCHIVED (restore it on the Addresses tab first)`);
       } catch (e: unknown) {
         results.push(`line ${row.line} (${row.label}): FAILED — ${e instanceof Error ? e.message : 'error'}`);
       }
@@ -243,14 +263,8 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       // package's contents while the rest of the run imports fine. It is
       // collected as FATAL: no preview, no import, until the row is fixed.
       if (!tracking || !carrier) { rowErrors.push(`line ${line}: missing carrier or tracking`); continue; }
-      // labels are unique CASE-SENSITIVELY, so 'Home' and 'home' can both
-      // exist: prefer the exact-case match; a case-insensitive match is
-      // accepted only when it is UNAMBIGUOUS — multiple candidates refuse
-      // rather than guess (mis-routed inventory is expensive to unwind)
-      const ciMatches = addresses.filter(a => a.active && a.label.toLowerCase() === addrLabel.toLowerCase());
-      const exact = ciMatches.find(a => a.label === addrLabel);
-      const addr = exact || (ciMatches.length === 1 ? ciMatches[0] : undefined);
-      const addrAmbiguous = !exact && ciMatches.length > 1;
+      const { addr, ambiguous } = resolveAddress(addresses, addrLabel);
+      const addrAmbiguous = ambiguous.length > 0;
       const vendor = vendorCode ? vendors.find(v => v.shippable && v.code.toLowerCase() === vendorCode.toLowerCase()) : null;
       // only sku_code is unique in the schema — display names are not, and
       // two active products can legitimately share one. Resolve SKU-first
@@ -279,7 +293,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
           items: [], ok: true, reasons: [], warnings: [],
         };
         if (!addrLabel) g.reasons.push('missing address');
-        else if (addrAmbiguous) g.reasons.push(`address "${addrLabel}" is AMBIGUOUS — multiple active labels differ only by case (${ciMatches.map(a => `"${a.label}"`).join(', ')}); use the exact label`);
+        else if (addrAmbiguous) g.reasons.push(`address "${addrLabel}" is AMBIGUOUS — multiple active labels differ only by case (${ambiguous.map(a => `"${a.label}"`).join(', ')}); use the exact label`);
         else if (!addr) g.reasons.push(`address "${addrLabel}" not found among ACTIVE receive addresses`);
         if (vendorCode && !vendor) g.reasons.push(`vendor "${vendorCode}" is not a shipping vendor for this buy`);
         if (!KNOWN_CARRIERS.includes(carrier)) g.warnings.push(`carrier "${carrier}" is not a known Shippo token — it will be sent as-is`);
@@ -294,7 +308,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
         const rowAddrId = addr ? Number(addr.id) : null;
         const sameAddr = addrLabel === g.addressLabel
           || (rowAddrId !== null && g.addressId !== null && rowAddrId === g.addressId);
-        if (addrAmbiguous) g.reasons.push(`line ${line}: address "${addrLabel}" is AMBIGUOUS — multiple active labels differ only by case (${ciMatches.map(a => `"${a.label}"`).join(', ')}); use the exact label`);
+        if (addrAmbiguous) g.reasons.push(`line ${line}: address "${addrLabel}" is AMBIGUOUS — multiple active labels differ only by case (${ambiguous.map(a => `"${a.label}"`).join(', ')}); use the exact label`);
         else if (!sameAddr) g.reasons.push(`line ${line}: same tracking with a DIFFERENT address ("${addrLabel}" vs "${g.addressLabel}")`);
         if (vendorCode.toLowerCase() !== g.vendorCode.toLowerCase()) g.reasons.push(`line ${line}: same tracking with a DIFFERENT vendor ("${vendorCode}" vs "${g.vendorCode}")`);
         if (!g.note && note) g.note = note;
@@ -326,9 +340,28 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
     if (!pGroups) return;
     setPBusy(true); setPResults([]);
     const results: string[] = [];
+    // preview resolution can go stale between Parse and Import (second
+    // admin archives an address or creates a case-distinct label), so
+    // re-resolve every label against FRESH server data with the same
+    // contract and require the same address record — any drift skips
+    // the group instead of importing to an address the operator never
+    // reviewed. If the fresh fetch itself fails, refuse the whole run.
+    let freshAddresses: RxAddress[];
+    try {
+      freshAddresses = actionRows<RxAddress>(await fetchAddresses({}));
+    } catch (e: unknown) {
+      setPResults([`FAILED — could not re-check addresses before import (${e instanceof Error ? e.message : 'error'}); nothing was written`]);
+      setPBusy(false);
+      return;
+    }
     for (const g of pGroups) {
       const tag = `${g.carrier.toUpperCase()} ${g.tracking}`;
       if (!g.ok) { results.push(`${tag}: skipped — ${g.reasons[0]}`); continue; }
+      const fresh = resolveAddress(freshAddresses, g.addressLabel);
+      if (!fresh.addr || Number(fresh.addr.id) !== g.addressId) {
+        results.push(`${tag}: skipped — address "${g.addressLabel}" changed since the preview (archived, renamed, or a case-variant label was added); re-parse and review again`);
+        continue;
+      }
       // create and commit are separate write boundaries: once create
       // returns an id, a package EXISTS in the database, so any later
       // failure must be reported as a recoverable draft — never as a
