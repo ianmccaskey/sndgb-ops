@@ -39,6 +39,14 @@ export type TransferRow = {
   items: { product_id: number; sku_code: string; qty: string }[] | null;
 };
 export type CatalogProduct = { id: number; sku_code: string; name: string; mass_label: string | null; active: boolean };
+// one outstanding vendor-direct order line + its order's ship-to — a
+// candidate destination for shipping a box straight to the customer
+export type DirectShipCandidate = {
+  item_id: number; order_id: number; order_number: string; customer_name: string;
+  contact_name: string | null; contact_phone: string | null; contact_email: string | null;
+  address_line1: string; address_line2: string | null; city: string; state_code: string; postal_code: string;
+  product_id: number; sku_code: string; qty: string;
+};
 export type VendorRow = { id: number; code: string; active: boolean; shippable: boolean };
 
 // stable per-product chip colors — LITERAL class strings (Tailwind purge

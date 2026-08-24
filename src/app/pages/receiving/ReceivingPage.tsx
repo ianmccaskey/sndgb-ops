@@ -166,7 +166,7 @@ export function ReceivingPage() {
         </TabsContent>
         <TabsContent value="transfers" className="mt-4">
           <TransfersTab
-            addresses={addresses} destinations={destinations} products={products}
+            addresses={addresses} destinations={destinations} products={products} packages={packages}
             transfers={transfers} inventory={inventory} shippoKey={shippoKey} shippoHttp={shippoHttp} testMode={testMode}
             reloadTransfers={() => { reloadTransfers(); reloadInventory(); }}
             reloadDestinations={reloadDestinations}

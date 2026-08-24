@@ -77,6 +77,9 @@ type ItemRow = {
   item_source: string; product_external_id: string | null;
   qty_override: string | null; removed_at: string | null; split_fee_usd: string;
   sku_code: string; product_name: string;
+  // the label WE bought for this direct line (joined from the transfer
+  // log through transfers.direct_order_item_id — never a copied value)
+  direct_carrier: string | null; direct_tracking_number: string | null;
 };
 type PaymentRow = {
   id: number; method: string; tx_hash: string | null; receipt_ref: string | null;
@@ -1289,9 +1292,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         {it.direct_ship && (
                           <span
                             className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${it.direct_fulfilled_at ? 'bg-green-100 text-green-900' : 'bg-violet-100 text-violet-900'}`}
-                            title={`${it.direct_ship_source === 'manual' ? 'Set manually here' : 'From the ordering app'}${it.direct_fulfilled_at ? ` · vendor shipped ${fmtDateTime(it.direct_fulfilled_at)}` : ' · vendor has not shipped yet'}`}
+                            title={`${it.direct_ship_source === 'manual' ? 'Set manually here' : 'From the ordering app'}${it.direct_fulfilled_at ? ` · shipped ${fmtDateTime(it.direct_fulfilled_at)}` : ' · not shipped yet'}${it.direct_tracking_number ? ` · ${(it.direct_carrier || '').toUpperCase()} ${it.direct_tracking_number} (label bought via Receiving → Transfers)` : ''}`}
                           >
                             {it.direct_fulfilled_at ? 'direct ✓' : 'direct ship'}
+                          </span>
+                        )}
+                        {it.direct_tracking_number && (
+                          <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap" title="Tracking from the transfer label bought for this line">
+                            {(it.direct_carrier || '').toUpperCase()} {it.direct_tracking_number}
                           </span>
                         )}
                       </span>

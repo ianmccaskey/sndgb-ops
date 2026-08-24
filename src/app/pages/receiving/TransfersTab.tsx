@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { useMutateAction } from '@uibakery/data';
+import { useLoadAction, useMutateAction } from '@uibakery/data';
 import createTransfer from '@/actions/receiving/createTransfer';
+import listDirectShipCandidates from '@/actions/receiving/listDirectShipCandidates';
 import markTransferPurchaseStarted from '@/actions/receiving/markTransferPurchaseStarted';
 import clearTransferPurchaseLease from '@/actions/receiving/clearTransferPurchaseLease';
 import clearTransferAttemptVerified from '@/actions/receiving/clearTransferAttemptVerified';
@@ -17,8 +18,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { rows } from '@/lib/rows';
 import { productChipClass } from './shared';
-import type { RxAddress, CatalogProduct, TransferRow, InvRow } from './shared';
+import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCandidate } from './shared';
 
 type ItemLine = { product: string; qty: string };
 
@@ -30,13 +32,17 @@ const toShippoAddress = (a: RxAddress | CustomDest): ShippoAddress => ({
 type CustomDest = { name: string; street1: string; street2: string; city: string; state: string; zip: string; country: string; phone: string; email: string };
 const EMPTY_DEST: CustomDest = { name: '', street1: '', street2: '', city: '', state: '', zip: '', country: 'US', phone: '', email: '' };
 
-export function TransfersTab({ addresses, destinations, products, transfers, inventory, shippoKey, shippoHttp, testMode, reloadTransfers, reloadDestinations }: {
-  addresses: RxAddress[]; destinations: RxAddress[]; products: CatalogProduct[];
+export function TransfersTab({ addresses, destinations, products, packages, transfers, inventory, shippoKey, shippoHttp, testMode, reloadTransfers, reloadDestinations }: {
+  addresses: RxAddress[]; destinations: RxAddress[]; products: CatalogProduct[]; packages: Pkg[];
   transfers: TransferRow[]; inventory: InvRow[]; shippoKey: string; shippoHttp: ShippoHttp; testMode: boolean;
   reloadTransfers: () => void; reloadDestinations: () => void;
 }) {
   void reloadDestinations;
-  const { userName } = useApp();
+  const { userName, groupBuyId } = useApp();
+  // outstanding vendor-direct order lines (money-gated server-side) —
+  // offered as destinations when the transfer carries their product
+  const [rawDirectShips, , , reloadDirectShips] = useLoadAction(listDirectShipCandidates, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
+  const directShips = rows<DirectShipCandidate>(rawDirectShips);
   const [doCreate] = useMutateAction(createTransfer);
   const [doClaimPurchase] = useMutateAction(markTransferPurchaseStarted);
   const [doClearLease] = useMutateAction(clearTransferPurchaseLease);
@@ -46,7 +52,10 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const [doSetRefund] = useMutateAction(setTransferRefund);
 
   const [fFrom, setFFrom] = useState('');
-  const [fDest, setFDest] = useState('');      // destination id or '__custom__'
+  const [fDest, setFDest] = useState('');      // destination id, '__custom__', or 'ds_<order item id>'
+  // the received box whose contents were loaded into the item lines —
+  // purely a form-filling aid; the transfer itself stays product+qty based
+  const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
   const [custom, setCustom] = useState<CustomDest>(EMPTY_DEST);
   const [dims, setDims] = useState({ length: '', width: '', height: '', weight: '' });
   const [fLines, setFLines] = useState<ItemLine[]>([{ product: '', qty: '' }]);
@@ -57,6 +66,8 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const [pickedRate, setPickedRate] = useState('');
   const [purchaseMsg, setPurchaseMsg] = useState('');
   const [success, setSuccess] = useState<PurchaseResult | null>(null);
+  // outcome line for the linked direct-ship order (stamped / already done)
+  const [successDirect, setSuccessDirect] = useState('');
   // purchase results that landed but failed to persist — retry finalize
   // WITHOUT re-buying (keyed by draft id)
   const [pendingFinalize, setPendingFinalize] = useState<Record<number, PurchaseResult>>({});
@@ -73,28 +84,55 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   // refusal, so the caller's recovery branch (pendingFinalize + label URL
   // + transaction id) always runs — a charged label must never lose its
   // recovery handles to an exception path
-  const persistFinalize = async (transferId: number, result: PurchaseResult, rateFallback: string): Promise<boolean> => {
+  const persistFinalize = async (transferId: number, result: PurchaseResult, rateFallback: string): Promise<{ ok: boolean; directItemId: number | null; directStamped: boolean }> => {
     try {
       const fin = await doFinalize({
         transfer_id: transferId, transaction_id: result.transactionId,
         tracking_number: result.trackingNumber, label_url: result.labelUrl,
         rate_id: result.rateId || rateFallback, actor: userName,
       }) as unknown[] | null;
-      return Array.isArray(fin) ? fin.length > 0 : !!fin;
+      const row = Array.isArray(fin) && fin.length > 0 ? fin[0] as { direct_order_item_id: string | null; direct_stamped: string | number } : null;
+      if (!row) return { ok: false, directItemId: null, directStamped: false };
+      // the draft's linked direct-ship order line completes inside the same
+      // finalize statement; report whether the stamp actually landed (it
+      // refuses harmlessly if the line was fulfilled/removed meanwhile)
+      if (row.direct_order_item_id != null) reloadDirectShips();
+      return { ok: true, directItemId: row.direct_order_item_id != null ? Number(row.direct_order_item_id) : null, directStamped: Number(row.direct_stamped) > 0 };
     } catch {
-      return false;
+      return { ok: false, directItemId: null, directStamped: false };
     }
   };
+
+  // the direct-ship order line currently picked as the destination
+  const directCandidate = fDest.startsWith('ds_')
+    ? directShips.find(c => String(c.item_id) === fDest.slice(3)) || null
+    : null;
 
   const destAddress = (): ShippoAddress | null => {
     if (fDest === '__custom__') {
       if (!custom.name || !custom.street1 || !custom.city || !custom.state || !custom.zip) return null;
       return toShippoAddress(custom);
     }
+    if (fDest.startsWith('ds_')) {
+      if (!directCandidate) return null;
+      const c = directCandidate;
+      if (!c.address_line1 || !c.city || !c.state_code || !c.postal_code) return null;
+      return {
+        name: c.contact_name || c.customer_name, street1: c.address_line1,
+        street2: c.address_line2 || undefined as unknown as string,
+        city: c.city, state: c.state_code, zip: c.postal_code, country: 'US',
+        phone: c.contact_phone || undefined as unknown as string,
+        email: c.contact_email || undefined as unknown as string,
+      };
+    }
     const d = destinations.find(x => String(x.id) === fDest);
     return d ? toShippoAddress(d) : null;
   };
-  const destLabel = fDest === '__custom__' ? (custom.name || 'custom') : (destinations.find(x => String(x.id) === fDest)?.label || '');
+  const destLabel = fDest === '__custom__'
+    ? (custom.name || 'custom')
+    : directCandidate
+      ? `Direct: ${directCandidate.customer_name} #${directCandidate.order_number}`
+      : (destinations.find(x => String(x.id) === fDest)?.label || '');
 
   const onHand = (productId: number) =>
     Number(inventory.find(r => String(r.receive_address_id) === fFrom && r.product_id === productId)?.on_hand_qty || 0);
@@ -107,6 +145,9 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const quoteSig = JSON.stringify({
     fFrom, from: addresses.find(a => String(a.id) === fFrom) || null,
     fDest, dest: destinations.find(d => String(d.id) === fDest) || null,
+    // direct-ship CONTENT too: a refreshed candidate list with a changed
+    // ship-to (order re-imported with a new address) re-quotes
+    direct: directCandidate,
     custom, dims,
   });
   React.useEffect(() => {
@@ -206,10 +247,13 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         country: fromRow.country, phone: fromRow.phone, email: fromRow.email,
       };
       // the SAVED destination the quote was priced for — the server refuses
-      // if that row was edited or archived since; custom destinations skip
-      // this (they only exist in this form)
-      const destRow = fDest !== '__custom__' ? destinations.find(d => String(d.id) === fDest) : null;
-      if (fDest !== '__custom__' && !destRow) { setPurchaseMsg('Destination not found — reload the page.'); return; }
+      // if that row was edited or archived since; custom and direct-ship
+      // destinations skip this (their snapshots live in this form / the
+      // order row, and the direct LINE is separately validated in the fn)
+      const isDirect = fDest.startsWith('ds_');
+      const destRow = fDest !== '__custom__' && !isDirect ? destinations.find(d => String(d.id) === fDest) : null;
+      if (fDest !== '__custom__' && !isDirect && !destRow) { setPurchaseMsg('Destination not found — reload the page.'); return; }
+      if (isDirect && !directCandidate) { setPurchaseMsg('That direct-ship order line is no longer available (fulfilled or changed) — pick another destination.'); return; }
       const expectedDest = destRow ? {
         name: destRow.name, street1: destRow.street1, street2: destRow.street2,
         city: destRow.city, state: destRow.state, zip: destRow.zip,
@@ -228,6 +272,9 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         expected_from: JSON.stringify(expectedFrom),
         destination_id: destRow ? String(destRow.id) : '',
         expected_destination: expectedDest ? JSON.stringify(expectedDest) : '',
+        // the fn re-validates this line AT WRITE TIME: outstanding,
+        // money-gated, and its product among the transfer's items
+        direct_order_item_id: directCandidate ? String(directCandidate.item_id) : '',
         note: fNote.trim(), actor: userName,
       });
       try {
@@ -253,7 +300,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
           : (m || 'Failed to save the transfer draft.') + ' Nothing was saved or purchased.');
         return;
       }
-      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a line exceeds on-hand (retry to re-confirm), or the ship-from address was edited or archived since rates were fetched — reload and re-quote.'); return; }
+      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived since rates were fetched, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, or its product is not on this transfer) — reload and re-quote.'); return; }
       // 2. HEARTBEAT immediately before money moves: if this tab slept
       //    long enough for the birth lease to age out and another session
       //    deleted or re-claimed the draft, the own-token refresh returns
@@ -285,15 +332,22 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         return;
       }
       // 4. persist — retryable from memory if this write fails or THROWS
-      const finOk = await persistFinalize(draftId, result, rate.object_id);
-      if (!finOk) {
+      const fin = await persistFinalize(draftId, result, rate.object_id);
+      if (!fin.ok) {
         setPendingFinalize(m => ({ ...m, [draftId!]: result }));
         setPurchaseMsg(`LABEL PURCHASED (transaction ${result.transactionId}) but saving failed — label: ${result.labelUrl} — use "Retry save" on the draft below; do NOT purchase again.`);
         reloadTransfers();
         return;
       }
       setSuccess(result);
+      setSuccessDirect(fin.directItemId != null
+        ? (fin.directStamped
+          ? `Order ${directCandidate ? '#' + directCandidate.order_number + ' (' + directCandidate.customer_name + ')' : ''} marked direct-shipped — the tracking number is now on the customer's order line.`
+          : 'NOTE: the linked order line was already marked fulfilled (or changed) by another session — verify in the order sheet before shipping.')
+        : '');
       setRatesResult(null); setPickedRate(''); setFLines([{ product: '', qty: '' }]); setFNote('');
+      setSelectedBoxId(null);
+      if (fDest.startsWith('ds_')) setFDest('');
       reloadTransfers();
     } finally {
       purchaseInFlight.current = false;
@@ -304,7 +358,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const retryFinalize = async (t: TransferRow) => {
     const pending = pendingFinalize[t.id];
     if (!pending) return;
-    const finOk = await persistFinalize(t.id, pending, t.shippo_rate_id || '');
+    const finOk = (await persistFinalize(t.id, pending, t.shippo_rate_id || '')).ok;
     if (finOk) {
       setPendingFinalize(m => { const n = { ...m }; delete n[t.id]; return n; });
       setDraftMsg(m => ({ ...m, [t.id]: '' }));
@@ -325,7 +379,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         setDraftMsg(m => ({ ...m, [t.id]: `That transaction was purchased against a different rate than this draft (transaction rate ${result.rateId || 'unknown'}, draft rate ${t.shippo_rate_id || 'missing'}) — refusing to attach it. Find the right transaction in the Shippo dashboard.` }));
         return;
       }
-      const finOk = await persistFinalize(t.id, result, result.rateId || '');
+      const finOk = (await persistFinalize(t.id, result, result.rateId || '')).ok;
       if (finOk) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
       else setDraftMsg(m => ({ ...m, [t.id]: 'Transaction found but saving failed — retry.' }));
     } catch (e: unknown) {
@@ -348,7 +402,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         return;
       }
       if (existing) {
-        const fin0Ok = await persistFinalize(t.id, existing, t.shippo_rate_id);
+        const fin0Ok = (await persistFinalize(t.id, existing, t.shippo_rate_id)).ok;
         if (fin0Ok) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
         else setDraftMsg(m => ({ ...m, [t.id]: `An existing label was found (${existing.transactionId}) but saving failed — retry.` }));
         return;
@@ -381,7 +435,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         }
         throw e;
       }
-      const finOk = await persistFinalize(t.id, result, t.shippo_rate_id);
+      const finOk = (await persistFinalize(t.id, result, t.shippo_rate_id)).ok;
       if (finOk) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
       else {
         setPendingFinalize(m => ({ ...m, [t.id]: result }));
@@ -410,7 +464,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     try {
       const existing = await findTransactionByRate(shippoHttp, shippoKey, t.shippo_rate_id, t.created_at);
       if (existing) {
-        const finOk = await persistFinalize(t.id, existing, t.shippo_rate_id);
+        const finOk = (await persistFinalize(t.id, existing, t.shippo_rate_id)).ok;
         setDraftMsg(m => ({ ...m, [t.id]: finOk
           ? ''
           : `A PURCHASED label exists for this draft (${existing.transactionId}) — recovered instead of deleting, but saving failed — retry.` }));
@@ -531,13 +585,29 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
   const finalized = transfers.filter(t => !!t.finalized_at);
   const labelSpendTotal = finalized.reduce((s, t) => s + Number(t.rate_amount || 0), 0);
 
+  // received boxes still at the selected ship-from address — clickable
+  // form-fillers: one click loads a box's contents into the item lines
+  const boxesAtFrom = packages.filter(p => String(p.receive_address_id) === fFrom && p.received_at && (p.items || []).length > 0);
+  // direct-ship destinations are offered only when the transfer actually
+  // carries the customer's product (the fn re-checks this at write time)
+  const lineProductIds = new Set(fLines.filter(l => l.product).map(l => Number(l.product)));
+  const directOptions = directShips.filter(c => lineProductIds.has(Number(c.product_id)));
+
+  // a picked direct-ship destination whose line vanished (fulfilled by
+  // another session, product removed from the lines, campaign reload)
+  // resets to unselected instead of silently quoting a dead target
+  React.useEffect(() => {
+    if (fDest.startsWith('ds_') && (!directCandidate || !lineProductIds.has(Number(directCandidate.product_id)))) setFDest('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fDest, directCandidate, JSON.stringify([...lineProductIds])]);
+
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">New transfer — buy a label via Shippo</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           <div className="flex flex-wrap gap-2">
-            <Select value={fFrom} onValueChange={setFFrom}>
+            <Select value={fFrom} onValueChange={v => { setFFrom(v); setSelectedBoxId(null); }}>
               <SelectTrigger className="h-9 flex-1 min-w-40"><SelectValue placeholder="Ship from (receive address)" /></SelectTrigger>
               <SelectContent>
                 {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}</SelectItem>)}
@@ -548,9 +618,52 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
               <SelectContent>
                 {destinations.filter(d => d.active).map(d => <SelectItem key={d.id} value={String(d.id)}>{d.label}</SelectItem>)}
                 <SelectItem value="__custom__">Custom address…</SelectItem>
+                {directOptions.map(c => (
+                  <SelectItem key={`ds_${c.item_id}`} value={`ds_${c.item_id}`}>
+                    Direct: {c.customer_name} #{c.order_number} — {c.sku_code} × {fmtNum(c.qty)}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
+          {fFrom && boxesAtFrom.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[11px] text-muted-foreground">
+                Boxes received at this address — click one to load its contents into the transfer (lines stay editable):
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {boxesAtFrom.map(b => {
+                  const sel = selectedBoxId === b.id;
+                  return (
+                    <button key={b.id} type="button"
+                      onClick={() => {
+                        setSelectedBoxId(b.id);
+                        setFLines((b.items || []).map(i => ({ product: String(i.product_id), qty: String(i.qty) })));
+                      }}
+                      className={`rounded-lg border p-2 text-left text-xs space-y-1 max-w-full ${sel ? 'border-violet-500 ring-1 ring-violet-500 bg-violet-50' : 'hover:bg-muted/50'}`}>
+                      <div className="font-mono text-[10px] text-muted-foreground break-all">
+                        {b.carrier.toUpperCase()} · {b.tracking_number}{b.vendor_code ? ` · ${b.vendor_code}` : ''}
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {(b.items || []).map(i => (
+                          <span key={i.product_id} className={`rounded text-[10px] font-semibold px-1.5 py-0.5 ${productChipClass(i.product_id)}`}>
+                            {i.name || i.sku_code} × {fmtNum(i.qty)}
+                          </span>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {directCandidate && (
+            <p className="text-[11px] text-muted-foreground">
+              Ships to {directCandidate.contact_name || directCandidate.customer_name}, {directCandidate.address_line1}
+              {directCandidate.address_line2 ? `, ${directCandidate.address_line2}` : ''}, {directCandidate.city}, {directCandidate.state_code} {directCandidate.postal_code}
+              {' '}— this customer ordered <span className="font-medium">{directCandidate.sku_code} × {fmtNum(directCandidate.qty)}</span>; buying the label marks that order line direct-shipped with this tracking number.
+            </p>
+          )}
           {fDest === '__custom__' && (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               <Input placeholder="Name" value={custom.name} onChange={e => setCustom(c => ({ ...c, name: e.target.value }))} className="h-9 col-span-2 sm:col-span-1" />
@@ -653,7 +766,10 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
                 <a href={success.labelUrl} target="_blank" rel="noreferrer" className="underline font-medium">Open label (PDF)</a>
                 {' '}— public unauthenticated link, don't share.
               </p>
-              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setSuccess(null)}>Done</Button>
+              {successDirect && (
+                <p className={`text-xs ${successDirect.startsWith('NOTE:') ? 'text-amber-800 font-medium' : ''}`}>{successDirect}</p>
+              )}
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setSuccess(null); setSuccessDirect(''); }}>Done</Button>
             </div>
           )}
         </CardContent>

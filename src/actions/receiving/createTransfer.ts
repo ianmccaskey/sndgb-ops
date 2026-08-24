@@ -10,8 +10,11 @@ import { action } from '@uibakery/data';
  * active + content-matched ship-from (expected_from) and SAVED
  * destination (destination_id + expected_destination; custom = NULL
  * bypass), state-aware draft reservations, the explicit over-on-hand
- * override, the birth purchase lease, and the audit row. Returns
- * (id, claimed_at); ZERO ROWS = refused.
+ * override, the birth purchase lease, and the audit row. Optional
+ * direct_order_item_id links ONE outstanding vendor-direct order line
+ * (validated inside the fn: outstanding, money-gated, product-matched)
+ * — finalizeTransfer stamps that line fulfilled when the label lands.
+ * Returns (id, claimed_at); ZERO ROWS = refused.
  */
 function createTransfer() {
   return action('createTransfer', 'SQL', {
@@ -33,7 +36,8 @@ function createTransfer() {
         NULLIF({{params.destination_id}}::text, '')::bigint,
         NULLIF({{params.expected_destination}}::text, '')::jsonb,
         {{params.note}}::text,
-        {{params.actor}}
+        {{params.actor}},
+        NULLIF({{params.direct_order_item_id}}::text, '')::bigint
       )
     `,
   });

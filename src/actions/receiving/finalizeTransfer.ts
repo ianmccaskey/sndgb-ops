@@ -9,7 +9,13 @@ import { action } from '@uibakery/data';
  * client or bad retry can never finalize the wrong draft. Retryable: a
  * purchase-succeeded-but-finalize-failed draft can call this again with
  * the same transaction data; the finalized guard makes a double-fire
- * refuse harmlessly. Audited.
+ * refuse harmlessly. If the draft carries direct_order_item_id, the
+ * SAME statement stamps that order line direct_fulfilled_at — every
+ * finalize path (primary, retry, recover-by-transaction) marks the
+ * customer's order; the returned direct_stamped tells the client
+ * whether it landed (0 = line was already fulfilled/removed meanwhile
+ * — surface, don't retry). Tracking is surfaced on the line by joining
+ * transfers through the link, so nothing is copied to drift. Audited.
  */
 function finalizeTransfer() {
   return action('finalizeTransfer', 'SQL', {
@@ -26,15 +32,46 @@ function finalizeTransfer() {
           AND TRIM({{params.transaction_id}}) <> ''
           AND TRIM({{params.label_url}}) <> ''
           AND t.shippo_rate_id = TRIM({{params.rate_id}})
-        RETURNING t.id, t.shippo_transaction_id, t.tracking_number, t.label_url, t.rate_amount
+        RETURNING t.id, t.shippo_transaction_id, t.tracking_number, t.label_url, t.rate_amount,
+                  t.carrier, t.direct_order_item_id
+      ),
+      -- the linked direct-ship line completes WITH the label, in the same
+      -- statement: only if it is still outstanding (never overwrites a
+      -- line fulfilled meanwhile — that shows up as direct_stamped = 0)
+      stamp AS (
+        UPDATE order_items oi
+        SET direct_fulfilled_at = now()
+        FROM up, orders o
+        WHERE up.direct_order_item_id IS NOT NULL
+          AND oi.id = up.direct_order_item_id
+          AND o.id = oi.order_id
+          AND o.status NOT IN ('cancelled', 'refunded')
+          AND oi.direct_ship AND oi.removed_at IS NULL
+          AND oi.direct_fulfilled_at IS NULL
+        RETURNING oi.id, oi.order_id
+      ),
+      stamp_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', s.id::text, 'direct_ship_label_attached', {{params.actor}},
+               jsonb_build_object('order_id', s.order_id, 'transfer_id', up.id,
+                                  'carrier', up.carrier, 'tracking_number', up.tracking_number)
+        FROM stamp s, up
+        RETURNING 1
+      ),
+      fin_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'transfers', up.id::text, 'transfer_finalized', {{params.actor}},
+               jsonb_build_object('shippo_transaction_id', up.shippo_transaction_id,
+                                  'tracking_number', up.tracking_number, 'label_url', up.label_url,
+                                  'rate_amount', up.rate_amount,
+                                  'direct_order_item_id', up.direct_order_item_id)
+        FROM up
+        RETURNING row_pk
       )
-      INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'transfers', up.id::text, 'transfer_finalized', {{params.actor}},
-             jsonb_build_object('shippo_transaction_id', up.shippo_transaction_id,
-                                'tracking_number', up.tracking_number, 'label_url', up.label_url,
-                                'rate_amount', up.rate_amount)
-      FROM up
-      RETURNING row_pk AS id
+      SELECT fin_audit.row_pk AS id,
+             up.direct_order_item_id,
+             (SELECT count(*) FROM stamp) AS direct_stamped
+      FROM fin_audit, up
     `,
   });
 }
