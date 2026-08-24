@@ -47,6 +47,10 @@ type AddrRow = {
 type PkgLine = { line: number; productId: number; sku: string; qtyCents: number };
 type PkgGroup = {
   key: string; carrier: string; tracking: string; addressId: number | null; addressLabel: string;
+  // the EXACT label of the resolved address record the operator reviewed
+  // — passed to the server as an identity-CAS so a rename between
+  // preview and write refuses instead of misrouting
+  addressResolvedLabel: string;
   vendorId: number | null; vendorCode: string; note: string;
   items: PkgLine[];
   ok: boolean; reasons: string[]; warnings: string[];
@@ -242,6 +246,11 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
           label: row.label, name: row.name, street1: row.street1, street2: row.street2,
           city: row.city, state: row.state, zip: row.zip, country: row.country,
           phone: row.phone, email: row.email, actor: userName,
+          // server-enforced reviewed intent: '' = reviewed as NEW (a
+          // concurrent create REFUSES instead of being overwritten),
+          // otherwise the exact record the operator reviewed as the
+          // update target — no client snapshot window can defeat this
+          expected_id: row.expectId === null ? '' : String(row.expectId),
         }) as unknown[] | null;
         results.push(Array.isArray(res) && res.length > 0
           ? `line ${row.line} (${row.label}): saved`
@@ -325,6 +334,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       if (!g) {
         g = {
           key, carrier, tracking, addressId: addr ? Number(addr.id) : null, addressLabel: addrLabel,
+          addressResolvedLabel: addr ? addr.label : '',
           vendorId: vendor ? Number(vendor.id) : null, vendorCode, note,
           items: [], ok: true, reasons: [], warnings: [],
         };
@@ -414,6 +424,9 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       let pkgId: number | null = null;
       try {
         const res = await doCreatePkg({
+          // server-side identity-CAS: the reviewed (id, label) pair must
+          // still hold when the row actually inserts
+          expected_label: g.addressResolvedLabel,
           receive_address_id: g.addressId, vendor_id: g.vendorId != null ? String(g.vendorId) : '',
           group_buy_id: groupBuyId ?? '',
           carrier: g.carrier, tracking_number: g.tracking, note: g.note,
@@ -428,7 +441,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
           : `${tag}: FAILED — nothing saved (${m || 'error'})`);
         continue;
       }
-      if (!pkgId) { results.push(`${tag}: REFUSED — nothing saved (address active? vendor eligible? counts valid?)`); continue; }
+      if (!pkgId) { results.push(`${tag}: REFUSED — nothing saved (address archived or renamed since preview? vendor eligible? counts valid?)`); continue; }
       try {
         const com = await doCommitPkg({ package_id: pkgId, actor: userName }) as unknown[] | null;
         results.push(Array.isArray(com) && com.length > 0

@@ -43,7 +43,15 @@ function createInboundPackage() {
                NULLIF(TRIM({{params.note}}::text), ''),
                {{params.actor}}
         WHERE TRIM({{params.carrier}}) <> '' AND TRIM({{params.tracking_number}}) <> ''
-          AND EXISTS (SELECT 1 FROM receive_addresses ra WHERE ra.id = {{params.receive_address_id}}::bigint AND ra.active)
+          -- expected_label ('' = no expectation, manual flow) is the
+          -- identity-CAS for CSV imports: the reviewed (id, label) pair
+          -- must still hold AT WRITE TIME, so a rename between preview
+          -- and write refuses instead of routing to a record the
+          -- operator never approved
+          AND EXISTS (SELECT 1 FROM receive_addresses ra
+                      WHERE ra.id = {{params.receive_address_id}}::bigint AND ra.active
+                        AND (NULLIF({{params.expected_label}}::text, '') IS NULL
+                             OR ra.label = {{params.expected_label}}))
           AND (NULLIF({{params.vendor_id}}::text, '') IS NULL
                OR EXISTS (
                  SELECT 1 FROM vendors v

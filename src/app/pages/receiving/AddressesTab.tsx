@@ -94,6 +94,9 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
         label: d.label, name: d.name, street1: d.street1, street2: d.street2,
         city: d.city, state: d.state, zip: d.zip, country: 'US',
         phone: d.phone, email: d.email, actor: userName,
+        // 'any': the manual form's semantic IS upsert-by-label — the
+        // operator just typed this label deliberately
+        expected_id: 'any',
       }) as unknown[] | null;
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
         setMsg('Not saved — label, recipient, street, city, state, and zip are required (Shippo needs a complete address). If this label is archived, Restore it first.');

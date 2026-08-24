@@ -144,6 +144,9 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
       let res: unknown[] | null;
       try {
         res = await doCreate({
+          // no label expectation: the operator picked this address by id
+          // from the live list moments ago
+          expected_label: '',
           receive_address_id: Number(fAddr), vendor_id: fVendor || '',
           // the action re-checks vendor eligibility against THIS campaign
           group_buy_id: groupBuyId ?? '',

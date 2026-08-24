@@ -29,6 +29,15 @@ function saveReceiveAddress() {
           city = EXCLUDED.city, state = EXCLUDED.state, zip = EXCLUDED.zip,
           country = EXCLUDED.country, phone = EXCLUDED.phone, email = EXCLUDED.email
         WHERE receive_addresses.active
+          -- expected_id is the caller's reviewed intent: 'any' (manual
+          -- form — the operator just typed this label, upsert-by-label
+          -- is the semantic), '' (reviewed as a NEW label — a concurrent
+          -- create must REFUSE, never be silently overwritten), or the
+          -- id of the record reviewed as the update target (drift to a
+          -- different record refuses). Enforced here so no client
+          -- snapshot window can turn a reviewed create into an overwrite.
+          AND ({{params.expected_id}}::text = 'any'
+               OR receive_addresses.id = NULLIF({{params.expected_id}}::text, '')::bigint)
         RETURNING id, label
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
