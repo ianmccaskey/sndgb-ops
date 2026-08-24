@@ -10,11 +10,17 @@ Exact contract (any drift breaks all tracking/rates/labels/refunds):
 - **Type:** HTTP API
 - **Name:** `Shippo API` (exact — the actions bind by this name)
 - **Base URL:** `https://api.goshippo.com` (no trailing path)
-- **Headers / Query params / Auth:** none required. The Authorization
-  header travels per-request from the app (`ShippoToken <key>` with the
-  key from Settings → Shippo). Optionally the operator may instead store
-  `Authorization: ShippoToken <key>` here and blank the Settings key —
-  that keeps the key fully server-side.
+- **Headers / Query params / Auth:** none. The Authorization header
+  travels per-request from the app (`ShippoToken <key>` with the key
+  from Settings → Shippo) — the actions always send it, so a
+  datasource-stored Authorization header would be shadowed/conflict and
+  is NOT currently supported. Moving the key fully server-side is a
+  COORDINATED change: (1) operator stores
+  `Authorization: ShippoToken <key>` in this datasource's Headers,
+  (2) a code commit removes the templated Authorization header and the
+  `token` param from shippoGet/shippoPost, (3) verify precedence with
+  Settings → Test Shippo connection, (4) blank the Settings key. Do not
+  do step 1 alone.
 
 To recreate: workspace sidebar → Data Sources → Connect → HTTP API →
 fill the fields above → Connect Datasource.

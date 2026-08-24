@@ -411,9 +411,17 @@ export async function requestRefund(http: ShippoHttp, key: string, transactionId
   try {
     body = unwrap(await http.post(key.trim(), '/refunds/', { transaction: transactionId, async: false }));
   } catch (e: unknown) {
-    const { status, message } = normalizeError(e);
-    if (status !== null && status < 500) throw new Error(`Shippo refused the refund request (HTTP ${status}): ${message.slice(0, 200)}`);
+    const { message } = normalizeError(e);
     throw new Error(`The refund request did not confirm (${message.slice(0, 160)}) — use "Re-check" to reconcile with Shippo before trying again.`);
   }
-  return (body as { status?: string } | null)?.status || 'REFUNDPENDING';
+  // POSITIVE schema gate, like every other proof path: only a payload
+  // that is structurally a Shippo refund object (status + transaction)
+  // may be recorded as a real request — an unrecognized success envelope
+  // throws, leaving the row in REQUESTING for verified reconciliation.
+  if (!body || typeof body !== 'object'
+      || typeof (body as Record<string, unknown>).status !== 'string'
+      || !('transaction' in (body as Record<string, unknown>))) {
+    throw new Error('The refund response came back in an unrecognized shape — use "Re-check" to reconcile with Shippo before trying again.');
+  }
+  return (body as { status: string }).status || 'REFUNDPENDING';
 }
