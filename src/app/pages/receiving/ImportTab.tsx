@@ -209,8 +209,18 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       const addr = exact || (ciMatches.length === 1 ? ciMatches[0] : undefined);
       const addrAmbiguous = !exact && ciMatches.length > 1;
       const vendor = vendorCode ? vendors.find(v => v.shippable && v.code.toLowerCase() === vendorCode.toLowerCase()) : null;
-      const product = products.find(p => p.sku_code.toLowerCase() === sku.toLowerCase())
-        || products.find(p => p.name.toLowerCase() === sku.toLowerCase());
+      // only sku_code is unique in the schema — display names are not, and
+      // two active products can legitimately share one. Resolve SKU-first
+      // (exact case preferred, case-insensitive only when unique), then
+      // fall back to name ONLY when exactly one active product matches;
+      // any ambiguity refuses the line with the candidate SKUs listed
+      // instead of silently crediting whichever product loaded first.
+      const skuCi = products.filter(p => p.sku_code.toLowerCase() === sku.toLowerCase());
+      const skuExact = skuCi.find(p => p.sku_code === sku);
+      const nameCi = skuCi.length === 0 ? products.filter(p => p.name.toLowerCase() === sku.toLowerCase()) : [];
+      const product = skuExact || (skuCi.length === 1 ? skuCi[0] : undefined)
+        || (nameCi.length === 1 ? nameCi[0] : undefined);
+      const productCandidates = !skuExact && skuCi.length > 1 ? skuCi : (nameCi.length > 1 ? nameCi : []);
       const qtyCents = qtyToCents(qtyRaw);
 
       const key = `${carrier}|${tracking}`;
@@ -233,6 +243,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
         if (!g.note && note) g.note = note;
       }
       if (!sku) g.reasons.push(`line ${line}: missing product`);
+      else if (productCandidates.length > 1) g.reasons.push(`line ${line}: product "${sku}" is AMBIGUOUS — matches ${productCandidates.map(p => p.sku_code).join(', ')}; use the exact SKU`);
       else if (!product) g.reasons.push(`line ${line}: product "${sku}" not found in the catalog (match by SKU or exact name)`);
       if (qtyCents === null) g.reasons.push(`line ${line}: count "${qtyRaw}" must be a positive number with at most 2 decimals`);
       if (product && qtyCents !== null) {
