@@ -1,3 +1,9 @@
 vibeAppConnectedDatasources:
   - SND GB DB
+  # org-level HTTP datasource (base https://api.goshippo.com) — the
+  # datasource OBJECT lives in the workspace and cannot be provisioned
+  # from git; see src/actions/shippo/DATASOURCE.md for the exact
+  # contract and recreate steps. Verify with Settings → Test Shippo
+  # connection in every environment before relying on Receiving.
+  - Shippo API
 vibeAppPrimaryHostedDatasourceId: SND GB DB

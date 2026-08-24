@@ -41,8 +41,13 @@ export function isTestKey(key: string): boolean {
 export async function testShippoConnection(http: ShippoHttp, key: string): Promise<{ ok: boolean; message: string }> {
   try {
     const body = unwrap(await http.get(key.trim(), '/transactions/?results=1'));
-    if (body && typeof body === 'object' && Array.isArray((body as Record<string, unknown>).results)) {
-      return { ok: true, message: `Connected — datasource, backend, and key all work${isTestKey(key) ? ' (TEST key)' : ''}.` };
+    // the SAME positive listing schema the recovery walks demand
+    // (results array + next present as string-or-null) — a green result
+    // must prove the contract the real flows rely on, not a weaker one
+    const b = body as { results?: unknown; next?: unknown } | null;
+    if (b && typeof b === 'object' && Array.isArray(b.results) && 'next' in b
+        && (b.next === null || typeof b.next === 'string')) {
+      return { ok: true, message: `Connected — GET reads verified end to end (datasource, backend, key, response schema)${isTestKey(key) ? ' (TEST key)' : ''}. POST paths (rates/labels/refunds) use the same datasource and are exercised on first use.` };
     }
     return { ok: false, message: 'Reached the backend, but the response shape was unrecognized — check the "Shippo API" datasource base URL (must be https://api.goshippo.com with no path).' };
   } catch (e: unknown) {
