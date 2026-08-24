@@ -54,11 +54,17 @@ export async function testShippoConnection(http: ShippoHttp, key: string): Promi
     return { ok: false, message: `GET could not reach Shippo through the backend (${message.slice(0, 160)}). Verify the workspace has an HTTP datasource named exactly "Shippo API" with base URL https://api.goshippo.com — see src/actions/shippo/DATASOURCE.md.` };
   }
   // 2/2: POST probe through the EXACT shippoPost path the rate/label/
-  // refund flows use — registering a track for Shippo's documented test
-  // carrier is free and side-effect-light (no shipment, no money), and
-  // the response must be a structurally recognizable track object
+  // refund flows use — registering a track is free and side-effect-light
+  // (no shipment, no money), and the response must be a structurally
+  // recognizable track object. Carrier depends on key mode: LIVE keys
+  // are refused Shippo's test carrier (verified live: their 400 "Test
+  // mode requires a test token"), so live probes register a USPS track
+  // for a syntactically valid dummy number instead.
   try {
-    const body = unwrap(await http.post(key.trim(), '/tracks/', { carrier: 'shippo', tracking_number: 'SHIPPO_TRANSIT' }));
+    const probe = isTestKey(key)
+      ? { carrier: 'shippo', tracking_number: 'SHIPPO_TRANSIT' }
+      : { carrier: 'usps', tracking_number: '9400100000000000000000' };
+    const body = unwrap(await http.post(key.trim(), '/tracks/', probe));
     if (!(body && typeof body === 'object' && 'tracking_status' in (body as Record<string, unknown>))) {
       return { ok: false, message: 'GET works, but the POST response shape was unrecognized — rates/labels/refunds would fail. Check the shippoPost action and datasource config (src/actions/shippo/DATASOURCE.md).' };
     }
@@ -89,7 +95,13 @@ function sanitize(text: string): string {
 type NormalizedError = { status: number | null; message: string };
 function normalizeError(e: unknown): NormalizedError {
   const message = sanitize(e instanceof Error ? e.message : String(e));
-  const m = message.match(/\b([45]\d\d)\b/);
+  // EMPIRICALLY OBSERVED envelope (verified live 2026-08-24): the platform
+  // throws "Action <name> request failed with status=NNN, response={json}"
+  // — parse the structured status= field first; the loose word-boundary
+  // match remains only as a fallback for unknown shapes
+  const structured = message.match(/status=(\d{3})\b/);
+  const loose = message.match(/\b([45]\d\d)\b/);
+  const m = structured || loose;
   return { status: m ? Number(m[1]) : null, message };
 }
 
