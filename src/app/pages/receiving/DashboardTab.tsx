@@ -65,7 +65,9 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
   // ---- filters ----
   const [productFilter, setProductFilter] = useState<Set<number>>(new Set());
   const [addrFilter, setAddrFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('incoming');
+  // default view is EVERYTHING — all addresses, all packages, all vendors
+  // (operator preference; narrowing is one click away)
+  const [statusFilter, setStatusFilter] = useState('all');
   const [vendorFilter, setVendorFilter] = useState('all');
 
   // ---- correction dialog ----
