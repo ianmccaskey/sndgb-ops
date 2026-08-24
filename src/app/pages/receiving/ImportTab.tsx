@@ -29,6 +29,10 @@ type AddrRow = {
   line: number; label: string; name: string; street1: string; street2: string;
   city: string; state: string; zip: string; country: string; phone: string; email: string;
   ok: boolean; reason: string;
+  // a later CSV row targets the same label (case-sensitive, the upsert
+  // key) — this row is never written, so "last one wins" holds even
+  // under mid-run failures or retries
+  shadowed: boolean;
 };
 
 // ---------- package import types ----------
@@ -85,7 +89,8 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
   // ================= ADDRESS PARSE =================
   const parseAddresses = () => {
     setAErr(''); setARows(null); setAResults([]);
-    const rows = parseCsv(aText);
+    const { rows, error } = parseCsv(aText);
+    if (error) { setAErr(`CSV error — ${error}`); return; }
     if (rows.length < 2) { setAErr('Need a header row plus at least one data row.'); return; }
     const h = rows[0];
     const col = {
@@ -103,7 +108,6 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
     const missing = (['label', 'name', 'street1', 'city', 'state', 'zip'] as const).filter(k => col[k] < 0);
     if (missing.length) { setAErr(`Missing required column(s): ${missing.join(', ')}. Expected headers like: label,name,street1,street2,city,state,zip,phone,email.`); return; }
     const get = (r: string[], i: number) => (i >= 0 && i < r.length ? r[i].trim() : '');
-    const seen = new Map<string, number>();
     const out: AddrRow[] = rows.slice(1).map((r, idx) => {
       const row: AddrRow = {
         line: idx + 2,
@@ -111,17 +115,31 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
         street2: get(r, col.street2), city: get(r, col.city), state: get(r, col.state),
         zip: get(r, col.zip), country: get(r, col.country) || 'US',
         phone: get(r, col.phone), email: get(r, col.email),
-        ok: true, reason: '',
+        ok: true, reason: '', shadowed: false,
       };
       const req = (['label', 'name', 'street1', 'city', 'state', 'zip'] as const).filter(k => !row[k]);
       if (req.length) { row.ok = false; row.reason = `missing ${req.join(', ')}`; }
-      else {
-        const lower = row.label.toLowerCase();
-        if (seen.has(lower)) row.reason = `updates the same label as line ${seen.get(lower)} (last one wins)`;
-        else if (addresses.some(a => a.label.toLowerCase() === lower)) row.reason = 'updates an existing address';
-        seen.set(lower, idx + 2);
-      }
       return row;
+    });
+    // the upsert key is the CASE-SENSITIVE label: dedupe in-CSV duplicates
+    // to the FINAL occurrence (earlier ones are shadowed and never
+    // written), flag exact-label updates, and warn on case-only
+    // collisions — 'home' next to an existing 'Home' CREATES A SEPARATE
+    // ADDRESS, which is almost never intended
+    const lastByLabel = new Map<string, number>();
+    out.forEach((row, i) => { if (row.ok) lastByLabel.set(row.label, i); });
+    out.forEach((row, i) => {
+      if (!row.ok) return;
+      if (lastByLabel.get(row.label) !== i) {
+        row.shadowed = true;
+        row.reason = `superseded by line ${out[lastByLabel.get(row.label)!].line} (same label — last one wins; this row is not written)`;
+        return;
+      }
+      if (addresses.some(a => a.label === row.label)) row.reason = 'updates an existing address';
+      else {
+        const ciClash = addresses.find(a => a.label.toLowerCase() === row.label.toLowerCase());
+        if (ciClash) row.reason = `WARNING: differs only by case from existing "${ciClash.label}" — this creates a SEPARATE address`;
+      }
     });
     setARows(out);
   };
@@ -131,7 +149,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
     setABusy(true); setAResults([]);
     const results: string[] = [];
     for (const row of aRows) {
-      if (!row.ok) { results.push(`line ${row.line} (${row.label || '?'}): skipped — ${row.reason}`); continue; }
+      if (!row.ok || row.shadowed) { results.push(`line ${row.line} (${row.label || '?'}): skipped — ${row.reason}`); continue; }
       try {
         const res = await doSaveAddress({
           label: row.label, name: row.name, street1: row.street1, street2: row.street2,
@@ -151,7 +169,8 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
   // ================= PACKAGE PARSE =================
   const parsePackages = () => {
     setPErr(''); setPGroups(null); setPRowErrors([]); setPResults([]);
-    const rows = parseCsv(pText);
+    const { rows, error } = parseCsv(pText);
+    if (error) { setPErr(`CSV error — ${error}`); return; }
     if (rows.length < 2) { setPErr('Need a header row plus at least one data row.'); return; }
     const h = rows[0];
     const col = {
@@ -181,7 +200,14 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       const note = get(r, col.note);
 
       if (!tracking || !carrier) { rowErrors.push(`line ${line}: missing carrier or tracking — row skipped`); continue; }
-      const addr = addresses.find(a => a.active && a.label.toLowerCase() === addrLabel.toLowerCase());
+      // labels are unique CASE-SENSITIVELY, so 'Home' and 'home' can both
+      // exist: prefer the exact-case match; a case-insensitive match is
+      // accepted only when it is UNAMBIGUOUS — multiple candidates refuse
+      // rather than guess (mis-routed inventory is expensive to unwind)
+      const ciMatches = addresses.filter(a => a.active && a.label.toLowerCase() === addrLabel.toLowerCase());
+      const exact = ciMatches.find(a => a.label === addrLabel);
+      const addr = exact || (ciMatches.length === 1 ? ciMatches[0] : undefined);
+      const addrAmbiguous = !exact && ciMatches.length > 1;
       const vendor = vendorCode ? vendors.find(v => v.shippable && v.code.toLowerCase() === vendorCode.toLowerCase()) : null;
       const product = products.find(p => p.sku_code.toLowerCase() === sku.toLowerCase())
         || products.find(p => p.name.toLowerCase() === sku.toLowerCase());
@@ -196,6 +222,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
           items: [], ok: true, reasons: [], warnings: [],
         };
         if (!addrLabel) g.reasons.push('missing address');
+        else if (addrAmbiguous) g.reasons.push(`address "${addrLabel}" is AMBIGUOUS — multiple active labels differ only by case (${ciMatches.map(a => `"${a.label}"`).join(', ')}); use the exact label`);
         else if (!addr) g.reasons.push(`address "${addrLabel}" not found among ACTIVE receive addresses`);
         if (vendorCode && !vendor) g.reasons.push(`vendor "${vendorCode}" is not a shipping vendor for this buy`);
         if (!KNOWN_CARRIERS.includes(carrier)) g.warnings.push(`carrier "${carrier}" is not a known Shippo token — it will be sent as-is`);
@@ -253,7 +280,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
     setPResults(results); setPBusy(false); setPGroups(null); afterPackageChange();
   };
 
-  const validAddrCount = aRows?.filter(r => r.ok).length ?? 0;
+  const validAddrCount = aRows?.filter(r => r.ok && !r.shadowed).length ?? 0;
   const validPkgCount = pGroups?.filter(g => g.ok).length ?? 0;
 
   return (
