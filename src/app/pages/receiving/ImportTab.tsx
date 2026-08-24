@@ -44,6 +44,21 @@ type PkgGroup = {
   ok: boolean; reasons: string[]; warnings: string[];
 };
 
+// every data row must be exactly as wide as the header: an unquoted comma
+// ADDS a column and shifts everything after it right, a dropped field
+// shifts left — either way values land under the wrong headers while
+// still passing the required-field checks, so width mismatches refuse
+// the whole parse instead of previewing shifted data. Empty trailing
+// fields are fine — keep the commas (spreadsheet exports always do).
+function rowWidthError(rows: string[][]): string | null {
+  const width = rows[0].length;
+  const bad = rows.slice(1)
+    .map((r, i) => (r.length !== width ? `line ${i + 2} has ${r.length}` : null))
+    .filter((s): s is string => s !== null);
+  if (bad.length === 0) return null;
+  return `Column-count mismatch — the header has ${width} columns but ${bad.slice(0, 5).join(', ')}${bad.length > 5 ? `, … (${bad.length} rows total)` : ''}. A stray unquoted comma or a missing field shifts data under the wrong headers; quote fields containing commas and keep every column (empty is fine).`;
+}
+
 function qtyToCents(raw: string): number | null {
   const t = raw.trim();
   if (!/^\d+(?:\.\d{1,2})?$/.test(t) || !(Number(t) > 0)) return null;
@@ -107,6 +122,8 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
     };
     const missing = (['label', 'name', 'street1', 'city', 'state', 'zip'] as const).filter(k => col[k] < 0);
     if (missing.length) { setAErr(`Missing required column(s): ${missing.join(', ')}. Expected headers like: label,name,street1,street2,city,state,zip,phone,email.`); return; }
+    const widthErr = rowWidthError(rows);
+    if (widthErr) { setAErr(widthErr); return; }
     const get = (r: string[], i: number) => (i >= 0 && i < r.length ? r[i].trim() : '');
     const out: AddrRow[] = rows.slice(1).map((r, idx) => {
       const row: AddrRow = {
@@ -122,19 +139,27 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       return row;
     });
     // the upsert key is the CASE-SENSITIVE label: dedupe in-CSV duplicates
-    // to the FINAL occurrence (earlier ones are shadowed and never
-    // written), flag exact-label updates, and warn on case-only
-    // collisions — 'home' next to an existing 'Home' CREATES A SEPARATE
-    // ADDRESS, which is almost never intended
+    // to the FINAL occurrence — VALID OR NOT. An earlier valid row must
+    // never sneak through because the intended replacement is malformed;
+    // if the final occurrence is invalid, NOTHING is written for that
+    // label (fix the row, re-parse, re-import — deterministic on retry).
+    // Also flag exact-label updates and warn on case-only collisions:
+    // 'home' next to an existing 'Home' CREATES A SEPARATE ADDRESS,
+    // which is almost never intended.
     const lastByLabel = new Map<string, number>();
-    out.forEach((row, i) => { if (row.ok) lastByLabel.set(row.label, i); });
+    out.forEach((row, i) => { if (row.label) lastByLabel.set(row.label, i); });
     out.forEach((row, i) => {
-      if (!row.ok) return;
-      if (lastByLabel.get(row.label) !== i) {
+      if (!row.label) return;
+      const lastIdx = lastByLabel.get(row.label)!;
+      if (lastIdx !== i) {
+        const last = out[lastIdx];
         row.shadowed = true;
-        row.reason = `superseded by line ${out[lastByLabel.get(row.label)!].line} (same label — last one wins; this row is not written)`;
+        row.reason = last.ok
+          ? `superseded by line ${last.line} (same label — last one wins; this row is not written)`
+          : `superseded by line ${last.line}, which is INVALID — nothing is written for this label until that row is fixed`;
         return;
       }
+      if (!row.ok) return;
       if (addresses.some(a => a.label === row.label)) row.reason = 'updates an existing address';
       else {
         const ciClash = addresses.find(a => a.label.toLowerCase() === row.label.toLowerCase());
@@ -184,6 +209,8 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
     };
     const missing = (['address', 'product', 'count', 'carrier', 'tracking'] as const).filter(k => col[k] < 0);
     if (missing.length) { setPErr(`Missing required column(s): ${missing.join(', ')}. Expected headers like: address,vendor,product,count,carrier,tracking,note.`); return; }
+    const widthErr = rowWidthError(rows);
+    if (widthErr) { setPErr(widthErr); return; }
     const get = (r: string[], i: number) => (i >= 0 && i < r.length ? r[i].trim() : '');
 
     const rowErrors: string[] = [];
