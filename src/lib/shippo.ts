@@ -66,7 +66,7 @@ export async function testShippoConnection(http: ShippoHttp, key: string): Promi
     const { message } = normalizeError(e);
     return { ok: false, message: `GET works, but the POST path failed (${message.slice(0, 160)}) — rates/labels/refunds would fail until this is fixed.` };
   }
-  return { ok: true, message: `Connected — BOTH transports verified end to end (GET listing schema + POST track registration through the exact rate/label path)${isTestKey(key) ? ' (TEST key)' : ''}.` };
+  return { ok: true, message: `Connected — GET listing schema and generic POST transport both verified${isTestKey(key) ? ' (TEST key)' : ''}. Endpoint-specific response contracts (rates/labels/refunds) are validated fail-closed at their point of use.` };
 }
 
 /** Absolute Shippo pagination links become datasource-relative paths. */
@@ -383,10 +383,11 @@ export async function getTransaction(http: ShippoHttp, key: string, transactionI
   try {
     txn = unwrap(await http.get(key.trim(), `/transactions/${encodeURIComponent(transactionId)}`)) as Txn | null;
   } catch (e: unknown) {
-    const { status, message } = normalizeError(e);
-    if (status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
-    if (status === 404) throw new Error('Shippo has no transaction with that id — double-check it against the dashboard.');
-    throw new Error(`Could not fetch that transaction from Shippo (${message.slice(0, 160)}).`);
+    // AMBIGUOUS, always: a regexed status is not proof the transaction is
+    // absent, and telling the operator "not found" here could steer them
+    // toward a second purchase of an already-paid label
+    const { message } = normalizeError(e);
+    throw new Error(`Could not fetch that transaction from Shippo (${message.slice(0, 160)}) — this does NOT mean it doesn't exist. Check the Shippo dashboard; do not re-buy yet.`);
   }
   return await resolveTransaction(http, key, txn);
 }
