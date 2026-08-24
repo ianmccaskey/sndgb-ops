@@ -145,7 +145,14 @@ export async function trackPackage(http: ShippoHttp, key: string, carrier: strin
   const empty: TrackResult = { status: null, substatus: null, detail: null, location: null, statusDate: null, eta: null, error: null };
   let body: unknown;
   try {
-    body = await getWithRetry(http, key.trim(), `/tracks/${encodeURIComponent(carrier.trim())}/${encodeURIComponent(trackingNumber.trim())}`);
+    // SMALL retry budget by design: tracking is operator-driven, commonly
+    // fails on bad input (typo'd number/carrier, wrong key), its failure
+    // is harmless (error-only write preserves the snapshot), and
+    // refreshAll runs rows sequentially — a deep budget would turn one
+    // deterministic failure into minutes of stalls. The fail-closed PROOF
+    // walks keep the deep budget; this differentiation is by caller
+    // stakes, never by text-derived status.
+    body = await getWithRetry(http, key.trim(), `/tracks/${encodeURIComponent(carrier.trim())}/${encodeURIComponent(trackingNumber.trim())}`, 2);
   } catch (e: unknown) {
     // statuses below are HINTS parsed from unstructured error text, never
     // control flow — phrased accordingly
@@ -198,21 +205,22 @@ const ALLOWED_PROVIDERS = ['USPS', 'UPS'];
 
 export async function getRates(http: ShippoHttp, key: string, from: ShippoAddress, to: ShippoAddress, parcel: ShippoParcel): Promise<{ rates: ShippoRate[]; allRateCount: number; messages: string[] }> {
   let body: unknown;
-  // rate creation costs nothing — retry EVERY failure once (a regexed
-  // status is never trusted to suppress the retry; a genuine 4xx just
-  // fails again fast). Parsed statuses appear only as hints in the final
-  // message, after the retry policy has run.
+  // rate creation costs nothing and every label depends on it — retry
+  // EVERY failure with the old client's depth (4 attempts, 0.8/1.6/3.2s;
+  // a regexed status is never trusted to suppress a retry — a genuine
+  // 4xx just fails each attempt fast). Parsed statuses appear only as
+  // hints in the final message, after the retry policy has run.
   for (let attempt = 0; ; attempt++) {
     try {
       body = unwrap(await http.post(key.trim(), '/shipments/', { address_from: from, address_to: to, parcels: [parcel], async: false }));
       break;
     } catch (e: unknown) {
-      if (attempt >= 1) {
+      if (attempt >= 3) {
         const { status, message } = normalizeError(e);
         const hint = status === 401 ? ' — the error mentions 401; re-check the key in Settings' : '';
         throw new Error(`Could not get rates from Shippo (${message.slice(0, 250)})${hint}.`);
       }
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 800 * Math.pow(2, attempt)));
     }
   }
   // POSITIVE schema gate: a synchronous shipment always carries a rates
