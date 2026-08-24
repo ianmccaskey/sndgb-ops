@@ -19,6 +19,7 @@ import { DashboardTab } from './DashboardTab';
 import { InventoryTab } from './InventoryTab';
 import { TransfersTab } from './TransfersTab';
 import { AddressesTab } from './AddressesTab';
+import { ImportTab } from './ImportTab';
 import type { RxAddress, Pkg, InvRow, TransferRow, CatalogProduct, VendorRow } from './shared';
 
 /*
@@ -149,6 +150,7 @@ export function ReceivingPage() {
           <TabsTrigger value="inventory">Inventory</TabsTrigger>
           <TabsTrigger value="transfers">Transfers</TabsTrigger>
           <TabsTrigger value="addresses">Addresses</TabsTrigger>
+          <TabsTrigger value="import">Import CSV</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dashboard" className="mt-4">
@@ -174,6 +176,12 @@ export function ReceivingPage() {
           <AddressesTab
             addresses={addresses} destinations={destinations}
             reloadAddresses={reloadAddresses} reloadDestinations={reloadDestinations}
+          />
+        </TabsContent>
+        <TabsContent value="import" className="mt-4">
+          <ImportTab
+            addresses={addresses} vendors={vendors} products={products}
+            reloadAddresses={reloadAddresses} afterPackageChange={afterPackageChange}
           />
         </TabsContent>
       </Tabs>
