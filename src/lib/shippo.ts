@@ -254,12 +254,18 @@ export async function findTransactionByRate(http: ShippoHttp, key: string, rateI
       const { message } = normalizeError(e);
       throw new Error(`Could not check Shippo for an existing label (${message.slice(0, 160)}) — do not re-purchase or delete until this check succeeds.`);
     }
-    const b = body as {
-      results?: (Txn & { object_created?: string })[];
-      next?: string | null;
-    } | null;
-    if (!b) throw new Error('Shippo transaction lookup returned an unreadable page — do not re-purchase or delete until this check succeeds.');
-    const matches = (b.results || []).filter(t =>
+    // POSITIVE schema check: a proof-of-absence may only come from a page
+    // that is definitely a Shippo listing (results array + next present as
+    // string-or-null). Any other successful-but-unrecognized envelope
+    // fails CLOSED — it must never read as an empty history.
+    const b = body as { results?: unknown; next?: unknown } | null;
+    if (!b || typeof b !== 'object' || !Array.isArray(b.results) || !('next' in b)
+        || (b.next !== null && typeof b.next !== 'string')) {
+      throw new Error('Shippo transaction lookup came back in an unrecognized shape — do not re-purchase or delete until this check succeeds.');
+    }
+    const pageRows = b.results as (Txn & { object_created?: string })[];
+    const pageNext = b.next as string | null;
+    const matches = pageRows.filter(t =>
       (typeof t.rate === 'string' ? t.rate : t.rate?.object_id) === rateId);
     const success = matches.find(t => t.status === 'SUCCESS' && t.label_url);
     if (success) return { transactionId: success.object_id || '', trackingNumber: success.tracking_number || '', labelUrl: success.label_url!, rateId };
@@ -268,16 +274,15 @@ export async function findTransactionByRate(http: ShippoHttp, key: string, rateI
     }
     // an ERROR-status match proves the purchase attempt failed — keep
     // walking in case a later retry succeeded on the same rate
-    if (!b.next) return null; // walked every page — provably no label
-    const rows = b.results || [];
-    if (!Number.isNaN(cutoffMs) && rows.length > 0 &&
-        rows.every(t => t.object_created && Date.parse(t.object_created) < cutoffMs)) {
+    if (!pageNext) return null; // walked every page — provably no label
+    if (!Number.isNaN(cutoffMs) && pageRows.length > 0 &&
+        pageRows.every(t => t.object_created && Date.parse(t.object_created) < cutoffMs)) {
       return null; // newest-first: everything beyond this page predates the draft
     }
-    if (!b.next.startsWith(BASE)) {
+    if (!pageNext.startsWith(BASE)) {
       throw new Error('Shippo returned an unexpected pagination link — do not re-purchase or delete until this check succeeds.');
     }
-    path = relativize(b.next);
+    path = relativize(pageNext);
   }
   throw new Error(`Shippo transaction history exceeds ${MAX_PAGES * 100} entries — the existing-label check could not complete. Do not re-purchase or delete; find the label in the Shippo dashboard instead.`);
 }
@@ -319,24 +324,28 @@ export async function findRefundByTransaction(http: ShippoHttp, key: string, tra
       const { message } = normalizeError(e);
       throw new Error(`Could not check Shippo for an existing refund (${message.slice(0, 160)}) — do not re-request until this check succeeds.`);
     }
-    const b = body as {
-      results?: { object_id?: string; object_created?: string; status?: string; transaction?: string | { object_id?: string } }[];
-      next?: string | null;
-    } | null;
-    if (!b) throw new Error('Shippo refund lookup returned an unreadable page — do not re-request until this check succeeds.');
-    const match = (b.results || []).find(r =>
+    // POSITIVE schema check — same fail-closed rule as the transaction
+    // walk: an unrecognized success envelope must never read as an empty
+    // refund history and reopen the request button.
+    const b = body as { results?: unknown; next?: unknown } | null;
+    if (!b || typeof b !== 'object' || !Array.isArray(b.results) || !('next' in b)
+        || (b.next !== null && typeof b.next !== 'string')) {
+      throw new Error('Shippo refund lookup came back in an unrecognized shape — do not re-request until this check succeeds.');
+    }
+    const pageRows = b.results as { object_id?: string; object_created?: string; status?: string; transaction?: string | { object_id?: string } }[];
+    const pageNext = b.next as string | null;
+    const match = pageRows.find(r =>
       (typeof r.transaction === 'string' ? r.transaction : r.transaction?.object_id) === transactionId);
     if (match) return match.status || 'PENDING';
-    if (!b.next) return null; // walked every page — provably no refund
-    const rows = b.results || [];
-    if (!Number.isNaN(cutoffMs) && rows.length > 0 &&
-        rows.every(r => r.object_created && Date.parse(r.object_created) < cutoffMs)) {
+    if (!pageNext) return null; // walked every page — provably no refund
+    if (!Number.isNaN(cutoffMs) && pageRows.length > 0 &&
+        pageRows.every(r => r.object_created && Date.parse(r.object_created) < cutoffMs)) {
       return null; // newest-first: everything beyond this page predates the transfer
     }
-    if (!b.next.startsWith(BASE)) {
+    if (!pageNext.startsWith(BASE)) {
       throw new Error('Shippo returned an unexpected pagination link — do not re-request until this check succeeds.');
     }
-    path = relativize(b.next);
+    path = relativize(pageNext);
   }
   throw new Error(`Shippo refund history exceeds ${MAX_PAGES * 100} entries — the check could not complete; use the Shippo dashboard.`);
 }
