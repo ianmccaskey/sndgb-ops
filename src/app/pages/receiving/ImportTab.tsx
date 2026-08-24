@@ -86,7 +86,6 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
   // ---------- packages ----------
   const [pText, setPText] = useState('');
   const [pGroups, setPGroups] = useState<PkgGroup[] | null>(null);
-  const [pRowErrors, setPRowErrors] = useState<string[]>([]);
   const [pResults, setPResults] = useState<string[]>([]);
   const [pBusy, setPBusy] = useState(false);
   const [pErr, setPErr] = useState('');
@@ -193,7 +192,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
 
   // ================= PACKAGE PARSE =================
   const parsePackages = () => {
-    setPErr(''); setPGroups(null); setPRowErrors([]); setPResults([]);
+    setPErr(''); setPGroups(null); setPResults([]);
     const { rows, error } = parseCsv(pText);
     if (error) { setPErr(`CSV error — ${error}`); return; }
     if (rows.length < 2) { setPErr('Need a header row plus at least one data row.'); return; }
@@ -226,7 +225,11 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       const tracking = get(r, col.tracking).toUpperCase();
       const note = get(r, col.note);
 
-      if (!tracking || !carrier) { rowErrors.push(`line ${line}: missing carrier or tracking — row skipped`); continue; }
+      // a row without carrier+tracking cannot be grouped, so it cannot be
+      // "skipped" either — a silently dropped line would understate a
+      // package's contents while the rest of the run imports fine. It is
+      // collected as FATAL: no preview, no import, until the row is fixed.
+      if (!tracking || !carrier) { rowErrors.push(`line ${line}: missing carrier or tracking`); continue; }
       // labels are unique CASE-SENSITIVELY, so 'Home' and 'home' can both
       // exist: prefer the exact-case match; a case-insensitive match is
       // accepted only when it is UNAMBIGUOUS — multiple candidates refuse
@@ -289,11 +292,16 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
         else g.items.push({ line, productId: Number(product.id), sku: product.sku_code, qtyCents });
       }
     }
+    // ungroupable rows are fatal for the WHOLE parse: importing the rest
+    // while a line was dropped would silently understate some package
+    if (rowErrors.length > 0) {
+      setPErr(`Rows that cannot be imported — nothing is previewed until they are fixed: ${rowErrors.join('; ')}.`);
+      return;
+    }
     for (const g of groups.values()) {
       if (g.items.length === 0) g.reasons.push('no valid product lines');
       if (g.reasons.length > 0) g.ok = false;
     }
-    setPRowErrors(rowErrors);
     setPGroups(Array.from(groups.values()));
   };
 
@@ -406,9 +414,6 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
             {pGroups && <Button size="sm" disabled={pBusy || validPkgCount === 0} onClick={importPackages}>{pBusy ? 'Importing…' : `Import ${validPkgCount} package${validPkgCount === 1 ? '' : 's'}`}</Button>}
           </div>
           {pErr && <p className="text-xs text-red-600">{pErr}</p>}
-          {pRowErrors.length > 0 && (
-            <div className="text-xs space-y-0.5">{pRowErrors.map((m, i) => <p key={i} className="text-red-600">{m}</p>)}</div>
-          )}
           {pGroups && (
             <div className="border rounded-lg overflow-x-auto">
               <Table>
