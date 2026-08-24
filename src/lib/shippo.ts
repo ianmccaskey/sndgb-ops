@@ -112,15 +112,20 @@ function unwrap(r: unknown): unknown {
  * is unstructured, so a regexed status is never trusted for control
  * flow (a fake 4xx must not suppress retries). A genuine 4xx just fails
  * all attempts quickly; statuses are used for operator HINTS only.
+ * Five attempts with exponential spacing (0.6/1.2/2.4/4.8s ≈ the old
+ * fetchWithBackoff resilience) — Retry-After headers are not visible
+ * through the action layer, so depth substitutes for header-awareness;
+ * the proof paths fail closed and must not give up under brief
+ * throttling or upstream blips.
  */
-async function getWithRetry(http: ShippoHttp, token: string, path: string, attempts = 3): Promise<unknown> {
+async function getWithRetry(http: ShippoHttp, token: string, path: string, attempts = 5): Promise<unknown> {
   let last: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
       return unwrap(await http.get(token, path));
     } catch (e: unknown) {
       last = e;
-      if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)));
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, 600 * Math.pow(2, i)));
     }
   }
   throw last;
@@ -341,6 +346,15 @@ export async function findTransactionByRate(http: ShippoHttp, key: string, rateI
     }
     const pageRows = b.results as (Txn & { object_created?: string })[];
     const pageNext = b.next as string | null;
+    // ROW-LEVEL gate: every row this proof consumes must carry the fields
+    // the decision depends on — a page whose rows renamed/dropped status
+    // or rate is not semantically readable and must not prove absence
+    for (const t of pageRows) {
+      if (!t || typeof t !== 'object' || !('status' in t) || !('rate' in t)
+          || !(typeof t.rate === 'string' || (typeof t.rate === 'object' && t.rate !== null))) {
+        throw new Error('Shippo transaction rows came back in an unrecognized shape — do not re-purchase or delete until this check succeeds.');
+      }
+    }
     const matches = pageRows.filter(t =>
       (typeof t.rate === 'string' ? t.rate : t.rate?.object_id) === rateId);
     const success = matches.find(t => t.status === 'SUCCESS' && t.label_url);
@@ -410,6 +424,13 @@ export async function findRefundByTransaction(http: ShippoHttp, key: string, tra
     }
     const pageRows = b.results as { object_id?: string; object_created?: string; status?: string; transaction?: string | { object_id?: string } }[];
     const pageNext = b.next as string | null;
+    // ROW-LEVEL gate, same rule as the transaction walk
+    for (const r of pageRows) {
+      if (!r || typeof r !== 'object' || !('status' in r) || !('transaction' in r)
+          || !(typeof r.transaction === 'string' || (typeof r.transaction === 'object' && r.transaction !== null))) {
+        throw new Error('Shippo refund rows came back in an unrecognized shape — do not re-request until this check succeeds.');
+      }
+    }
     const match = pageRows.find(r =>
       (typeof r.transaction === 'string' ? r.transaction : r.transaction?.object_id) === transactionId);
     if (match) return match.status || 'PENDING';
