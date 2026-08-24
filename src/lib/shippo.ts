@@ -47,7 +47,7 @@ export async function testShippoConnection(http: ShippoHttp, key: string): Promi
     const b = body as { results?: unknown; next?: unknown } | null;
     if (b && typeof b === 'object' && Array.isArray(b.results) && 'next' in b
         && (b.next === null || typeof b.next === 'string')) {
-      return { ok: true, message: `Connected — GET reads verified end to end (datasource, backend, key, response schema)${isTestKey(key) ? ' (TEST key)' : ''}. POST paths (rates/labels/refunds) use the same datasource and are exercised on first use.` };
+      return { ok: true, message: `Connected — GET reads verified end to end (datasource, backend, key, response schema)${isTestKey(key) ? ' (TEST key)' : ''}. NOTE: this does not verify the POST path — the first rate quote is the POST smoke test (rate creation is free); run one before relying on labels or refunds.` };
     }
     return { ok: false, message: 'Reached the backend, but the response shape was unrecognized — check the "Shippo API" datasource base URL (must be https://api.goshippo.com with no path).' };
   } catch (e: unknown) {
@@ -181,16 +181,20 @@ const ALLOWED_PROVIDERS = ['USPS', 'UPS'];
 
 export async function getRates(http: ShippoHttp, key: string, from: ShippoAddress, to: ShippoAddress, parcel: ShippoParcel): Promise<{ rates: ShippoRate[]; allRateCount: number; messages: string[] }> {
   let body: unknown;
-  // rate creation costs nothing — safe to retry once on an ambiguous failure
+  // rate creation costs nothing — retry EVERY failure once (a regexed
+  // status is never trusted to suppress the retry; a genuine 4xx just
+  // fails again fast). Parsed statuses appear only as hints in the final
+  // message, after the retry policy has run.
   for (let attempt = 0; ; attempt++) {
     try {
       body = unwrap(await http.post(key.trim(), '/shipments/', { address_from: from, address_to: to, parcels: [parcel], async: false }));
       break;
     } catch (e: unknown) {
-      const { status, message } = normalizeError(e);
-      if (status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
-      if (status !== null && status < 500) throw new Error(`Shippo rate request failed (HTTP ${status}): ${message.slice(0, 300)}`);
-      if (attempt >= 1) throw new Error(`Could not get rates from Shippo (${message.slice(0, 200)}).`);
+      if (attempt >= 1) {
+        const { status, message } = normalizeError(e);
+        const hint = status === 401 ? ' — the error mentions 401; re-check the key in Settings' : '';
+        throw new Error(`Could not get rates from Shippo (${message.slice(0, 250)})${hint}.`);
+      }
       await new Promise(r => setTimeout(r, 800));
     }
   }
