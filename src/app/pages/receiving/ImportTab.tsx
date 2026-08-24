@@ -265,7 +265,17 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
         if (!KNOWN_CARRIERS.includes(carrier)) g.warnings.push(`carrier "${carrier}" is not a known Shippo token — it will be sent as-is`);
         groups.set(key, g);
       } else {
-        if (addrLabel.toLowerCase() !== g.addressLabel.toLowerCase()) g.reasons.push(`line ${line}: same tracking with a DIFFERENT address ("${addrLabel}" vs "${g.addressLabel}")`);
+        // group consistency compares the RESOLVED address identity, not
+        // case-folded text — labels are case-sensitive, so "Home" and
+        // "home" can be two REAL addresses, and folding would silently
+        // merge the second row into the first row's package. Same exact
+        // label ⇒ same resolution; otherwise both rows must resolve to
+        // the same address record.
+        const rowAddrId = addr ? Number(addr.id) : null;
+        const sameAddr = addrLabel === g.addressLabel
+          || (rowAddrId !== null && g.addressId !== null && rowAddrId === g.addressId);
+        if (addrAmbiguous) g.reasons.push(`line ${line}: address "${addrLabel}" is AMBIGUOUS — multiple active labels differ only by case (${ciMatches.map(a => `"${a.label}"`).join(', ')}); use the exact label`);
+        else if (!sameAddr) g.reasons.push(`line ${line}: same tracking with a DIFFERENT address ("${addrLabel}" vs "${g.addressLabel}")`);
         if (vendorCode.toLowerCase() !== g.vendorCode.toLowerCase()) g.reasons.push(`line ${line}: same tracking with a DIFFERENT vendor ("${vendorCode}" vs "${g.vendorCode}")`);
         if (!g.note && note) g.note = note;
       }
@@ -294,6 +304,12 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
     for (const g of pGroups) {
       const tag = `${g.carrier.toUpperCase()} ${g.tracking}`;
       if (!g.ok) { results.push(`${tag}: skipped — ${g.reasons[0]}`); continue; }
+      // create and commit are separate write boundaries: once create
+      // returns an id, a package EXISTS in the database, so any later
+      // failure must be reported as a recoverable draft — never as a
+      // generic FAILED that invites a retry into the active-tracking
+      // uniqueness guard.
+      let pkgId: number | null = null;
       try {
         const res = await doCreatePkg({
           receive_address_id: g.addressId, vendor_id: g.vendorId != null ? String(g.vendorId) : '',
@@ -302,17 +318,23 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
           items: JSON.stringify(g.items.map(it => ({ product_id: it.productId, qty: (it.qtyCents / 100).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') }))),
           actor: userName,
         }) as unknown[] | null;
-        const pkgId = Array.isArray(res) && res.length > 0 ? Number((res[0] as { id: string }).id) : null;
-        if (!pkgId) { results.push(`${tag}: REFUSED — nothing saved (address active? vendor eligible? counts valid?)`); continue; }
-        const com = await doCommitPkg({ package_id: pkgId, actor: userName }) as unknown[] | null;
-        results.push(Array.isArray(com) && com.length > 0
-          ? `${tag}: created + committed (${g.items.length} line${g.items.length === 1 ? '' : 's'})`
-          : `${tag}: created as DRAFT — commit failed, use the card's Commit button`);
+        pkgId = Array.isArray(res) && res.length > 0 ? Number((res[0] as { id: string }).id) : null;
       } catch (e: unknown) {
         const m = e instanceof Error ? e.message : '';
         results.push(m.includes('inbound_packages_active_tracking_uniq')
           ? `${tag}: skipped — an ACTIVE package with this tracking already exists`
-          : `${tag}: FAILED — ${m || 'error'}`);
+          : `${tag}: FAILED — nothing saved (${m || 'error'})`);
+        continue;
+      }
+      if (!pkgId) { results.push(`${tag}: REFUSED — nothing saved (address active? vendor eligible? counts valid?)`); continue; }
+      try {
+        const com = await doCommitPkg({ package_id: pkgId, actor: userName }) as unknown[] | null;
+        results.push(Array.isArray(com) && com.length > 0
+          ? `${tag}: created + committed (${g.items.length} line${g.items.length === 1 ? '' : 's'})`
+          : `${tag}: created as DRAFT — commit refused, use the card's Commit button`);
+      } catch (e: unknown) {
+        const m = e instanceof Error ? e.message : '';
+        results.push(`${tag}: created as DRAFT — commit failed (${m || 'error'}); use the card's Commit button on the Dashboard`);
       }
     }
     setPResults(results); setPBusy(false); setPGroups(null); afterPackageChange();
