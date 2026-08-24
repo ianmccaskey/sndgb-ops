@@ -221,7 +221,13 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       const vendorCode = get(r, col.vendor);
       const sku = get(r, col.product);
       const qtyRaw = get(r, col.count);
-      const carrier = get(r, col.carrier).toLowerCase().replace(/\s+/g, '_');
+      // carrier passes through EXACTLY as the manual flow stores it —
+      // lowercased, trimmed, nothing else. Rewriting spaces to
+      // underscores here would give "dhl express" and "dhl_express"
+      // different values under the (carrier, UPPER(tracking)) unique
+      // index, letting one live parcel exist as two active packages.
+      // Non-token spellings get the KNOWN_CARRIERS warning instead.
+      const carrier = get(r, col.carrier).toLowerCase();
       const tracking = get(r, col.tracking).toUpperCase();
       const note = get(r, col.note);
 
