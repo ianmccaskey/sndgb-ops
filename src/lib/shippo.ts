@@ -94,6 +94,16 @@ export async function trackPackage(http: ShippoHttp, key: string, carrier: strin
     if (status !== null) return { ...empty, error: `Shippo tracking failed (HTTP ${status}).` };
     return { ...empty, error: `Could not reach Shippo (${message.slice(0, 120)}).` };
   }
+  // POSITIVE schema gate: a Shippo track object always carries the
+  // tracking_status key (possibly null) plus its identity fields. An
+  // unrecognized success envelope returns as an ERROR — the error-aware
+  // tracking update then preserves the last good snapshot instead of
+  // being wiped by blanks.
+  if (!body || typeof body !== 'object'
+      || !('tracking_status' in (body as Record<string, unknown>))
+      || !('tracking_number' in (body as Record<string, unknown>) || 'carrier' in (body as Record<string, unknown>))) {
+    return { ...empty, error: 'Shippo tracking came back in an unrecognized shape — refresh skipped, previous status kept.' };
+  }
   const b = body as {
     tracking_status?: { status?: string; substatus?: { code?: string } | null; status_details?: string; status_date?: string; location?: TrackResult['location'] } | null;
     eta?: string | null;
@@ -141,6 +151,12 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
       await new Promise(r => setTimeout(r, 800));
     }
   }
+  // POSITIVE schema gate: a synchronous shipment always carries a rates
+  // ARRAY (possibly empty) — anything else is an unrecognized envelope,
+  // not a legitimate zero-rate answer.
+  if (!body || typeof body !== 'object' || !Array.isArray((body as Record<string, unknown>).rates)) {
+    throw new Error('Shippo rates came back in an unrecognized shape — nothing was quoted; try again.');
+  }
   const b = body as {
     rates?: ShippoRate[];
     messages?: { source?: string; code?: string; text?: string }[];
@@ -154,12 +170,14 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
 }
 
 /**
- * Thrown ONLY on a DEFINITIVE refusal: an explicit ERROR-status
- * transaction from Shippo, or a 4xx validation rejection of the purchase
- * POST itself (400/422 — the request was refused, no charge, no label).
- * Callers may safely release the purchase lease on this error. Every
- * other purchase failure (backend drop, 5xx, poll timeout) throws a
- * plain Error and must be treated as AMBIGUOUS — money may have moved.
+ * Thrown ONLY on a DEFINITIVE refusal proven STRUCTURALLY: a parsed
+ * transaction object whose status is 'ERROR' — no charge, no label.
+ * Never inferred from error text (a regexed status inside an
+ * undocumented platform message is not proof), so every thrown transport
+ * failure — including apparent 4xx — is treated as AMBIGUOUS: money may
+ * have moved, and recovery goes through the verified "Check Shippo &
+ * retry" walk. Callers may safely release the purchase lease on this
+ * error and on nothing else.
  */
 export class ShippoPurchaseRefusedError extends Error {}
 
@@ -184,12 +202,11 @@ export async function purchaseLabel(http: ShippoHttp, key: string, rateObjectId:
   try {
     txn = unwrap(await http.post(key.trim(), '/transactions/', { rate: rateObjectId, label_file_type: 'PDF_4x6', async: false })) as Txn | null;
   } catch (e: unknown) {
-    const { status, message } = normalizeError(e);
-    if (status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
-    if (status === 400 || status === 422) {
-      // the POST itself was refused at validation — no transaction, no charge
-      throw new ShippoPurchaseRefusedError(`Shippo refused the label purchase (HTTP ${status}): ${message.slice(0, 300)}${message.toLowerCase().includes('rate') ? ' — the rate may have expired; re-fetch rates.' : ''}`);
-    }
+    // EVERY thrown failure is ambiguous here — even an apparent 4xx: the
+    // status is regexed from undocumented error text and is NOT proof the
+    // POST never reached Shippo. Only a parsed ERROR-status transaction
+    // (below, in resolveTransaction) proves a refusal.
+    const { message } = normalizeError(e);
     throw new Error(`The label purchase did not confirm (${message.slice(0, 200)}). DO NOT retry blindly — use "Check Shippo & retry", which verifies whether a label was already bought.`);
   }
   return await resolveTransaction(http, key, txn);
