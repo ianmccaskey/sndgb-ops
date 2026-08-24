@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import saveReceiveAddress from '@/actions/receiving/saveReceiveAddress';
 import createInboundPackage from '@/actions/receiving/createInboundPackage';
@@ -35,6 +35,12 @@ type AddrRow = {
   // key) — this row is never written, so "last one wins" holds even
   // under mid-run failures or retries
   shadowed: boolean;
+  // what the operator reviewed: the id of the existing address this row
+  // UPDATES, or null for a row previewed as NEW. Re-proven against fresh
+  // server data at import time — if reality drifted (another session
+  // created or archived the label), the row is skipped, never silently
+  // converted from create to overwrite or vice versa.
+  expectId: number | null;
 };
 
 // ---------- package import types ----------
@@ -106,10 +112,18 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
   // ---------- packages ----------
   const [pText, setPText] = useState('');
   const [pGroups, setPGroups] = useState<PkgGroup[] | null>(null);
+  // the campaign the package preview was validated under — vendor
+  // eligibility is campaign-scoped, so a preview parsed under buy A must
+  // never import under buy B
+  const [pGb, setPGb] = useState<number | null>(null);
   const [pResults, setPResults] = useState<string[]>([]);
   const [pBusy, setPBusy] = useState(false);
   const [pErr, setPErr] = useState('');
   const pFile = useRef<HTMLInputElement>(null);
+
+  // switching the selected buy invalidates the package preview outright:
+  // its vendor verdicts were rendered against the previous campaign
+  useEffect(() => { setPGroups(null); setPGb(null); }, [groupBuyId]);
 
   const loadFile = (input: HTMLInputElement | null, set: (t: string) => void) => {
     const f = input?.files?.[0];
@@ -151,7 +165,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
         street2: get(r, col.street2), city: get(r, col.city), state: get(r, col.state),
         zip: get(r, col.zip), country: get(r, col.country) || 'US',
         phone: get(r, col.phone), email: get(r, col.email),
-        ok: true, reason: '', shadowed: false,
+        ok: true, reason: '', shadowed: false, expectId: null,
       };
       const req = (['label', 'name', 'street1', 'city', 'state', 'zip'] as const).filter(k => !row[k]);
       if (req.length) { row.ok = false; row.reason = `missing ${req.join(', ')}`; }
@@ -186,7 +200,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
         // unusable for package imports. Refuse instead of misleading.
         row.ok = false;
         row.reason = 'this label is ARCHIVED — restore it on the Addresses tab first, then re-import';
-      } else if (existing) row.reason = 'updates an existing address';
+      } else if (existing) { row.reason = 'updates an existing address'; row.expectId = Number(existing.id); }
       else {
         const ciClash = addresses.find(a => a.label.toLowerCase() === row.label.toLowerCase());
         if (ciClash) row.reason = `WARNING: differs only by case from existing "${ciClash.label}" — this creates a SEPARATE address`;
@@ -199,8 +213,30 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
     if (!aRows) return;
     setABusy(true); setAResults([]);
     const results: string[] = [];
+    // re-prove the preview against FRESH server data: a second admin can
+    // create or archive a label between Parse and Import, which would
+    // silently turn a reviewed "new" into an overwrite of their address
+    // (or vice versa). Any drift skips the row; a failed fetch refuses
+    // the whole run before anything writes.
+    let freshAddresses: RxAddress[];
+    try {
+      freshAddresses = actionRows<RxAddress>(await fetchAddresses({}));
+    } catch (e: unknown) {
+      setAResults([`FAILED — could not re-check addresses before import (${e instanceof Error ? e.message : 'error'}); nothing was written`]);
+      setABusy(false);
+      return;
+    }
     for (const row of aRows) {
       if (!row.ok || row.shadowed) { results.push(`line ${row.line} (${row.label || '?'}): skipped — ${row.reason}`); continue; }
+      const freshExact = freshAddresses.find(a => a.label === row.label);
+      if (row.expectId === null && freshExact) {
+        results.push(`line ${row.line} (${row.label}): skipped — this label was CREATED by another session since the preview; re-parse and review the update`);
+        continue;
+      }
+      if (row.expectId !== null && (!freshExact || Number(freshExact.id) !== row.expectId || !freshExact.active)) {
+        results.push(`line ${row.line} (${row.label}): skipped — this address changed since the preview (archived, renamed, or replaced); re-parse and review again`);
+        continue;
+      }
       try {
         const res = await doSaveAddress({
           label: row.label, name: row.name, street1: row.street1, street2: row.street2,
@@ -334,10 +370,18 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       if (g.reasons.length > 0) g.ok = false;
     }
     setPGroups(Array.from(groups.values()));
+    setPGb(groupBuyId);
   };
 
   const importPackages = async () => {
     if (!pGroups) return;
+    // belt-and-suspenders with the useEffect invalidation: never let a
+    // preview validated under one buy write under another
+    if (pGb !== groupBuyId) {
+      setPResults(['REFUSED — the selected buy changed since the preview; re-parse and review again. Nothing was written.']);
+      setPGroups(null); setPGb(null);
+      return;
+    }
     setPBusy(true); setPResults([]);
     const results: string[] = [];
     // preview resolution can go stale between Parse and Import (second
