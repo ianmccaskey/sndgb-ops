@@ -10,6 +10,7 @@ import listShippingVendors from '@/actions/receiving/listShippingVendors';
 import updatePackageTracking from '@/actions/receiving/updatePackageTracking';
 import markPackageReceived from '@/actions/receiving/markPackageReceived';
 import { trackPackage, isTestKey } from '@/lib/shippo';
+import { useShippoHttp } from '@/lib/useShippoHttp';
 import { useApp } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -33,6 +34,7 @@ export function ReceivingPage() {
   const { userName, settings, groupBuyId } = useApp();
   const shippoKey = settings.shippo_api_key || '';
   const testMode = shippoKey !== '' && isTestKey(shippoKey);
+  const shippoHttp = useShippoHttp();
 
   const [rawAddresses, , , reloadAddresses] = useLoadAction(listReceiveAddresses, [], {});
   const [rawPackages, , , reloadPackages] = useLoadAction(listInboundPackages, [], {});
@@ -68,7 +70,7 @@ export function ReceivingPage() {
     if (!shippoKey) return 'Add your Shippo API token in Settings first.';
     setRefreshingIds(s => new Set(s).add(p.id));
     try {
-      const r = await trackPackage(shippoKey, p.carrier, p.tracking_number);
+      const r = await trackPackage(shippoHttp, shippoKey, p.carrier, p.tracking_number);
       // carrier + tracking travel with the write: if another session
       // corrected this package meanwhile, the CAS in the action refuses
       // and this stale snapshot is discarded instead of poisoning the row
@@ -163,7 +165,7 @@ export function ReceivingPage() {
         <TabsContent value="transfers" className="mt-4">
           <TransfersTab
             addresses={addresses} destinations={destinations} products={products}
-            transfers={transfers} inventory={inventory} shippoKey={shippoKey} testMode={testMode}
+            transfers={transfers} inventory={inventory} shippoKey={shippoKey} shippoHttp={shippoHttp} testMode={testMode}
             reloadTransfers={() => { reloadTransfers(); reloadInventory(); }}
             reloadDestinations={reloadDestinations}
           />

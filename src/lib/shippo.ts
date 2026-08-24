@@ -1,20 +1,27 @@
-import { fetchWithBackoff } from './http';
+import type { ShippoHttp } from './useShippoHttp';
 
 /*
- * Shippo client (browser-direct: api.goshippo.com serves ACAO * with the
- * authorization header allowed — verified). Key lives in app_settings as
- * shippo_api_key, entered by the operator in Settings.
+ * Shippo client. TRANSPORT: every call runs on UI Bakery's BACKEND via
+ * the 'Shippo API' HTTP datasource (see useShippoHttp) — Shippo removed
+ * browser CORS support in 2026-08, so the browser never talks to
+ * api.goshippo.com directly any more. Key lives in app_settings as
+ * shippo_api_key, entered by the operator in Settings, and travels with
+ * each call as an action param (same client-trust model as before).
  *
- * REAL-MONEY DISCIPLINE:
- *  - purchaseLabel and requestRefund use a SINGLE attempt (plain fetch,
- *    never fetchWithBackoff): a retried 5xx or dropped connection after
- *    Shippo already charged would buy a SECOND label — Shippo has no
- *    idempotency key. Rate creation and tracking are read-only-priced
- *    and retry freely.
+ * REAL-MONEY DISCIPLINE (unchanged):
+ *  - purchaseLabel and requestRefund make a SINGLE attempt — one action
+ *    invocation is one backend request, never retried here: a retry
+ *    after Shippo already charged would buy a SECOND label (Shippo has
+ *    no idempotency key). Reads and rate creation retry freely.
  *  - a QUEUED/WAITING transaction is polled by GET (never re-POSTed).
  *  - test keys (shippo_test_...) return SIMULATED tracking — callers must
  *    check isTestKey() and suppress auto-receive so fake DELIVERED events
  *    can never move real inventory.
+ *
+ * ERROR SHAPE: the platform throws on non-2xx responses; the HTTP status
+ * is recovered from the error text when present. A missing status means
+ * the failure is AMBIGUOUS (backend/network) — money paths treat it as
+ * possibly-charged.
  */
 
 const BASE = 'https://api.goshippo.com';
@@ -23,8 +30,46 @@ export function isTestKey(key: string): boolean {
   return key.trim().toLowerCase().startsWith('shippo_test');
 }
 
-function headers(key: string): Record<string, string> {
-  return { Authorization: `ShippoToken ${key.trim()}`, 'Content-Type': 'application/json' };
+/** Absolute Shippo pagination links become datasource-relative paths. */
+function relativize(url: string): string {
+  return url.startsWith(BASE) ? url.slice(BASE.length) : url;
+}
+
+type NormalizedError = { status: number | null; message: string };
+function normalizeError(e: unknown): NormalizedError {
+  const message = e instanceof Error ? e.message : String(e);
+  const m = message.match(/\b([45]\d\d)\b/);
+  return { status: m ? Number(m[1]) : null, message };
+}
+
+/**
+ * Some platforms hand back an axios-style envelope ({ data, status });
+ * Shippo bodies never carry a `data` key themselves, so unwrapping on
+ * that signature is safe either way.
+ */
+function unwrap(r: unknown): unknown {
+  if (r && typeof r === 'object' && 'data' in (r as Record<string, unknown>)
+      && ('status' in (r as Record<string, unknown>) || 'headers' in (r as Record<string, unknown>))) {
+    return (r as Record<string, unknown>).data;
+  }
+  return r;
+}
+
+/** Retry wrapper for READ paths only — never wraps money-moving POSTs. */
+async function getWithRetry(http: ShippoHttp, token: string, path: string, attempts = 3): Promise<unknown> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return unwrap(await http.get(token, path));
+    } catch (e: unknown) {
+      last = e;
+      const { status } = normalizeError(e);
+      // 4xx (except 429) is a real answer — retrying won't change it
+      if (status !== null && status < 500 && status !== 429) throw e;
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw last;
 }
 
 export type TrackResult = {
@@ -37,33 +82,30 @@ export type TrackResult = {
   error: string | null;         // human-readable fetch/lookup problem; row is not poisoned
 };
 
-export async function trackPackage(key: string, carrier: string, trackingNumber: string): Promise<TrackResult> {
+export async function trackPackage(http: ShippoHttp, key: string, carrier: string, trackingNumber: string): Promise<TrackResult> {
   const empty: TrackResult = { status: null, substatus: null, detail: null, location: null, statusDate: null, eta: null, error: null };
-  let res: Response;
+  let body: unknown;
   try {
-    res = await fetchWithBackoff(`${BASE}/tracks/${encodeURIComponent(carrier.trim())}/${encodeURIComponent(trackingNumber.trim())}`, {
-      headers: { Authorization: `ShippoToken ${key.trim()}` },
-    });
-  } catch {
-    return { ...empty, error: 'Could not reach Shippo — check your network connection.' };
+    body = await getWithRetry(http, key.trim(), `/tracks/${encodeURIComponent(carrier.trim())}/${encodeURIComponent(trackingNumber.trim())}`);
+  } catch (e: unknown) {
+    const { status, message } = normalizeError(e);
+    if (status === 401) return { ...empty, error: 'Shippo rejected the API key (401) — check Settings.' };
+    if (status === 404 || status === 400) return { ...empty, error: `Carrier/tracking not recognized by Shippo (HTTP ${status}) — check the carrier token and number.` };
+    if (status !== null) return { ...empty, error: `Shippo tracking failed (HTTP ${status}).` };
+    return { ...empty, error: `Could not reach Shippo (${message.slice(0, 120)}).` };
   }
-  if (!res.ok) {
-    if (res.status === 401) return { ...empty, error: 'Shippo rejected the API key (401) — check Settings.' };
-    if (res.status === 404 || res.status === 400) return { ...empty, error: `Carrier/tracking not recognized by Shippo (HTTP ${res.status}) — check the carrier token and number.` };
-    return { ...empty, error: `Shippo tracking failed (HTTP ${res.status}).` };
-  }
-  const body = await res.json().catch(() => null) as {
+  const b = body as {
     tracking_status?: { status?: string; substatus?: { code?: string } | null; status_details?: string; status_date?: string; location?: TrackResult['location'] } | null;
     eta?: string | null;
   } | null;
-  const ts = body?.tracking_status;
+  const ts = b?.tracking_status;
   return {
     status: ts?.status || null,
     substatus: ts?.substatus?.code || null,
     detail: ts?.status_details || null,
     location: ts?.location || null,
     statusDate: ts?.status_date || null,
-    eta: body?.eta || null,
+    eta: b?.eta || null,
     error: null,
   };
 }
@@ -84,41 +126,40 @@ export type ShippoRate = {
 
 const ALLOWED_PROVIDERS = ['USPS', 'UPS'];
 
-export async function getRates(key: string, from: ShippoAddress, to: ShippoAddress, parcel: ShippoParcel): Promise<{ rates: ShippoRate[]; allRateCount: number; messages: string[] }> {
-  let res: Response;
-  try {
-    // rate creation costs nothing — safe to retry
-    res = await fetchWithBackoff(`${BASE}/shipments/`, {
-      method: 'POST',
-      headers: headers(key),
-      body: JSON.stringify({ address_from: from, address_to: to, parcels: [parcel], async: false }),
-    });
-  } catch {
-    throw new Error('Could not reach Shippo — check your network connection.');
+export async function getRates(http: ShippoHttp, key: string, from: ShippoAddress, to: ShippoAddress, parcel: ShippoParcel): Promise<{ rates: ShippoRate[]; allRateCount: number; messages: string[] }> {
+  let body: unknown;
+  // rate creation costs nothing — safe to retry once on an ambiguous failure
+  for (let attempt = 0; ; attempt++) {
+    try {
+      body = unwrap(await http.post(key.trim(), '/shipments/', { address_from: from, address_to: to, parcels: [parcel], async: false }));
+      break;
+    } catch (e: unknown) {
+      const { status, message } = normalizeError(e);
+      if (status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
+      if (status !== null && status < 500) throw new Error(`Shippo rate request failed (HTTP ${status}): ${message.slice(0, 300)}`);
+      if (attempt >= 1) throw new Error(`Could not get rates from Shippo (${message.slice(0, 200)}).`);
+      await new Promise(r => setTimeout(r, 800));
+    }
   }
-  if (!res.ok) {
-    if (res.status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
-    const body = await res.json().catch(() => null) as Record<string, unknown> | null;
-    throw new Error(`Shippo rate request failed (HTTP ${res.status})${body ? `: ${JSON.stringify(body).slice(0, 300)}` : ''}`);
-  }
-  const body = await res.json().catch(() => null) as {
+  const b = body as {
     rates?: ShippoRate[];
     messages?: { source?: string; code?: string; text?: string }[];
   } | null;
-  const all = body?.rates || [];
+  const all = b?.rates || [];
   return {
     rates: all.filter(r => ALLOWED_PROVIDERS.includes((r.provider || '').toUpperCase())),
     allRateCount: all.length,
-    messages: (body?.messages || []).map(m => [m.source, m.code, m.text].filter(Boolean).join(' ')).filter(Boolean),
+    messages: (b?.messages || []).map(m => [m.source, m.code, m.text].filter(Boolean).join(' ')).filter(Boolean),
   };
 }
 
 /**
- * Thrown ONLY when Shippo returned an explicit ERROR-status transaction —
- * a DEFINITIVE refusal: no charge, no label. Callers may safely release
- * the purchase lease on this error. Every other purchase failure
- * (network drop, 5xx, poll timeout) throws a plain Error and must be
- * treated as AMBIGUOUS — money may have moved.
+ * Thrown ONLY on a DEFINITIVE refusal: an explicit ERROR-status
+ * transaction from Shippo, or a 4xx validation rejection of the purchase
+ * POST itself (400/422 — the request was refused, no charge, no label).
+ * Callers may safely release the purchase lease on this error. Every
+ * other purchase failure (backend drop, 5xx, poll timeout) throws a
+ * plain Error and must be treated as AMBIGUOUS — money may have moved.
  */
 export class ShippoPurchaseRefusedError extends Error {}
 
@@ -130,39 +171,40 @@ export type PurchaseResult = {
   rateId: string | null;
 };
 
+type Txn = { object_id?: string; status?: string; tracking_number?: string; label_url?: string; rate?: string | { object_id?: string }; messages?: { text?: string; code?: string; source?: string }[] };
+
 /**
- * Buys a REAL label. Single attempt; QUEUED/WAITING is polled by GET.
+ * Buys a REAL label. Single POST; QUEUED/WAITING is polled by GET.
  * Throws with operator-readable messages on failure — and when a
  * transaction id is known, the message INCLUDES it so a
  * purchased-but-unconfirmed label is manually recoverable.
  */
-export async function purchaseLabel(key: string, rateObjectId: string): Promise<PurchaseResult> {
-  let res: Response;
+export async function purchaseLabel(http: ShippoHttp, key: string, rateObjectId: string): Promise<PurchaseResult> {
+  let txn: Txn | null;
   try {
-    res = await fetch(`${BASE}/transactions/`, {
-      method: 'POST',
-      headers: headers(key),
-      body: JSON.stringify({ rate: rateObjectId, label_file_type: 'PDF_4x6', async: false }),
-    });
-  } catch {
-    throw new Error('Network dropped during the label purchase. DO NOT retry blindly — check the Shippo dashboard for a purchased label first, then retry from the draft if none exists.');
+    txn = unwrap(await http.post(key.trim(), '/transactions/', { rate: rateObjectId, label_file_type: 'PDF_4x6', async: false })) as Txn | null;
+  } catch (e: unknown) {
+    const { status, message } = normalizeError(e);
+    if (status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
+    if (status === 400 || status === 422) {
+      // the POST itself was refused at validation — no transaction, no charge
+      throw new ShippoPurchaseRefusedError(`Shippo refused the label purchase (HTTP ${status}): ${message.slice(0, 300)}${message.toLowerCase().includes('rate') ? ' — the rate may have expired; re-fetch rates.' : ''}`);
+    }
+    throw new Error(`The label purchase did not confirm (${message.slice(0, 200)}). DO NOT retry blindly — use "Check Shippo & retry", which verifies whether a label was already bought.`);
   }
-  return await resolveTransaction(key, res);
+  return await resolveTransaction(http, key, txn);
 }
 
-async function resolveTransaction(key: string, res: Response): Promise<PurchaseResult> {
-  type Txn = { object_id?: string; status?: string; tracking_number?: string; label_url?: string; rate?: string | { object_id?: string }; messages?: { text?: string; code?: string; source?: string }[] };
-  if (!res.ok && res.status !== 400) {
-    // 400s still carry a transaction body with messages; other statuses don't
-    if (res.status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
-    throw new Error(`Shippo purchase failed (HTTP ${res.status}). Check the Shippo dashboard before retrying — the label may still have been created.`);
-  }
-  let txn = await res.json().catch(() => null) as Txn | null;
+async function resolveTransaction(http: ShippoHttp, key: string, initial: Txn | null): Promise<PurchaseResult> {
+  let txn = initial;
   // QUEUED/WAITING resolves within seconds — poll by GET, never re-POST
   for (let i = 0; i < 5 && txn && (txn.status === 'QUEUED' || txn.status === 'WAITING'); i++) {
     await new Promise(r => setTimeout(r, 3000));
-    const poll = await fetch(`${BASE}/transactions/${txn.object_id}`, { headers: { Authorization: `ShippoToken ${key.trim()}` } }).catch(() => null);
-    if (poll?.ok) txn = await poll.json().catch(() => txn) as Txn;
+    try {
+      txn = unwrap(await http.get(key.trim(), `/transactions/${txn.object_id}`)) as Txn;
+    } catch {
+      // keep the last known state; the loop or the fallthrough handles it
+    }
   }
   if (txn && txn.status === 'SUCCESS' && txn.label_url) {
     return {
@@ -172,7 +214,7 @@ async function resolveTransaction(key: string, res: Response): Promise<PurchaseR
   }
   const msgs = (txn?.messages || []).map(m => m.text || m.code || '').filter(Boolean).join('; ');
   if (txn && (txn.status === 'QUEUED' || txn.status === 'WAITING')) {
-    throw new Error(`Label purchase is still processing at Shippo (transaction ${txn.object_id}). Do NOT purchase again — use "Retry purchase" in a minute; it will pick up this transaction.`);
+    throw new Error(`Label purchase is still processing at Shippo (transaction ${txn.object_id}). Do NOT purchase again — use "Check Shippo & retry" in a minute; it will pick up this transaction.`);
   }
   if (txn && txn.status === 'ERROR') {
     // DEFINITIVE refusal — no charge, no label; safe to release the lease
@@ -199,25 +241,25 @@ async function resolveTransaction(key: string, res: Response): Promise<PurchaseR
  * two; the page cap is a backstop that in practice only fires when no
  * createdAfter is available.
  */
-export async function findTransactionByRate(key: string, rateId: string, createdAfter?: string): Promise<PurchaseResult | null> {
+export async function findTransactionByRate(http: ShippoHttp, key: string, rateId: string, createdAfter?: string): Promise<PurchaseResult | null> {
   const MAX_PAGES = 50;
   const cutoffMs = createdAfter ? Date.parse(createdAfter) - 24 * 3600 * 1000 : NaN;
-  let url = `${BASE}/transactions/?results=100`;
+  let path = '/transactions/?results=100';
   for (let page = 0; page < MAX_PAGES; page++) {
-    let res: Response;
+    let body: unknown;
     try {
       // read-only listing — retry freely
-      res = await fetchWithBackoff(url, { headers: { Authorization: `ShippoToken ${key.trim()}` } });
-    } catch {
-      throw new Error('Could not reach Shippo to check for an existing label — do not re-purchase or delete until this check succeeds.');
+      body = await getWithRetry(http, key.trim(), path);
+    } catch (e: unknown) {
+      const { message } = normalizeError(e);
+      throw new Error(`Could not check Shippo for an existing label (${message.slice(0, 160)}) — do not re-purchase or delete until this check succeeds.`);
     }
-    if (!res.ok) throw new Error(`Shippo transaction lookup failed (HTTP ${res.status}) — do not re-purchase or delete until this check succeeds.`);
-    const body = await res.json().catch(() => null) as {
-      results?: { object_id?: string; object_created?: string; status?: string; tracking_number?: string; label_url?: string; rate?: string | { object_id?: string } }[];
+    const b = body as {
+      results?: (Txn & { object_created?: string })[];
       next?: string | null;
     } | null;
-    if (!body) throw new Error('Shippo transaction lookup returned an unreadable page — do not re-purchase or delete until this check succeeds.');
-    const matches = (body.results || []).filter(t =>
+    if (!b) throw new Error('Shippo transaction lookup returned an unreadable page — do not re-purchase or delete until this check succeeds.');
+    const matches = (b.results || []).filter(t =>
       (typeof t.rate === 'string' ? t.rate : t.rate?.object_id) === rateId);
     const success = matches.find(t => t.status === 'SUCCESS' && t.label_url);
     if (success) return { transactionId: success.object_id || '', trackingNumber: success.tracking_number || '', labelUrl: success.label_url!, rateId };
@@ -226,26 +268,32 @@ export async function findTransactionByRate(key: string, rateId: string, created
     }
     // an ERROR-status match proves the purchase attempt failed — keep
     // walking in case a later retry succeeded on the same rate
-    if (!body.next) return null; // walked every page — provably no label
-    const rows = body.results || [];
+    if (!b.next) return null; // walked every page — provably no label
+    const rows = b.results || [];
     if (!Number.isNaN(cutoffMs) && rows.length > 0 &&
         rows.every(t => t.object_created && Date.parse(t.object_created) < cutoffMs)) {
       return null; // newest-first: everything beyond this page predates the draft
     }
-    if (!body.next.startsWith(BASE)) {
+    if (!b.next.startsWith(BASE)) {
       throw new Error('Shippo returned an unexpected pagination link — do not re-purchase or delete until this check succeeds.');
     }
-    url = body.next;
+    path = relativize(b.next);
   }
   throw new Error(`Shippo transaction history exceeds ${MAX_PAGES * 100} entries — the existing-label check could not complete. Do not re-purchase or delete; find the label in the Shippo dashboard instead.`);
 }
 
 /** Re-check a known transaction (recovery path for QUEUED timeouts). */
-export async function getTransaction(key: string, transactionId: string): Promise<PurchaseResult> {
-  const res = await fetch(`${BASE}/transactions/${encodeURIComponent(transactionId)}`, {
-    headers: { Authorization: `ShippoToken ${key.trim()}` },
-  });
-  return await resolveTransaction(key, res);
+export async function getTransaction(http: ShippoHttp, key: string, transactionId: string): Promise<PurchaseResult> {
+  let txn: Txn | null;
+  try {
+    txn = unwrap(await http.get(key.trim(), `/transactions/${encodeURIComponent(transactionId)}`)) as Txn | null;
+  } catch (e: unknown) {
+    const { status, message } = normalizeError(e);
+    if (status === 401) throw new Error('Shippo rejected the API key (401) — check Settings.');
+    if (status === 404) throw new Error('Shippo has no transaction with that id — double-check it against the dashboard.');
+    throw new Error(`Could not fetch that transaction from Shippo (${message.slice(0, 160)}).`);
+  }
+  return await resolveTransaction(http, key, txn);
 }
 
 /**
@@ -258,54 +306,50 @@ export async function getTransaction(key: string, transactionId: string): Promis
  * walk by the TRANSFER's age: a refund for this label cannot predate
  * it, so a page entirely older than that (minus 24h skew) ends the walk.
  */
-export async function findRefundByTransaction(key: string, transactionId: string, createdAfter?: string): Promise<string | null> {
+export async function findRefundByTransaction(http: ShippoHttp, key: string, transactionId: string, createdAfter?: string): Promise<string | null> {
   const MAX_PAGES = 50;
   const cutoffMs = createdAfter ? Date.parse(createdAfter) - 24 * 3600 * 1000 : NaN;
-  let url = `${BASE}/refunds/?results=100`;
+  let path = '/refunds/?results=100';
   for (let page = 0; page < MAX_PAGES; page++) {
-    let res: Response;
+    let body: unknown;
     try {
       // read-only listing — retry freely
-      res = await fetchWithBackoff(url, { headers: { Authorization: `ShippoToken ${key.trim()}` } });
-    } catch {
-      throw new Error('Could not reach Shippo to check for an existing refund — do not re-request until this check succeeds.');
+      body = await getWithRetry(http, key.trim(), path);
+    } catch (e: unknown) {
+      const { message } = normalizeError(e);
+      throw new Error(`Could not check Shippo for an existing refund (${message.slice(0, 160)}) — do not re-request until this check succeeds.`);
     }
-    if (!res.ok) throw new Error(`Shippo refund lookup failed (HTTP ${res.status}) — do not re-request until this check succeeds.`);
-    const body = await res.json().catch(() => null) as {
+    const b = body as {
       results?: { object_id?: string; object_created?: string; status?: string; transaction?: string | { object_id?: string } }[];
       next?: string | null;
     } | null;
-    if (!body) throw new Error('Shippo refund lookup returned an unreadable page — do not re-request until this check succeeds.');
-    const match = (body.results || []).find(r =>
+    if (!b) throw new Error('Shippo refund lookup returned an unreadable page — do not re-request until this check succeeds.');
+    const match = (b.results || []).find(r =>
       (typeof r.transaction === 'string' ? r.transaction : r.transaction?.object_id) === transactionId);
     if (match) return match.status || 'PENDING';
-    if (!body.next) return null; // walked every page — provably no refund
-    const rows = body.results || [];
+    if (!b.next) return null; // walked every page — provably no refund
+    const rows = b.results || [];
     if (!Number.isNaN(cutoffMs) && rows.length > 0 &&
         rows.every(r => r.object_created && Date.parse(r.object_created) < cutoffMs)) {
       return null; // newest-first: everything beyond this page predates the transfer
     }
-    if (!body.next.startsWith(BASE)) {
+    if (!b.next.startsWith(BASE)) {
       throw new Error('Shippo returned an unexpected pagination link — do not re-request until this check succeeds.');
     }
-    url = body.next;
+    path = relativize(b.next);
   }
   throw new Error(`Shippo refund history exceeds ${MAX_PAGES * 100} entries — the check could not complete; use the Shippo dashboard.`);
 }
 
 /** Request a refund for a purchased label. Single attempt. */
-export async function requestRefund(key: string, transactionId: string): Promise<string> {
-  let res: Response;
+export async function requestRefund(http: ShippoHttp, key: string, transactionId: string): Promise<string> {
+  let body: unknown;
   try {
-    res = await fetch(`${BASE}/refunds/`, {
-      method: 'POST',
-      headers: headers(key),
-      body: JSON.stringify({ transaction: transactionId, async: false }),
-    });
-  } catch {
-    throw new Error('Network dropped during the refund request — check the Shippo dashboard before retrying.');
+    body = unwrap(await http.post(key.trim(), '/refunds/', { transaction: transactionId, async: false }));
+  } catch (e: unknown) {
+    const { status, message } = normalizeError(e);
+    if (status !== null && status < 500) throw new Error(`Shippo refused the refund request (HTTP ${status}): ${message.slice(0, 200)}`);
+    throw new Error(`The refund request did not confirm (${message.slice(0, 160)}) — use "Re-check" to reconcile with Shippo before trying again.`);
   }
-  const body = await res.json().catch(() => null) as { status?: string } | null;
-  if (!res.ok) throw new Error(`Shippo refund request failed (HTTP ${res.status}).`);
-  return body?.status || 'REFUNDPENDING';
+  return (body as { status?: string } | null)?.status || 'REFUNDPENDING';
 }

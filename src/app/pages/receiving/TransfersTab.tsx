@@ -9,6 +9,7 @@ import deleteTransferDraft from '@/actions/receiving/deleteTransferDraft';
 import setTransferRefund from '@/actions/receiving/setTransferRefund';
 import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
+import type { ShippoHttp } from '@/lib/useShippoHttp';
 import { useApp } from '@/app/AppContext';
 import { fmtUSD, fmtNum, fmtDate } from '@/lib/fmt';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,9 +30,9 @@ const toShippoAddress = (a: RxAddress | CustomDest): ShippoAddress => ({
 type CustomDest = { name: string; street1: string; street2: string; city: string; state: string; zip: string; country: string; phone: string; email: string };
 const EMPTY_DEST: CustomDest = { name: '', street1: '', street2: '', city: '', state: '', zip: '', country: 'US', phone: '', email: '' };
 
-export function TransfersTab({ addresses, destinations, products, transfers, inventory, shippoKey, testMode, reloadTransfers, reloadDestinations }: {
+export function TransfersTab({ addresses, destinations, products, transfers, inventory, shippoKey, shippoHttp, testMode, reloadTransfers, reloadDestinations }: {
   addresses: RxAddress[]; destinations: RxAddress[]; products: CatalogProduct[];
-  transfers: TransferRow[]; inventory: InvRow[]; shippoKey: string; testMode: boolean;
+  transfers: TransferRow[]; inventory: InvRow[]; shippoKey: string; shippoHttp: ShippoHttp; testMode: boolean;
   reloadTransfers: () => void; reloadDestinations: () => void;
 }) {
   void reloadDestinations;
@@ -143,7 +144,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     if (lineError) { setFMsg(lineError); return; }
     setRatesLoading(true);
     try {
-      const res = await getRates(shippoKey, toShippoAddress(from), to, {
+      const res = await getRates(shippoHttp, shippoKey, toShippoAddress(from), to, {
         length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(),
         distance_unit: 'in', weight: dims.weight.trim(), mass_unit: 'lb',
       });
@@ -270,7 +271,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       // 3. buy the label (single attempt inside)
       let result: PurchaseResult;
       try {
-        result = await purchaseLabel(shippoKey, rate.object_id);
+        result = await purchaseLabel(shippoHttp, shippoKey, rate.object_id);
       } catch (e: unknown) {
         // a DEFINITIVE Shippo refusal (no charge, no label) releases the
         // lease so the draft is immediately retryable/deletable; ambiguous
@@ -315,7 +316,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     const txn = (recoverTxn[t.id] || '').trim();
     if (!txn) { setDraftMsg(m => ({ ...m, [t.id]: 'Paste the transaction id from the error message or the Shippo dashboard.' })); return; }
     try {
-      const result = await getTransaction(shippoKey, txn);
+      const result = await getTransaction(shippoHttp, shippoKey, txn);
       // RATE-BOUND: a pasted id can be any label in the account — attaching
       // one bought against a different rate would finalize the WRONG draft
       // and decrement the wrong inventory. The draft's stored rate is the
@@ -341,7 +342,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       // recovered here instead of being bought twice
       let existing: Awaited<ReturnType<typeof findTransactionByRate>>;
       try {
-        existing = await findTransactionByRate(shippoKey, t.shippo_rate_id, t.created_at);
+        existing = await findTransactionByRate(shippoHttp, shippoKey, t.shippo_rate_id, t.created_at);
       } catch (e: unknown) {
         setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Could not verify with Shippo — not purchasing.' }));
         return;
@@ -373,7 +374,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       }
       let result: PurchaseResult;
       try {
-        result = await purchaseLabel(shippoKey, t.shippo_rate_id);
+        result = await purchaseLabel(shippoHttp, shippoKey, t.shippo_rate_id);
       } catch (e: unknown) {
         if (e instanceof ShippoPurchaseRefusedError && claimRow.claimed_at) {
           await doClearLease({ transfer_id: t.id, claimed_at: claimRow.claimed_at, actor: userName }).catch(() => null);
@@ -407,7 +408,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
       return;
     }
     try {
-      const existing = await findTransactionByRate(shippoKey, t.shippo_rate_id, t.created_at);
+      const existing = await findTransactionByRate(shippoHttp, shippoKey, t.shippo_rate_id, t.created_at);
       if (existing) {
         const finOk = await persistFinalize(t.id, existing, t.shippo_rate_id);
         setDraftMsg(m => ({ ...m, [t.id]: finOk
@@ -477,7 +478,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
         }
       }
       try {
-        const status = await requestRefund(shippoKey, t.shippo_transaction_id);
+        const status = await requestRefund(shippoHttp, shippoKey, t.shippo_transaction_id);
         await doSetRefund({ transfer_id: t.id, refund_status: status, prior_requested_at: '', actor: userName });
         reloadTransfers();
       } catch (e: unknown) {
@@ -500,7 +501,7 @@ export function TransfersTab({ addresses, destinations, products, transfers, inv
     }
     refundInFlight.current = true;
     try {
-      const status = await findRefundByTransaction(shippoKey, t.shippo_transaction_id, t.created_at);
+      const status = await findRefundByTransaction(shippoHttp, shippoKey, t.shippo_transaction_id, t.created_at);
       if (status) {
         await doSetRefund({ transfer_id: t.id, refund_status: status, prior_requested_at: '', actor: userName });
         setDraftMsg(m => ({ ...m, [t.id]: '' }));
