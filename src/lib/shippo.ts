@@ -39,22 +39,34 @@ export function isTestKey(key: string): boolean {
  * tracking, rates, or labels.
  */
 export async function testShippoConnection(http: ShippoHttp, key: string): Promise<{ ok: boolean; message: string }> {
+  // 1/2: GET probe with the SAME positive listing schema the recovery
+  // walks demand (results array + next present as string-or-null)
   try {
     const body = unwrap(await http.get(key.trim(), '/transactions/?results=1'));
-    // the SAME positive listing schema the recovery walks demand
-    // (results array + next present as string-or-null) — a green result
-    // must prove the contract the real flows rely on, not a weaker one
     const b = body as { results?: unknown; next?: unknown } | null;
-    if (b && typeof b === 'object' && Array.isArray(b.results) && 'next' in b
-        && (b.next === null || typeof b.next === 'string')) {
-      return { ok: true, message: `Connected — GET reads verified end to end (datasource, backend, key, response schema)${isTestKey(key) ? ' (TEST key)' : ''}. NOTE: this does not verify the POST path — the first rate quote is the POST smoke test (rate creation is free); run one before relying on labels or refunds.` };
+    if (!(b && typeof b === 'object' && Array.isArray(b.results) && 'next' in b
+        && (b.next === null || typeof b.next === 'string'))) {
+      return { ok: false, message: 'GET reached the backend, but the response shape was unrecognized — check the "Shippo API" datasource base URL (must be https://api.goshippo.com with no path).' };
     }
-    return { ok: false, message: 'Reached the backend, but the response shape was unrecognized — check the "Shippo API" datasource base URL (must be https://api.goshippo.com with no path).' };
   } catch (e: unknown) {
     const { status, message } = normalizeError(e);
     if (status === 401) return { ok: false, message: 'Shippo appears to have rejected the key (the error mentions 401) — re-check it above.' };
-    return { ok: false, message: `Could not reach Shippo through the backend (${message.slice(0, 160)}). Verify the workspace has an HTTP datasource named exactly "Shippo API" with base URL https://api.goshippo.com — see src/actions/shippo/DATASOURCE.md.` };
+    return { ok: false, message: `GET could not reach Shippo through the backend (${message.slice(0, 160)}). Verify the workspace has an HTTP datasource named exactly "Shippo API" with base URL https://api.goshippo.com — see src/actions/shippo/DATASOURCE.md.` };
   }
+  // 2/2: POST probe through the EXACT shippoPost path the rate/label/
+  // refund flows use — registering a track for Shippo's documented test
+  // carrier is free and side-effect-light (no shipment, no money), and
+  // the response must be a structurally recognizable track object
+  try {
+    const body = unwrap(await http.post(key.trim(), '/tracks/', { carrier: 'shippo', tracking_number: 'SHIPPO_TRANSIT' }));
+    if (!(body && typeof body === 'object' && 'tracking_status' in (body as Record<string, unknown>))) {
+      return { ok: false, message: 'GET works, but the POST response shape was unrecognized — rates/labels/refunds would fail. Check the shippoPost action and datasource config (src/actions/shippo/DATASOURCE.md).' };
+    }
+  } catch (e: unknown) {
+    const { message } = normalizeError(e);
+    return { ok: false, message: `GET works, but the POST path failed (${message.slice(0, 160)}) — rates/labels/refunds would fail until this is fixed.` };
+  }
+  return { ok: true, message: `Connected — BOTH transports verified end to end (GET listing schema + POST track registration through the exact rate/label path)${isTestKey(key) ? ' (TEST key)' : ''}.` };
 }
 
 /** Absolute Shippo pagination links become datasource-relative paths. */

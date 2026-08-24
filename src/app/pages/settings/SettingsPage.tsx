@@ -108,15 +108,19 @@ export function SettingsPage() {
     }
   };
 
-  // one cheap read through the FULL chain (datasource → backend → Shippo
-  // → key) so a missing or drifted "Shippo API" datasource fails fast
-  // here instead of mid-purchase on the Receiving page
+  // GET + POST probes through the FULL chain (datasource → backend →
+  // Shippo → key) so a missing or drifted "Shippo API" datasource fails
+  // fast here instead of mid-purchase on the Receiving page. Tests the
+  // PERSISTED key — the one Receiving/Transfers actually run with — not
+  // whatever sits unsaved in the field.
   const testShippo = async () => {
-    if (!shippoKey.trim()) { setShippoMsg('Enter and save the token first.'); return; }
+    const saved = (settings.shippo_api_key || '').trim();
+    if (!saved) { setShippoMsg('Save the token first — the test verifies the SAVED key the app runs with.'); return; }
     setShippoTesting(true); setShippoMsg('Testing…');
     try {
-      const r = await testShippoConnection(shippoHttp, shippoKey);
-      setShippoMsg((r.ok ? '✓ ' : '✗ ') + r.message);
+      const r = await testShippoConnection(shippoHttp, saved);
+      const unsavedNote = shippoKey.trim() !== saved ? ' (NOTE: the field above has unsaved changes — this tested the SAVED key.)' : '';
+      setShippoMsg((r.ok ? '✓ ' : '✗ ') + r.message + unsavedNote);
     } finally {
       setShippoTesting(false);
     }
