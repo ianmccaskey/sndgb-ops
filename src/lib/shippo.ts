@@ -168,7 +168,12 @@ export async function trackPackage(http: ShippoHttp, key: string, carrier: strin
   // being wiped by blanks.
   if (!body || typeof body !== 'object'
       || !('tracking_status' in (body as Record<string, unknown>))
-      || !('tracking_number' in (body as Record<string, unknown>) || 'carrier' in (body as Record<string, unknown>))) {
+      || !('tracking_number' in (body as Record<string, unknown>) || 'carrier' in (body as Record<string, unknown>))
+      // tracking_status itself must be null (no scans yet) or an object —
+      // a string/other value means the payload drifted, and returning
+      // success would blank the stored snapshot with nulls
+      || !((body as Record<string, unknown>).tracking_status === null
+           || typeof (body as Record<string, unknown>).tracking_status === 'object')) {
     return { ...empty, error: 'Shippo tracking came back in an unrecognized shape — refresh skipped, previous status kept.' };
   }
   const b = body as {
