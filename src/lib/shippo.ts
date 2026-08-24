@@ -30,6 +30,28 @@ export function isTestKey(key: string): boolean {
   return key.trim().toLowerCase().startsWith('shippo_test');
 }
 
+/**
+ * One cheap read that proves the whole chain: 'Shippo API' datasource
+ * present and pointed correctly, backend path working, key accepted,
+ * response in the expected Shippo shape. Wired to the Settings "Test
+ * Shippo connection" button so a missing/misconfigured datasource fails
+ * FAST and visibly, per environment, before any operator relies on
+ * tracking, rates, or labels.
+ */
+export async function testShippoConnection(http: ShippoHttp, key: string): Promise<{ ok: boolean; message: string }> {
+  try {
+    const body = unwrap(await http.get(key.trim(), '/transactions/?results=1'));
+    if (body && typeof body === 'object' && Array.isArray((body as Record<string, unknown>).results)) {
+      return { ok: true, message: `Connected — datasource, backend, and key all work${isTestKey(key) ? ' (TEST key)' : ''}.` };
+    }
+    return { ok: false, message: 'Reached the backend, but the response shape was unrecognized — check the "Shippo API" datasource base URL (must be https://api.goshippo.com with no path).' };
+  } catch (e: unknown) {
+    const { status, message } = normalizeError(e);
+    if (status === 401) return { ok: false, message: 'Shippo appears to have rejected the key (the error mentions 401) — re-check it above.' };
+    return { ok: false, message: `Could not reach Shippo through the backend (${message.slice(0, 160)}). Verify the workspace has an HTTP datasource named exactly "Shippo API" with base URL https://api.goshippo.com — see src/actions/shippo/DATASOURCE.md.` };
+  }
+}
+
 /** Absolute Shippo pagination links become datasource-relative paths. */
 function relativize(url: string): string {
   return url.startsWith(BASE) ? url.slice(BASE.length) : url;
@@ -55,7 +77,13 @@ function unwrap(r: unknown): unknown {
   return r;
 }
 
-/** Retry wrapper for READ paths only — never wraps money-moving POSTs. */
+/**
+ * Retry wrapper for READ paths only — never wraps money-moving POSTs.
+ * Deliberately retries EVERY failure: the platform's thrown error shape
+ * is unstructured, so a regexed status is never trusted for control
+ * flow (a fake 4xx must not suppress retries). A genuine 4xx just fails
+ * all attempts quickly; statuses are used for operator HINTS only.
+ */
 async function getWithRetry(http: ShippoHttp, token: string, path: string, attempts = 3): Promise<unknown> {
   let last: unknown;
   for (let i = 0; i < attempts; i++) {
@@ -63,9 +91,6 @@ async function getWithRetry(http: ShippoHttp, token: string, path: string, attem
       return unwrap(await http.get(token, path));
     } catch (e: unknown) {
       last = e;
-      const { status } = normalizeError(e);
-      // 4xx (except 429) is a real answer — retrying won't change it
-      if (status !== null && status < 500 && status !== 429) throw e;
       if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)));
     }
   }
@@ -88,11 +113,12 @@ export async function trackPackage(http: ShippoHttp, key: string, carrier: strin
   try {
     body = await getWithRetry(http, key.trim(), `/tracks/${encodeURIComponent(carrier.trim())}/${encodeURIComponent(trackingNumber.trim())}`);
   } catch (e: unknown) {
+    // statuses below are HINTS parsed from unstructured error text, never
+    // control flow — phrased accordingly
     const { status, message } = normalizeError(e);
-    if (status === 401) return { ...empty, error: 'Shippo rejected the API key (401) — check Settings.' };
-    if (status === 404 || status === 400) return { ...empty, error: `Carrier/tracking not recognized by Shippo (HTTP ${status}) — check the carrier token and number.` };
-    if (status !== null) return { ...empty, error: `Shippo tracking failed (HTTP ${status}).` };
-    return { ...empty, error: `Could not reach Shippo (${message.slice(0, 120)}).` };
+    if (status === 401) return { ...empty, error: 'Shippo appears to have rejected the API key (the error mentions 401) — check Settings.' };
+    if (status === 404 || status === 400) return { ...empty, error: `Carrier/tracking not recognized (the error mentions HTTP ${status}) — check the carrier token and number.` };
+    return { ...empty, error: `Could not reach Shippo through the backend (${message.slice(0, 140)}).` };
   }
   // POSITIVE schema gate: a Shippo track object always carries the
   // tracking_status key (possibly null) plus its identity fields. An

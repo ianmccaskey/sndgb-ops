@@ -9,6 +9,8 @@ import listWallets from '@/actions/financials/listWallets';
 import updateWallet from '@/actions/financials/updateWallet';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
+import { testShippoConnection } from '@/lib/shippo';
+import { useShippoHttp } from '@/lib/useShippoHttp';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -56,6 +58,8 @@ export function SettingsPage() {
   // shippo (package tracking + transfer labels)
   const [shippoKey, setShippoKey] = useState('');
   const [shippoMsg, setShippoMsg] = useState('');
+  const [shippoTesting, setShippoTesting] = useState(false);
+  const shippoHttp = useShippoHttp();
 
   // campaign form
   const [gbName, setGbName] = useState('');
@@ -101,6 +105,20 @@ export function SettingsPage() {
       setShippoMsg('Saved.');
     } catch (e: unknown) {
       setShippoMsg(e instanceof Error ? e.message : 'Failed to save');
+    }
+  };
+
+  // one cheap read through the FULL chain (datasource → backend → Shippo
+  // → key) so a missing or drifted "Shippo API" datasource fails fast
+  // here instead of mid-purchase on the Receiving page
+  const testShippo = async () => {
+    if (!shippoKey.trim()) { setShippoMsg('Enter and save the token first.'); return; }
+    setShippoTesting(true); setShippoMsg('Testing…');
+    try {
+      const r = await testShippoConnection(shippoHttp, shippoKey);
+      setShippoMsg((r.ok ? '✓ ' : '✗ ') + r.message);
+    } finally {
+      setShippoTesting(false);
     }
   };
 
@@ -292,8 +310,11 @@ export function SettingsPage() {
               TEST token — tracking data on the Receiving page will be simulated and auto-receive is disabled; labels purchased are test labels.
             </p>
           )}
-          {shippoMsg && <p className="text-sm text-muted-foreground">{shippoMsg}</p>}
-          <Button size="sm" onClick={saveShippo}>Save Shippo token</Button>
+          {shippoMsg && <p className="text-sm text-muted-foreground break-all">{shippoMsg}</p>}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={saveShippo}>Save Shippo token</Button>
+            <Button size="sm" variant="outline" disabled={shippoTesting} onClick={testShippo}>{shippoTesting ? 'Testing…' : 'Test Shippo connection'}</Button>
+          </div>
           <p className="text-xs text-muted-foreground">
             Powers inbound package tracking and transfer label purchases on the Receiving page. Enable UPS in your Shippo dashboard (Carriers) to see UPS rates.
           </p>
