@@ -57,9 +57,21 @@ function relativize(url: string): string {
   return url.startsWith(BASE) ? url.slice(BASE.length) : url;
 }
 
+/**
+ * Every operator-facing slice of a thrown transport message passes
+ * through here: token-shaped substrings are struck out FIRST, so even
+ * if the platform ever echoes request headers into an error, the live
+ * key cannot reach the UI, screenshots, or logs.
+ */
+function sanitize(text: string): string {
+  return text
+    .replace(/ShippoToken\s+[^\s"'\\)\]}]+/gi, 'ShippoToken ***')
+    .replace(/shippo_(live|test)_[A-Za-z0-9]+/gi, 'shippo_$1_***');
+}
+
 type NormalizedError = { status: number | null; message: string };
 function normalizeError(e: unknown): NormalizedError {
-  const message = e instanceof Error ? e.message : String(e);
+  const message = sanitize(e instanceof Error ? e.message : String(e));
   const m = message.match(/\b([45]\d\d)\b/);
   return { status: m ? Number(m[1]) : null, message };
 }
