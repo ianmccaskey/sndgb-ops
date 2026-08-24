@@ -159,7 +159,14 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
         return;
       }
       if (!row.ok) return;
-      if (addresses.some(a => a.label === row.label)) row.reason = 'updates an existing address';
+      const existing = addresses.find(a => a.label === row.label);
+      if (existing && !existing.active) {
+        // the upsert only updates fields — it does NOT reactivate, so a
+        // "saved" here would look like success while the label stays
+        // unusable for package imports. Refuse instead of misleading.
+        row.ok = false;
+        row.reason = 'this label is ARCHIVED — restore it on the Addresses tab first, then re-import';
+      } else if (existing) row.reason = 'updates an existing address';
       else {
         const ciClash = addresses.find(a => a.label.toLowerCase() === row.label.toLowerCase());
         if (ciClash) row.reason = `WARNING: differs only by case from existing "${ciClash.label}" — this creates a SEPARATE address`;
@@ -259,7 +266,11 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
       const productCandidates = !skuExact && skuCi.length > 1 ? skuCi : (nameCi.length > 1 ? nameCi : []);
       const qtyCents = qtyToCents(qtyRaw);
 
-      const key = `${carrier}|${tracking}`;
+      // collision-free group identity: carrier and tracking are free text
+      // (unknown tokens are allowed through with a warning), so a
+      // delimiter-joined key would let carrier "foo|bar" + tracking "123"
+      // alias carrier "foo" + tracking "bar|123" into one group
+      const key = JSON.stringify([carrier, tracking]);
       let g = groups.get(key);
       if (!g) {
         g = {
