@@ -36,6 +36,12 @@ export type TransferRow = {
   tracking_number: string | null; label_url: string | null; refund_status: string | null;
   note: string | null; finalized_at: string | null; created_by: string; created_at: string;
   purchase_attempted_at: string | null;
+  // direct-ship link state: the order line this transfer completes when
+  // it finalizes, and whether an expired reservation was RECLAIMED by a
+  // newer draft (a reclaimed draft can recover an already-bought label
+  // but can never buy a new one — and any label it recovers is ORPHANED
+  // from the order line)
+  direct_order_item_id: number | null; direct_link_reclaimed_at: string | null;
   items: { product_id: number; sku_code: string; qty: string }[] | null;
 };
 export type CatalogProduct = { id: number; sku_code: string; name: string; mass_label: string | null; active: boolean };

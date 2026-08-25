@@ -33,7 +33,7 @@ function finalizeTransfer() {
           AND TRIM({{params.label_url}}) <> ''
           AND t.shippo_rate_id = TRIM({{params.rate_id}})
         RETURNING t.id, t.shippo_transaction_id, t.tracking_number, t.label_url, t.rate_amount,
-                  t.carrier, t.direct_order_item_id, t.destination
+                  t.carrier, t.direct_order_item_id, t.destination, t.direct_link_reclaimed_at
       ),
       -- the linked direct-ship line completes WITH the label, in the same
       -- statement: only if it is still outstanding AND still passes the
@@ -97,6 +97,11 @@ function finalizeTransfer() {
       )
       SELECT fin_audit.row_pk AS id,
              up.direct_order_item_id,
+             -- non-null = this draft LOST its direct-ship reservation to a
+             -- newer draft before this label was recovered: the label is
+             -- real and recorded, but it is ORPHANED from any order line —
+             -- the caller must warn about a possible duplicate
+             (jsonb_build_object('r', up.direct_link_reclaimed_at)->>'r') AS direct_link_reclaimed_at,
              (SELECT count(*) FROM stamp) AS direct_stamped
       FROM fin_audit, up
     `,

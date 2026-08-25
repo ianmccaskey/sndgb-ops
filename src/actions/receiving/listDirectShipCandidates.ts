@@ -33,7 +33,9 @@ function listDirectShipCandidates() {
         AND oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL
         AND COALESCE(o.address_line1, '') <> ''
       ORDER BY o.order_number, p.sku_code
-      LIMIT 1000
+      -- 1001 = 1000 shown + 1 overflow sentinel: the client warns when a
+      -- campaign exceeds the window instead of silently hiding lines
+      LIMIT 1001
     `,
   });
 }

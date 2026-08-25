@@ -17,6 +17,7 @@ function listTransfers() {
              -- exact-text token for the attempted-clear CAS (jsonb round
              -- trip preserves microseconds; driver Date coercion may not)
              (jsonb_build_object('a', t.purchase_attempted_at)->>'a') AS purchase_attempted_at,
+             t.direct_order_item_id, t.direct_link_reclaimed_at,
              COALESCE(items.items, '[]'::jsonb) AS items
       FROM transfers t
       JOIN receive_addresses ra ON ra.id = t.from_address_id

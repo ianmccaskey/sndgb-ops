@@ -42,7 +42,11 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // outstanding vendor-direct order lines (money-gated server-side) —
   // offered as destinations when the transfer carries their product
   const [rawDirectShips, , , reloadDirectShips] = useLoadAction(listDirectShipCandidates, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
-  const directShips = rows<DirectShipCandidate>(rawDirectShips);
+  const allDirectShips = rows<DirectShipCandidate>(rawDirectShips);
+  // the action fetches 1001 as an overflow sentinel — never silently
+  // hide eligible lines behind the window
+  const directShipsOverflow = allDirectShips.length > 1000;
+  const directShips = directShipsOverflow ? allDirectShips.slice(0, 1000) : allDirectShips;
   const [doCreate] = useMutateAction(createTransfer);
   const [doClaimPurchase] = useMutateAction(markTransferPurchaseStarted);
   const [doClearLease] = useMutateAction(clearTransferPurchaseLease);
@@ -84,22 +88,29 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // refusal, so the caller's recovery branch (pendingFinalize + label URL
   // + transaction id) always runs — a charged label must never lose its
   // recovery handles to an exception path
-  const persistFinalize = async (transferId: number, result: PurchaseResult, rateFallback: string): Promise<{ ok: boolean; directItemId: number | null; directStamped: boolean }> => {
+  const persistFinalize = async (transferId: number, result: PurchaseResult, rateFallback: string): Promise<{ ok: boolean; directItemId: number | null; directStamped: boolean; linkReclaimed: boolean }> => {
     try {
       const fin = await doFinalize({
         transfer_id: transferId, transaction_id: result.transactionId,
         tracking_number: result.trackingNumber, label_url: result.labelUrl,
         rate_id: result.rateId || rateFallback, actor: userName,
       }) as unknown[] | null;
-      const row = Array.isArray(fin) && fin.length > 0 ? fin[0] as { direct_order_item_id: string | null; direct_stamped: string | number } : null;
-      if (!row) return { ok: false, directItemId: null, directStamped: false };
+      const row = Array.isArray(fin) && fin.length > 0 ? fin[0] as { direct_order_item_id: string | null; direct_link_reclaimed_at: string | null; direct_stamped: string | number } : null;
+      if (!row) return { ok: false, directItemId: null, directStamped: false, linkReclaimed: false };
       // the draft's linked direct-ship order line completes inside the same
       // finalize statement; report whether the stamp actually landed (it
-      // refuses harmlessly if the line was fulfilled/removed meanwhile)
+      // refuses harmlessly if the line was fulfilled/removed meanwhile).
+      // linkReclaimed = this draft LOST its reservation to a newer draft
+      // before the label was recovered: the label is ORPHANED — warn.
       if (row.direct_order_item_id != null) reloadDirectShips();
-      return { ok: true, directItemId: row.direct_order_item_id != null ? Number(row.direct_order_item_id) : null, directStamped: Number(row.direct_stamped) > 0 };
+      return {
+        ok: true,
+        directItemId: row.direct_order_item_id != null ? Number(row.direct_order_item_id) : null,
+        directStamped: Number(row.direct_stamped) > 0,
+        linkReclaimed: row.direct_link_reclaimed_at != null,
+      };
     } catch {
-      return { ok: false, directItemId: null, directStamped: false };
+      return { ok: false, directItemId: null, directStamped: false, linkReclaimed: false };
     }
   };
 
@@ -111,10 +122,19 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // appended to every recovery-path outcome whenever a linked direct-ship
   // line failed to stamp — the label saved fine, but the customer's order
   // line stayed outstanding and the operator must know on EVERY path
-  const directMissNote = (fin: { directItemId: number | null; directStamped: boolean }) =>
-    fin.directItemId != null && !fin.directStamped
-      ? 'NOTE: the linked direct-ship order line was NOT marked (already fulfilled, or its order is now held/unpaid) — verify in the order sheet.'
-      : '';
+  const directMissNote = (fin: { directItemId: number | null; directStamped: boolean; linkReclaimed: boolean }) =>
+    fin.linkReclaimed
+      ? 'WARNING: this draft LOST its direct-ship reservation to a newer draft before this label was recovered — the label is saved but tied to NO order line. Check the transfer log for a duplicate label to the same customer and refund one.'
+      : fin.directItemId != null && !fin.directStamped
+        ? 'NOTE: the linked direct-ship order line was NOT marked (already fulfilled, its order is now held/unpaid, its quantity or address changed) — verify in the order sheet.'
+        : '';
+
+  // recovery on a RECLAIMED draft is legitimate (the label may be real
+  // money) but must be a conscious act — the recovered label cannot tie
+  // to any order line and may duplicate the newer draft's shipment
+  const confirmReclaimedRecovery = (t: TransferRow): boolean =>
+    !t.direct_link_reclaimed_at
+    || window.confirm('This draft\'s direct-ship reservation was taken over by a NEWER draft, so any label recovered here is tied to NO order line and may DUPLICATE that newer shipment. Only continue to recover a label that was really purchased (it will be recorded for refund/inspection). Continue?');
 
   const destAddress = (): ShippoAddress | null => {
     if (fDest === '__custom__') {
@@ -381,6 +401,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const recoverByTxn = async (t: TransferRow) => {
     const txn = (recoverTxn[t.id] || '').trim();
     if (!txn) { setDraftMsg(m => ({ ...m, [t.id]: 'Paste the transaction id from the error message or the Shippo dashboard.' })); return; }
+    if (!confirmReclaimedRecovery(t)) return;
     try {
       const result = await getTransaction(shippoHttp, shippoKey, txn);
       // RATE-BOUND: a pasted id can be any label in the account — attaching
@@ -401,6 +422,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
 
   const retryPurchase = async (t: TransferRow) => {
     if (purchaseInFlight.current || !t.shippo_rate_id) return;
+    if (!confirmReclaimedRecovery(t)) return;
     purchaseInFlight.current = true;
     try {
       // RELOAD-SAFE: ask Shippo whether this rate was already bought before
@@ -669,6 +691,11 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
               </div>
             </div>
           )}
+          {directShipsOverflow && (
+            <p className="text-[11px] text-amber-700">
+              More than 1,000 eligible direct-ship lines exist in this buy — the destination list shows the first 1,000 by order number. A line you expect but don't see may be past the window; ship it from its order in Fulfillment or narrow the campaign's outstanding list first.
+            </p>
+          )}
           {directCandidate && (
             <p className="text-[11px] text-muted-foreground">
               Ships to {directCandidate.contact_name || directCandidate.customer_name}, {directCandidate.address_line1}
@@ -802,6 +829,11 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                     <span key={i.product_id} className={`rounded text-[10px] font-semibold px-1.5 py-0.5 ${productChipClass(i.product_id)}`}>{i.sku_code} × {fmtNum(i.qty)}</span>
                   ))}
                 </div>
+                {t.direct_link_reclaimed_at && (
+                  <p className="text-[11px] text-amber-700 font-medium">
+                    Direct-ship reservation moved to a NEWER draft — buying here is blocked; recover an already-purchased label (it will be tied to no order line) or delete this draft.
+                  </p>
+                )}
                 <div className="flex flex-wrap gap-1.5 items-center">
                   {pendingFinalize[t.id]
                     ? <Button size="sm" className="h-7 text-xs" onClick={() => retryFinalize(t)}>Retry save (label already purchased)</Button>
