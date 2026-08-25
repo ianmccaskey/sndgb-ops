@@ -90,9 +90,11 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const [recoverTxn, setRecoverTxn] = useState<Record<number, string>>({});
   const [draftMsg, setDraftMsg] = useState<Record<number, string>>({});
   // refs, not state: React re-renders lag double-clicks, and these buttons
-  // spend REAL money
+  // spend REAL money — or, for manual records, write a FINALIZED transfer
+  // that immediately moves inventory
   const purchaseInFlight = useRef(false);
   const refundInFlight = useRef(false);
+  const manualInFlight = useRef(false);
   const [purchasing, setPurchasing] = useState(false);
 
   // EVERY post-purchase finalize goes through here: a THROWN action
@@ -405,7 +407,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // gate failure refuses the whole record; nothing was charged, so
   // refusing outright is free — no direct_stamped=0 halfway state here)
   const recordManual = async () => {
-    if (manualBusy) return;
+    if (manualInFlight.current) return;   // synchronous double-click guard
     setPurchaseMsg(''); setManualSuccess(''); setSuccessDirect('');
     const from = addresses.find(a => String(a.id) === fFrom);
     if (!from) { setPurchaseMsg('Pick the ship-from receive address.'); return; }
@@ -457,6 +459,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       group_buy_id: groupBuyId ?? '',
       note: fNote.trim(), actor: userName,
     });
+    manualInFlight.current = true;
     setManualBusy(true);
     try {
       let res = await doCreateManual(params(allowOver)) as unknown[] | null;
@@ -482,8 +485,19 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       if (isDirect) { setFDest(''); reloadDirectShips(); }
       reloadTransfers();
     } catch (e: unknown) {
-      setPurchaseMsg((e instanceof Error ? e.message : 'Failed to record the transfer') + ' Nothing was recorded.');
+      const m = e instanceof Error ? e.message : '';
+      // 23505 on the manual-label unique index = this label is ALREADY
+      // recorded (a double-click, or a retry whose first attempt landed
+      // despite an error) — definitive, safe outcome
+      setPurchaseMsg(m.includes('transfers_manual_tracking_uniq')
+        ? 'A manual transfer with this carrier + tracking number is ALREADY recorded — a double-click or an earlier attempt landed. Check the transfer log; nothing was duplicated.'
+        // any other throw is AMBIGUOUS for a born-finalized write: the
+        // insert may have committed before the error reached this tab —
+        // never promise "nothing was recorded"
+        : (m || 'Failed to record the transfer') + ' — this may or may not have been saved. CHECK THE TRANSFER LOG for this tracking number before retrying (a retry of a landed record is refused as a duplicate, so retrying is safe).');
+      reloadTransfers();
     } finally {
+      manualInFlight.current = false;
       setManualBusy(false);
     }
   };
