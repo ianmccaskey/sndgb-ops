@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import createTransfer from '@/actions/receiving/createTransfer';
+import createManualTransfer from '@/actions/receiving/createManualTransfer';
 import listDirectShipCandidates from '@/actions/receiving/listDirectShipCandidates';
 import markTransferPurchaseStarted from '@/actions/receiving/markTransferPurchaseStarted';
 import clearTransferPurchaseLease from '@/actions/receiving/clearTransferPurchaseLease';
@@ -48,6 +49,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const directShipsOverflow = allDirectShips.length > 1000;
   const directShips = directShipsOverflow ? allDirectShips.slice(0, 1000) : allDirectShips;
   const [doCreate] = useMutateAction(createTransfer);
+  const [doCreateManual] = useMutateAction(createManualTransfer);
   const [doClaimPurchase] = useMutateAction(markTransferPurchaseStarted);
   const [doClearLease] = useMutateAction(clearTransferPurchaseLease);
   const [doClearAttempt] = useMutateAction(clearTransferAttemptVerified);
@@ -72,6 +74,16 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const [success, setSuccess] = useState<PurchaseResult | null>(null);
   // outcome line for the linked direct-ship order (stamped / already done)
   const [successDirect, setSuccessDirect] = useState('');
+  // manual-label mode: the label was bought OUTSIDE the app — no rate
+  // shopping, no Shippo purchase; the operator enters carrier + tracking
+  // (+ optional cost) and the transfer is recorded born-finalized
+  const [manualMode, setManualMode] = useState(false);
+  const [mCarrier, setMCarrier] = useState('usps');
+  const [mCarrierOther, setMCarrierOther] = useState('');
+  const [mTracking, setMTracking] = useState('');
+  const [mCost, setMCost] = useState('');
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualSuccess, setManualSuccess] = useState('');   // recorded tracking number
   // purchase results that landed but failed to persist — retry finalize
   // WITHOUT re-buying (keyed by draft id)
   const [pendingFinalize, setPendingFinalize] = useState<Record<number, PurchaseResult>>({});
@@ -384,6 +396,95 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     } finally {
       purchaseInFlight.current = false;
       setPurchasing(false);
+    }
+  };
+
+  // record a transfer whose label was bought OUTSIDE the app: no rates,
+  // no lease, no Shippo POST — the DB function applies the same guards
+  // as the draft path and stamps a linked direct line ATOMICALLY (any
+  // gate failure refuses the whole record; nothing was charged, so
+  // refusing outright is free — no direct_stamped=0 halfway state here)
+  const recordManual = async () => {
+    if (manualBusy) return;
+    setPurchaseMsg(''); setManualSuccess(''); setSuccessDirect('');
+    const from = addresses.find(a => String(a.id) === fFrom);
+    if (!from) { setPurchaseMsg('Pick the ship-from receive address.'); return; }
+    const to = destAddress();
+    if (!to) { setPurchaseMsg('Destination incomplete — name, street, city, state, and zip are required.'); return; }
+    const isDirect = fDest.startsWith('ds_');
+    if (isDirect && !directCandidate) { setPurchaseMsg('That direct-ship order line is no longer available — pick another destination.'); return; }
+    const carrier = (mCarrier === '__other__' ? mCarrierOther : mCarrier).trim().toLowerCase();
+    if (!carrier) { setPurchaseMsg('Pick or enter the carrier.'); return; }
+    if (!mTracking.trim()) { setPurchaseMsg('Enter the tracking number from the label.'); return; }
+    if (mCost.trim() && (!/^\d+(?:\.\d{1,2})?$/.test(mCost.trim()) || !(Number(mCost) > 0))) {
+      setPurchaseMsg('Cost must be a positive amount with at most 2 decimals (or leave it blank).');
+      return;
+    }
+    const { lines, error: lineError } = validateLines();
+    if (lineError) { setPurchaseMsg(lineError); return; }
+    const overLines = lines.filter(l => Number(l.qty) > onHand(Number(l.product)));
+    let allowOver = false;
+    if (overLines.length > 0) {
+      const detail = overLines.map(l => `${products.find(p => String(p.id) === l.product)?.sku_code || '?'}: sending ${l.qty}, only ${fmtNum(onHand(Number(l.product)))} on hand`).join('; ');
+      if (!window.confirm(`This transfer sends MORE than is on hand at this address (${detail}). On-hand will go negative. Record anyway?`)) {
+        setPurchaseMsg('Cancelled — nothing was recorded.');
+        return;
+      }
+      allowOver = true;
+    }
+    const destRow = fDest !== '__custom__' && !isDirect ? destinations.find(d => String(d.id) === fDest) : null;
+    if (fDest !== '__custom__' && !isDirect && !destRow) { setPurchaseMsg('Destination not found — reload the page.'); return; }
+    const expectedFrom = {
+      name: from.name, street1: from.street1, street2: from.street2,
+      city: from.city, state: from.state, zip: from.zip,
+      country: from.country, phone: from.phone, email: from.email,
+    };
+    const expectedDest = destRow ? {
+      name: destRow.name, street1: destRow.street1, street2: destRow.street2,
+      city: destRow.city, state: destRow.state, zip: destRow.zip,
+      country: destRow.country, phone: destRow.phone, email: destRow.email,
+    } : null;
+    const params = (allow: boolean) => ({
+      from_address_id: Number(fFrom), destination_label: destLabel,
+      destination: JSON.stringify(to),
+      carrier, tracking_number: mTracking.trim(), cost: mCost.trim(),
+      items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
+      allow_over_onhand: allow,
+      expected_from: JSON.stringify(expectedFrom),
+      destination_id: destRow ? String(destRow.id) : '',
+      expected_destination: expectedDest ? JSON.stringify(expectedDest) : '',
+      direct_order_item_id: directCandidate ? String(directCandidate.item_id) : '',
+      group_buy_id: groupBuyId ?? '',
+      note: fNote.trim(), actor: userName,
+    });
+    setManualBusy(true);
+    try {
+      let res = await doCreateManual(params(allowOver)) as unknown[] | null;
+      // same reserved-stock retry as the purchase path: the server also
+      // subtracts unfinalized-draft reservations this page can't see
+      if (!(Array.isArray(res) && res.length > 0) && !allowOver) {
+        if (!window.confirm('The server reports less available stock than this page shows — other unfinished transfer drafts may be reserving some of it. Record anyway? On-hand can go negative if those drafts complete.')) {
+          setPurchaseMsg('Cancelled — nothing was recorded.');
+          return;
+        }
+        res = await doCreateManual(params(true)) as unknown[] | null;
+      }
+      if (!(Array.isArray(res) && res.length > 0)) {
+        setPurchaseMsg('Not recorded. Possible causes: a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, ship-to changed, this transfer carries LESS than the ordered quantity, or an UNFINISHED DRAFT still reserves that line — delete it first).');
+        return;
+      }
+      setManualSuccess(mTracking.trim().toUpperCase());
+      setSuccessDirect(directCandidate
+        ? `Order #${directCandidate.order_number} (${directCandidate.customer_name}) marked direct-shipped — the tracking number is now on the customer's order line.`
+        : '');
+      setFLines([{ product: '', qty: '' }]); setFNote(''); setMTracking(''); setMCost('');
+      setSelectedBoxId(null);
+      if (isDirect) { setFDest(''); reloadDirectShips(); }
+      reloadTransfers();
+    } catch (e: unknown) {
+      setPurchaseMsg((e instanceof Error ? e.message : 'Failed to record the transfer') + ' Nothing was recorded.');
+    } finally {
+      setManualBusy(false);
     }
   };
 
@@ -714,12 +815,38 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
               <Input placeholder="Phone (optional)" value={custom.phone} onChange={e => setCustom(c => ({ ...c, phone: e.target.value }))} className="h-9" />
             </div>
           )}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <Input placeholder="Length (in)" value={dims.length} onChange={e => setDims(d => ({ ...d, length: e.target.value }))} className="h-9" />
-            <Input placeholder="Width (in)" value={dims.width} onChange={e => setDims(d => ({ ...d, width: e.target.value }))} className="h-9" />
-            <Input placeholder="Height (in)" value={dims.height} onChange={e => setDims(d => ({ ...d, height: e.target.value }))} className="h-9" />
-            <Input placeholder="Weight (lb)" value={dims.weight} onChange={e => setDims(d => ({ ...d, weight: e.target.value }))} className="h-9" />
-          </div>
+          <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+            <input type="checkbox" checked={manualMode} onChange={e => { setManualMode(e.target.checked); setPurchaseMsg(''); setManualSuccess(''); setRatesResult(null); setPickedRate(''); }} />
+            <span>Label bought <span className="font-medium">outside the app</span> — enter the tracking number manually (no rate shopping, no Shippo purchase)</span>
+          </label>
+          {manualMode ? (
+            <div className="flex flex-wrap gap-2">
+              <Select value={mCarrier} onValueChange={setMCarrier}>
+                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="Carrier" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="usps">USPS</SelectItem>
+                  <SelectItem value="ups">UPS</SelectItem>
+                  <SelectItem value="fedex">FedEx</SelectItem>
+                  <SelectItem value="dhl_express">DHL Express</SelectItem>
+                  <SelectItem value="dhl_ecommerce">DHL eCommerce</SelectItem>
+                  <SelectItem value="canada_post">Canada Post</SelectItem>
+                  <SelectItem value="__other__">Other…</SelectItem>
+                </SelectContent>
+              </Select>
+              {mCarrier === '__other__' && (
+                <Input placeholder="Carrier token" value={mCarrierOther} onChange={e => setMCarrierOther(e.target.value)} className="h-9 w-36" />
+              )}
+              <Input placeholder="Tracking number" value={mTracking} onChange={e => setMTracking(e.target.value)} className="h-9 flex-1 min-w-52 font-mono" />
+              <Input placeholder="Cost $ (optional)" value={mCost} onChange={e => setMCost(e.target.value)} className="h-9 w-32" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <Input placeholder="Length (in)" value={dims.length} onChange={e => setDims(d => ({ ...d, length: e.target.value }))} className="h-9" />
+              <Input placeholder="Width (in)" value={dims.width} onChange={e => setDims(d => ({ ...d, width: e.target.value }))} className="h-9" />
+              <Input placeholder="Height (in)" value={dims.height} onChange={e => setDims(d => ({ ...d, height: e.target.value }))} className="h-9" />
+              <Input placeholder="Weight (lb)" value={dims.weight} onChange={e => setDims(d => ({ ...d, weight: e.target.value }))} className="h-9" />
+            </div>
+          )}
           {fLines.map((l, i) => {
             const oh = l.product ? onHand(Number(l.product)) : null;
             const over = l.product && Number(l.qty) > (oh ?? 0);
@@ -744,11 +871,13 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
           <div className="flex flex-wrap gap-2 items-center">
             <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setFLines(ls => [...ls, { product: '', qty: '' }])}>+ Add product</Button>
             <Input placeholder="Note (optional)" value={fNote} onChange={e => setFNote(e.target.value)} className="h-8 flex-1 min-w-40" />
-            <Button size="sm" className="h-8" onClick={fetchRates} disabled={ratesLoading}>{ratesLoading ? 'Fetching rates…' : 'Get rates (UPS / USPS)'}</Button>
+            {manualMode
+              ? <Button size="sm" className="h-8" onClick={recordManual} disabled={manualBusy}>{manualBusy ? 'Recording…' : 'Record transfer'}</Button>
+              : <Button size="sm" className="h-8" onClick={fetchRates} disabled={ratesLoading}>{ratesLoading ? 'Fetching rates…' : 'Get rates (UPS / USPS)'}</Button>}
           </div>
           {fMsg && <p className="text-xs text-red-600">{fMsg}</p>}
 
-          {ratesResult && (
+          {!manualMode && ratesResult && (
             <div className="space-y-2 border-t pt-2">
               {ratesResult.messages.length > 0 && (
                 <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
@@ -795,6 +924,16 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                 </Button>
               )}
               {purchaseMsg && <p className="text-xs text-red-600 break-all">{purchaseMsg}</p>}
+            </div>
+          )}
+          {manualSuccess && (
+            <div className="rounded border border-green-300 bg-green-50 p-3 text-sm text-green-900 space-y-1">
+              <p className="font-semibold">Transfer recorded (manual label).</p>
+              <p className="text-xs">Tracking: <span className="font-mono">{manualSuccess}</span> — inventory moved; no label PDF (bought outside the app), no refund flow.</p>
+              {successDirect && (
+                <p className="text-xs">{successDirect}</p>
+              )}
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setManualSuccess(''); setSuccessDirect(''); }}>Done</Button>
             </div>
           )}
           {success && (
@@ -888,21 +1027,28 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                         ))}
                       </div>
                     </TableCell>
-                    <TableCell className="text-xs whitespace-nowrap">{t.carrier} {t.servicelevel}</TableCell>
+                    <TableCell className="text-xs whitespace-nowrap">
+                      {t.carrier} {t.servicelevel}
+                      {!t.shippo_rate_id && (
+                        <span className="ml-1 rounded bg-gray-100 text-gray-700 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Label bought outside the app — tracking entered manually">manual</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">{fmtUSD(t.rate_amount)}</TableCell>
                     <TableCell className="text-xs font-mono break-all max-w-40">{t.tracking_number || '—'}</TableCell>
                     <TableCell>
                       {t.label_url && <a href={t.label_url} target="_blank" rel="noreferrer" className="text-xs underline whitespace-nowrap" title="Public unauthenticated link — don't share">Label PDF</a>}
                     </TableCell>
                     <TableCell>
-                      {t.refund_status
-                        ? <span className="inline-flex items-center gap-1">
-                            <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Re-check records the final outcome — a SUCCESS refund returns the items to on-hand (the label was never used)">refund {t.refund_status}</span>
-                            <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Ask Shippo for this refund's real status — records it, or clears the marker if no refund exists" onClick={() => recheckRefund(t)}>Re-check</Button>
-                          </span>
-                        : shippoKey
-                          ? <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => refund(t)}>Request refund</Button>
-                          : <span className="text-[11px] text-muted-foreground whitespace-nowrap" title="Add the Shippo API token in Settings to request refunds">refund needs key</span>}
+                      {!t.shippo_transaction_id
+                        ? <span className="text-[11px] text-muted-foreground whitespace-nowrap" title="This label was not bought through Shippo here — refund it wherever it was purchased">no in-app refund</span>
+                        : t.refund_status
+                          ? <span className="inline-flex items-center gap-1">
+                              <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Re-check records the final outcome — a SUCCESS refund returns the items to on-hand (the label was never used)">refund {t.refund_status}</span>
+                              <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Ask Shippo for this refund's real status — records it, or clears the marker if no refund exists" onClick={() => recheckRefund(t)}>Re-check</Button>
+                            </span>
+                          : shippoKey
+                            ? <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => refund(t)}>Request refund</Button>
+                            : <span className="text-[11px] text-muted-foreground whitespace-nowrap" title="Add the Shippo API token in Settings to request refunds">refund needs key</span>}
                       {draftMsg[t.id] && <p className="text-[11px] text-red-600">{draftMsg[t.id]}</p>}
                     </TableCell>
                   </TableRow>
