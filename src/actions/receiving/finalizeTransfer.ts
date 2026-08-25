@@ -51,7 +51,11 @@ function finalizeTransfer() {
       -- the operator resolves in the order sheet.
       stamp AS (
         UPDATE order_items oi
-        SET direct_fulfilled_at = now()
+        -- direct_fulfilled_transfer_id records WHICH transfer owns this
+        -- fulfillment — the order sheet's tracking joins through it, and
+        -- the manual undo clears it, so a stamped-then-undone transfer
+        -- can never resurface as the line's shipment later
+        SET direct_fulfilled_at = now(), direct_fulfilled_transfer_id = sel.id
         FROM sel, orders o
         LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
         WHERE sel.direct_order_item_id IS NOT NULL
@@ -68,6 +72,13 @@ function finalizeTransfer() {
             JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
             WHERE ti.transfer_id = sel.id AND ti.product_id = gbp.product_id
               AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
+          )
+          -- campaign consistency at stamp time: the line's own gbp fixes
+          -- its campaign — an order REASSIGNED to another buy after the
+          -- draft was validated mismatches and refuses
+          AND EXISTS (
+            SELECT 1 FROM group_buy_products gbp2
+            WHERE gbp2.id = oi.group_buy_product_id AND gbp2.group_buy_id = o.group_buy_id
           )
           -- ship-to CAS at stamp time too: recovery paths finalize
           -- WITHOUT the pre-POST claim (the label already exists), so a

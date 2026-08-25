@@ -14,27 +14,16 @@ function getOrderItems() {
       FROM order_items oi
       JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
       JOIN products p ON p.id = gbp.product_id
-      -- the label we bought for this direct line, if any — joined through
-      -- transfers.direct_order_item_id (newest finalized wins) so the
-      -- tracking shown here can never drift from the transfer log. Two
-      -- gates: a refund-SUCCESS label provably never shipped (Shippo only
-      -- refunds unused labels), and an UNFULFILLED line never shows
-      -- tracking — a transfer that finalized with the stamp REFUSED
-      -- (address/payment/qty drift; direct_stamped=0) still needs manual
-      -- remediation, and presenting its label as live tracking on the
-      -- outstanding line would hide exactly that
-      LEFT JOIN LATERAL (
-        SELECT t.carrier, t.tracking_number
-        FROM transfers t
-        WHERE t.direct_order_item_id = oi.id AND t.finalized_at IS NOT NULL
-          -- the DURABLE proof that THIS transfer stamped the line — a
-          -- stamp-refused finalize can never masquerade as the line's
-          -- shipment after a later manual fulfillment
-          AND t.direct_stamped_at IS NOT NULL
-          AND oi.direct_fulfilled_at IS NOT NULL
-          AND COALESCE(t.refund_status, '') <> 'SUCCESS'
-        ORDER BY t.finalized_at DESC LIMIT 1
-      ) dt ON true
+      -- the label that OWNS this line's current fulfillment — joined
+      -- through order_items.direct_fulfilled_transfer_id, which only the
+      -- successful stamp sets and the manual undo/mark clears. A
+      -- stamp-refused finalize, a stamped-then-undone transfer, and a
+      -- manual re-fulfill all leave the pointer NULL, so none of their
+      -- labels can masquerade as the line's shipment. Refund-SUCCESS
+      -- (label provably never used) hides the tracking too.
+      LEFT JOIN transfers dt
+        ON dt.id = oi.direct_fulfilled_transfer_id
+       AND COALESCE(dt.refund_status, '') <> 'SUCCESS'
       WHERE oi.order_id = {{params.order_id}}::bigint
       ORDER BY p.sku_code
     `,

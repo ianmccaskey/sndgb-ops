@@ -34,7 +34,12 @@ function markOrderDirectFulfilled() {
         FROM lck
       ), upd AS (
         UPDATE order_items oi SET
-          direct_fulfilled_at = CASE WHEN inp.fulfilled THEN now() ELSE NULL END
+          direct_fulfilled_at = CASE WHEN inp.fulfilled THEN now() ELSE NULL END,
+          -- a MANUAL fulfillment is owned by no transfer, and an UNDO
+          -- releases whichever transfer owned it — either way this
+          -- pointer clears, so the order sheet never resurrects an old
+          -- label's tracking through a manual mark
+          direct_fulfilled_transfer_id = NULL
         FROM inp, orders o
         WHERE oi.order_id = {{params.order_id}}::bigint
           AND o.id = oi.order_id

@@ -62,6 +62,10 @@ function markTransferPurchaseStarted() {
                 WHERE ti.transfer_id = t.id AND ti.product_id = gbp.product_id
                   AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
               )
+              -- campaign consistency: the line's own gbp fixes its
+              -- campaign — an order reassigned to another buy after
+              -- draft creation mismatches and refuses the claim
+              AND gbp.group_buy_id = o.group_buy_id
           ))
           -- exclusive CAS with an OWN-TOKEN refresh: the current holder
           -- (presenting its exact claimed_at) may re-stamp the lease as a
