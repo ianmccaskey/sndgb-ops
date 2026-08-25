@@ -473,7 +473,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         res = await doCreateManual(params(true)) as unknown[] | null;
       }
       if (!(Array.isArray(res) && res.length > 0)) {
-        setPurchaseMsg('Not recorded. Possible causes: a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, ship-to changed, this transfer carries LESS than the ordered quantity, or an UNFINISHED DRAFT still reserves that line — delete it first).');
+        setPurchaseMsg('Not recorded. Possible causes: this tracking number is ALREADY on a finalized transfer (bought through the app or recorded manually — check the log), a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, ship-to changed, this transfer carries LESS than the ordered quantity, or an UNFINISHED DRAFT still reserves that line — delete it first).');
         return;
       }
       setManualSuccess(mTracking.trim().toUpperCase());
