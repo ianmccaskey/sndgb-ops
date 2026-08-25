@@ -36,16 +36,24 @@ function finalizeTransfer() {
                   t.carrier, t.direct_order_item_id
       ),
       -- the linked direct-ship line completes WITH the label, in the same
-      -- statement: only if it is still outstanding (never overwrites a
-      -- line fulfilled meanwhile — that shows up as direct_stamped = 0)
+      -- statement: only if it is still outstanding AND still passes the
+      -- SAME money gates enforced at draft time — a draft finalized long
+      -- after creation (retry/recovery paths) must not mark a line
+      -- fulfilled on an order that went on hold or unpaid meanwhile. Any
+      -- refusal shows up as direct_stamped = 0 (the label itself is
+      -- still recorded); the operator resolves in the order sheet.
       stamp AS (
         UPDATE order_items oi
         SET direct_fulfilled_at = now()
         FROM up, orders o
+        LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
         WHERE up.direct_order_item_id IS NOT NULL
           AND oi.id = up.direct_order_item_id
           AND o.id = oi.order_id
           AND o.status NOT IN ('cancelled', 'refunded')
+          AND NOT o.hold_shipping
+          AND r.recon_status IN ('matched', 'over')
+          AND r.pending_payment_count = 0
           AND oi.direct_ship AND oi.removed_at IS NULL
           AND oi.direct_fulfilled_at IS NULL
         RETURNING oi.id, oi.order_id

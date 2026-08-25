@@ -108,6 +108,14 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     ? directShips.find(c => String(c.item_id) === fDest.slice(3)) || null
     : null;
 
+  // appended to every recovery-path outcome whenever a linked direct-ship
+  // line failed to stamp — the label saved fine, but the customer's order
+  // line stayed outstanding and the operator must know on EVERY path
+  const directMissNote = (fin: { directItemId: number | null; directStamped: boolean }) =>
+    fin.directItemId != null && !fin.directStamped
+      ? 'NOTE: the linked direct-ship order line was NOT marked (already fulfilled, or its order is now held/unpaid) — verify in the order sheet.'
+      : '';
+
   const destAddress = (): ShippoAddress | null => {
     if (fDest === '__custom__') {
       if (!custom.name || !custom.street1 || !custom.city || !custom.state || !custom.zip) return null;
@@ -273,8 +281,10 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         destination_id: destRow ? String(destRow.id) : '',
         expected_destination: expectedDest ? JSON.stringify(expectedDest) : '',
         // the fn re-validates this line AT WRITE TIME: outstanding,
-        // money-gated, and its product among the transfer's items
+        // money-gated, CAMPAIGN-BOUND to this buy, and its product among
+        // the transfer's items
         direct_order_item_id: directCandidate ? String(directCandidate.item_id) : '',
+        group_buy_id: groupBuyId ?? '',
         note: fNote.trim(), actor: userName,
       });
       try {
@@ -343,7 +353,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       setSuccessDirect(fin.directItemId != null
         ? (fin.directStamped
           ? `Order ${directCandidate ? '#' + directCandidate.order_number + ' (' + directCandidate.customer_name + ')' : ''} marked direct-shipped — the tracking number is now on the customer's order line.`
-          : 'NOTE: the linked order line was already marked fulfilled (or changed) by another session — verify in the order sheet before shipping.')
+          : 'NOTE: the linked direct-ship order line was NOT marked (already fulfilled, or its order is now held/unpaid) — verify in the order sheet before shipping.')
         : '');
       setRatesResult(null); setPickedRate(''); setFLines([{ product: '', qty: '' }]); setFNote('');
       setSelectedBoxId(null);
@@ -358,10 +368,10 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const retryFinalize = async (t: TransferRow) => {
     const pending = pendingFinalize[t.id];
     if (!pending) return;
-    const finOk = (await persistFinalize(t.id, pending, t.shippo_rate_id || '')).ok;
-    if (finOk) {
+    const fin = await persistFinalize(t.id, pending, t.shippo_rate_id || '');
+    if (fin.ok) {
       setPendingFinalize(m => { const n = { ...m }; delete n[t.id]; return n; });
-      setDraftMsg(m => ({ ...m, [t.id]: '' }));
+      setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin) }));
       reloadTransfers();
     } else setDraftMsg(m => ({ ...m, [t.id]: 'Save failed again — the label URL is preserved here; keep retrying.' }));
   };
@@ -379,8 +389,8 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         setDraftMsg(m => ({ ...m, [t.id]: `That transaction was purchased against a different rate than this draft (transaction rate ${result.rateId || 'unknown'}, draft rate ${t.shippo_rate_id || 'missing'}) — refusing to attach it. Find the right transaction in the Shippo dashboard.` }));
         return;
       }
-      const finOk = (await persistFinalize(t.id, result, result.rateId || '')).ok;
-      if (finOk) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
+      const fin = await persistFinalize(t.id, result, result.rateId || '');
+      if (fin.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin) })); reloadTransfers(); }
       else setDraftMsg(m => ({ ...m, [t.id]: 'Transaction found but saving failed — retry.' }));
     } catch (e: unknown) {
       setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Recovery failed' }));
@@ -402,8 +412,8 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         return;
       }
       if (existing) {
-        const fin0Ok = (await persistFinalize(t.id, existing, t.shippo_rate_id)).ok;
-        if (fin0Ok) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
+        const fin0 = await persistFinalize(t.id, existing, t.shippo_rate_id);
+        if (fin0.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin0) })); reloadTransfers(); }
         else setDraftMsg(m => ({ ...m, [t.id]: `An existing label was found (${existing.transactionId}) but saving failed — retry.` }));
         return;
       }
@@ -435,8 +445,8 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         }
         throw e;
       }
-      const finOk = (await persistFinalize(t.id, result, t.shippo_rate_id)).ok;
-      if (finOk) { setDraftMsg(m => ({ ...m, [t.id]: '' })); reloadTransfers(); }
+      const fin = await persistFinalize(t.id, result, t.shippo_rate_id);
+      if (fin.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin) })); reloadTransfers(); }
       else {
         setPendingFinalize(m => ({ ...m, [t.id]: result }));
         setDraftMsg(m => ({ ...m, [t.id]: `Label purchased (${result.transactionId}) but saving failed — ${result.labelUrl} — use Retry save.` }));
@@ -464,9 +474,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     try {
       const existing = await findTransactionByRate(shippoHttp, shippoKey, t.shippo_rate_id, t.created_at);
       if (existing) {
-        const finOk = (await persistFinalize(t.id, existing, t.shippo_rate_id)).ok;
-        setDraftMsg(m => ({ ...m, [t.id]: finOk
-          ? ''
+        const fin = await persistFinalize(t.id, existing, t.shippo_rate_id);
+        setDraftMsg(m => ({ ...m, [t.id]: fin.ok
+          ? directMissNote(fin)
           : `A PURCHASED label exists for this draft (${existing.transactionId}) — recovered instead of deleting, but saving failed — retry.` }));
         reloadTransfers();
         return;
