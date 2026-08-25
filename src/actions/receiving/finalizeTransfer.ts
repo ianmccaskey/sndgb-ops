@@ -21,19 +21,23 @@ function finalizeTransfer() {
   return action('finalizeTransfer', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH up AS (
-        UPDATE transfers t
-        SET shippo_transaction_id = {{params.transaction_id}},
-            tracking_number = NULLIF({{params.tracking_number}}::text, ''),
-            label_url = {{params.label_url}},
-            finalized_at = now()
+      -- SELECT-lock first, stamp second, update transfers ONCE at the
+      -- end: the transfers row must be written by exactly one CTE (a
+      -- second same-statement update of the same row is silently
+      -- skipped by Postgres), and whether direct_stamped_at is set
+      -- depends on the stamp's outcome. FOR UPDATE preserves the
+      -- double-finalize refusal: a concurrent finalize blocks on the
+      -- lock, re-evaluates the WHERE, sees finalized_at set, and gets
+      -- zero rows.
+      WITH sel AS (
+        SELECT t.id, t.rate_amount, t.carrier, t.direct_order_item_id, t.destination, t.direct_link_reclaimed_at
+        FROM transfers t
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
           AND TRIM({{params.transaction_id}}) <> ''
           AND TRIM({{params.label_url}}) <> ''
           AND t.shippo_rate_id = TRIM({{params.rate_id}})
-        RETURNING t.id, t.shippo_transaction_id, t.tracking_number, t.label_url, t.rate_amount,
-                  t.carrier, t.direct_order_item_id, t.destination, t.direct_link_reclaimed_at
+        FOR UPDATE
       ),
       -- the linked direct-ship line completes WITH the label, in the same
       -- statement: only if it is still outstanding AND still passes the
@@ -48,10 +52,10 @@ function finalizeTransfer() {
       stamp AS (
         UPDATE order_items oi
         SET direct_fulfilled_at = now()
-        FROM up, orders o
+        FROM sel, orders o
         LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
-        WHERE up.direct_order_item_id IS NOT NULL
-          AND oi.id = up.direct_order_item_id
+        WHERE sel.direct_order_item_id IS NOT NULL
+          AND oi.id = sel.direct_order_item_id
           AND o.id = oi.order_id
           AND o.status NOT IN ('cancelled', 'refunded')
           AND NOT o.hold_shipping
@@ -62,7 +66,7 @@ function finalizeTransfer() {
           AND EXISTS (
             SELECT 1 FROM transfer_items ti
             JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
-            WHERE ti.transfer_id = up.id AND ti.product_id = gbp.product_id
+            WHERE ti.transfer_id = sel.id AND ti.product_id = gbp.product_id
               AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
           )
           -- ship-to CAS at stamp time too: recovery paths finalize
@@ -70,12 +74,28 @@ function finalizeTransfer() {
           -- label bought before an address correction must not complete
           -- the line — it records on the transfer, direct_stamped = 0,
           -- and the operator remediates (refund/reship) manually
-          AND COALESCE(up.destination->>'street1', '') = COALESCE(o.address_line1, '')
-          AND COALESCE(up.destination->>'street2', '') = COALESCE(o.address_line2, '')
-          AND COALESCE(up.destination->>'city', '')    = COALESCE(o.city, '')
-          AND COALESCE(up.destination->>'state', '')   = COALESCE(o.state_code, '')
-          AND COALESCE(up.destination->>'zip', '')     = COALESCE(o.postal_code, '')
+          AND COALESCE(sel.destination->>'street1', '') = COALESCE(o.address_line1, '')
+          AND COALESCE(sel.destination->>'street2', '') = COALESCE(o.address_line2, '')
+          AND COALESCE(sel.destination->>'city', '')    = COALESCE(o.city, '')
+          AND COALESCE(sel.destination->>'state', '')   = COALESCE(o.state_code, '')
+          AND COALESCE(sel.destination->>'zip', '')     = COALESCE(o.postal_code, '')
         RETURNING oi.id, oi.order_id
+      ),
+      -- the ONE write to the transfers row: label fields + finalized_at,
+      -- and direct_stamped_at ONLY when the stamp actually landed — the
+      -- durable "THIS transfer fulfilled the line" record the order
+      -- sheet's tracking join requires
+      up AS (
+        UPDATE transfers t
+        SET shippo_transaction_id = {{params.transaction_id}},
+            tracking_number = NULLIF({{params.tracking_number}}::text, ''),
+            label_url = {{params.label_url}},
+            finalized_at = now(),
+            direct_stamped_at = CASE WHEN EXISTS (SELECT 1 FROM stamp) THEN now() ELSE t.direct_stamped_at END
+        FROM sel
+        WHERE t.id = sel.id
+        RETURNING t.id, t.shippo_transaction_id, t.tracking_number, t.label_url, t.rate_amount,
+                  t.carrier, t.direct_order_item_id, t.direct_link_reclaimed_at
       ),
       stamp_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

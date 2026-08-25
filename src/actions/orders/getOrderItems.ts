@@ -27,6 +27,10 @@ function getOrderItems() {
         SELECT t.carrier, t.tracking_number
         FROM transfers t
         WHERE t.direct_order_item_id = oi.id AND t.finalized_at IS NOT NULL
+          -- the DURABLE proof that THIS transfer stamped the line — a
+          -- stamp-refused finalize can never masquerade as the line's
+          -- shipment after a later manual fulfillment
+          AND t.direct_stamped_at IS NOT NULL
           AND oi.direct_fulfilled_at IS NOT NULL
           AND COALESCE(t.refund_status, '') <> 'SUCCESS'
         ORDER BY t.finalized_at DESC LIMIT 1

@@ -834,6 +834,11 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                     Direct-ship reservation moved to a NEWER draft — buying here is blocked; recover an already-purchased label (it will be tied to no order line) or delete this draft.
                   </p>
                 )}
+                {!t.direct_link_reclaimed_at && t.direct_order_item_id != null && t.purchase_attempted_at && (
+                  <p className="text-[11px] text-amber-700">
+                    This unfinished draft is HOLDING its customer's direct-ship line (a purchase was attempted — a label may exist at Shippo). "Check Shippo & retry" verifies: it recovers a real label, or proves none exists and releases the hold early.
+                  </p>
+                )}
                 <div className="flex flex-wrap gap-1.5 items-center">
                   {pendingFinalize[t.id]
                     ? <Button size="sm" className="h-7 text-xs" onClick={() => retryFinalize(t)}>Retry save (label already purchased)</Button>
