@@ -321,7 +321,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         const hb = await doClaimPurchase({ transfer_id: draftId, prior_claimed_at: claimedAt, actor: userName }) as unknown[] | null;
         const hbRow = Array.isArray(hb) && hb.length > 0 ? hb[0] as { claimed_at?: string } : null;
         if (!hbRow) {
-          setPurchaseMsg('Not purchased — this draft was deleted or claimed by another session while this page was idle. Reload the page; nothing was charged.');
+          setPurchaseMsg('Not purchased — this draft was deleted or claimed by another session while this page was idle, or (for a direct-ship destination) the customer\'s ship-to address changed since the quote. Reload and re-quote; nothing was charged.');
           reloadTransfers();
           return;
         }
@@ -434,7 +434,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       const claim = await doClaimPurchase({ transfer_id: t.id, prior_claimed_at: '', actor: userName }) as unknown[] | null;
       const claimRow = Array.isArray(claim) && claim.length > 0 ? claim[0] as { id: string; claimed_at?: string } : null;
       if (!claimRow) {
-        setDraftMsg(m => ({ ...m, [t.id]: 'Not purchased — this draft no longer exists, another purchase attempt (this draft\'s original try, or the other admin) is still fresh (<10 min), or this draft\'s direct-ship reservation expired and was taken over by a NEWER draft (buying here would duplicate that shipment — delete this draft instead). An explicit Shippo refusal frees a fresh lease immediately; otherwise wait a few minutes and use "Check Shippo & retry" again.' }));
+        setDraftMsg(m => ({ ...m, [t.id]: 'Not purchased — this draft no longer exists, another purchase attempt (this draft\'s original try, or the other admin) is still fresh (<10 min), this draft\'s direct-ship reservation expired and was taken over by a NEWER draft (buying here would duplicate that shipment — delete this draft instead), or the customer\'s ship-to address changed since this draft was quoted (delete and re-quote). An explicit Shippo refusal frees a fresh lease immediately; otherwise wait a few minutes and use "Check Shippo & retry" again.' }));
         reloadTransfers();
         return;
       }

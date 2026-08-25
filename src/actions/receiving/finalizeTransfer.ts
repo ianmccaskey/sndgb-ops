@@ -39,9 +39,12 @@ function finalizeTransfer() {
       -- statement: only if it is still outstanding AND still passes the
       -- SAME money gates enforced at draft time — a draft finalized long
       -- after creation (retry/recovery paths) must not mark a line
-      -- fulfilled on an order that went on hold or unpaid meanwhile. Any
-      -- refusal shows up as direct_stamped = 0 (the label itself is
-      -- still recorded); the operator resolves in the order sheet.
+      -- fulfilled on an order that went on hold or unpaid meanwhile —
+      -- AND the transfer's item line still covers the line's CURRENT
+      -- effective quantity (qty edits between draft and finalize must
+      -- not let an under-shipment read as complete). Any refusal shows
+      -- up as direct_stamped = 0 (the label itself is still recorded);
+      -- the operator resolves in the order sheet.
       stamp AS (
         UPDATE order_items oi
         SET direct_fulfilled_at = now()
@@ -56,6 +59,12 @@ function finalizeTransfer() {
           AND r.pending_payment_count = 0
           AND oi.direct_ship AND oi.removed_at IS NULL
           AND oi.direct_fulfilled_at IS NULL
+          AND EXISTS (
+            SELECT 1 FROM transfer_items ti
+            JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
+            WHERE ti.transfer_id = up.id AND ti.product_id = gbp.product_id
+              AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
+          )
         RETURNING oi.id, oi.order_id
       ),
       stamp_audit AS (

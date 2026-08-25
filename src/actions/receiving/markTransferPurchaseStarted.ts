@@ -32,6 +32,21 @@ function markTransferPurchaseStarted() {
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
           AND t.direct_link_reclaimed_at IS NULL
+          -- LAST server gate before money moves: a direct-linked draft's
+          -- stored destination must STILL be the order's ship-to — an
+          -- address corrected after draft creation (order re-import)
+          -- refuses the claim, so no label is ever bought for stale
+          -- routing. Same field semantics as the draft-time CAS.
+          AND (t.direct_order_item_id IS NULL OR EXISTS (
+            SELECT 1 FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            WHERE oi.id = t.direct_order_item_id
+              AND COALESCE(t.destination->>'street1', '') = COALESCE(o.address_line1, '')
+              AND COALESCE(t.destination->>'street2', '') = COALESCE(o.address_line2, '')
+              AND COALESCE(t.destination->>'city', '')    = COALESCE(o.city, '')
+              AND COALESCE(t.destination->>'state', '')   = COALESCE(o.state_code, '')
+              AND COALESCE(t.destination->>'zip', '')     = COALESCE(o.postal_code, '')
+          ))
           -- exclusive CAS with an OWN-TOKEN refresh: the current holder
           -- (presenting its exact claimed_at) may re-stamp the lease as a
           -- pre-POST HEARTBEAT — a tab that slept past the window learns
