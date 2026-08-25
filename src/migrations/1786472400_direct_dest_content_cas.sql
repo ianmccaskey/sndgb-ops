@@ -1,42 +1,20 @@
--- The direct-ship line is RESERVED at draft creation, not discovered at
--- finalize: two admins drafting the same order line in parallel (even
--- from different receive addresses) must end with ONE purchasable
--- draft, or both buy labels and the loser only learns after money
--- moved. Three layers: (1) the fn takes pg_advisory_xact_lock(42005,
--- item id) so concurrent validations serialize; (2) the validation
--- refuses while ANY unfinalized transfer already links the line;
--- (3) this partial unique index is the database backstop that survives
--- retries and sessions the lock never saw. Finalized transfers leave
--- the index (the line is then stamped fulfilled, which refuses new
--- drafts by itself); an operator-undone line can be legitimately
--- re-drafted later without the OLD finalized row blocking it.
-
--- REPLAY GUARD (added post-apply, before the index, so a replay on a
--- dirty copy fails fast with instructions instead of a raw index-build
--- error). At live apply time this was verified vacuous by query:
--- transfers held ZERO non-null direct_order_item_id rows — the
--- linked-draft UI had never been released — so the live execution ran
--- the CREATE UNIQUE INDEX directly and could not have hit duplicates.
-DO $chk$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM transfers
-    WHERE direct_order_item_id IS NOT NULL AND finalized_at IS NULL
-    GROUP BY direct_order_item_id HAVING count(*) > 1
-  ) THEN
-    RAISE EXCEPTION 'duplicate unfinalized direct_order_item_id links exist — resolve them (keep one draft per line, NULL the others'' direct_order_item_id) before this migration';
-  END IF;
-END
-$chk$;
-
-CREATE UNIQUE INDEX transfers_direct_item_active_uniq
-  ON transfers (direct_order_item_id)
-  WHERE direct_order_item_id IS NOT NULL AND finalized_at IS NULL;
-
+-- Direct-linked drafts get the SAME content-CAS discipline as saved
+-- destinations: the quoted destination must equal the order's CURRENT
+-- ship-to AT WRITE TIME. Without this, a quote fetched from an older
+-- candidates snapshot could buy postage to a customer's OLD address
+-- after they corrected it, while still marking their line fulfilled.
+-- The physical-address fields are compared (street1/street2/city/
+-- state/zip vs orders.address_line1/address_line2/city/state_code/
+-- postal_code, NULL and '' treated alike — the client omits empty
+-- street2 entirely); the name is deliberately NOT compared (cosmetic:
+-- contact_name falls back to customer display_name client-side and
+-- neither is label-critical). Any mismatch refuses the draft before
+-- money moves; the operator re-opens the destination list (fresh
+-- candidates) and re-quotes.
+--
 -- create_transfer_draft re-created (same 18-arg signature, CREATE OR
--- REPLACE) with the item-line lock + active-draft refusal. Full text —
--- exactly what was executed live (verified via pg_get_functiondef
--- containing the 42005 lock).
+-- REPLACE). Full text — exactly what was executed live (verified via
+-- pg_get_functiondef comparing p_destination to the order columns).
 CREATE OR REPLACE FUNCTION create_transfer_draft(
   p_from_address_id bigint,
   p_destination_label text,
@@ -65,13 +43,11 @@ DECLARE
   v_any_over boolean;
   v_id bigint;
   v_claimed timestamptz;
+  v_reclaimed bigint;
 BEGIN
   PERFORM pg_advisory_xact_lock(42004, p_from_address_id::int);
-  -- serialize on the direct line too: concurrent drafts for the same
-  -- order line (possibly from DIFFERENT ship-from addresses, which the
-  -- 42004 lock never sees) validate one at a time
   IF p_direct_order_item_id IS NOT NULL THEN
-    PERFORM pg_advisory_xact_lock(42005, p_direct_order_item_id::int);
+    PERFORM pg_advisory_xact_lock(hashtextextended('direct_line_' || p_direct_order_item_id::text, 42005));
   END IF;
 
   SELECT * INTO v_addr FROM receive_addresses ra
@@ -101,10 +77,6 @@ BEGIN
   FROM jsonb_array_elements(p_items) x;
   IF COALESCE(v_n, 0) = 0 OR NOT COALESCE(v_all_valid, false) THEN RETURN; END IF;
 
-  -- linked direct-ship line: live, outstanding, money-gated,
-  -- campaign-bound, ship-to present, product on this transfer, and NOT
-  -- already reserved by another unfinalized draft (the partial unique
-  -- index transfers_direct_item_active_uniq is the hard backstop)
   IF p_direct_order_item_id IS NOT NULL THEN
     IF NOT EXISTS (
       SELECT 1
@@ -120,12 +92,33 @@ BEGIN
         AND r.recon_status IN ('matched', 'over')
         AND r.pending_payment_count = 0
         AND COALESCE(o.address_line1, '') <> ''
+        -- content-CAS: the destination this label was QUOTED for must be
+        -- the order's ship-to RIGHT NOW — an address corrected after the
+        -- quote refuses instead of buying postage to the old address
+        AND COALESCE(p_destination->>'street1', '') = COALESCE(o.address_line1, '')
+        AND COALESCE(p_destination->>'street2', '') = COALESCE(o.address_line2, '')
+        AND COALESCE(p_destination->>'city', '')    = COALESCE(o.city, '')
+        AND COALESCE(p_destination->>'state', '')   = COALESCE(o.state_code, '')
+        AND COALESCE(p_destination->>'zip', '')     = COALESCE(o.postal_code, '')
         AND gbp.product_id IN (SELECT (x->>'product_id')::bigint FROM jsonb_array_elements(p_items) x)
     ) THEN RETURN; END IF;
     IF EXISTS (
       SELECT 1 FROM transfers t2
       WHERE t2.direct_order_item_id = p_direct_order_item_id AND t2.finalized_at IS NULL
+        AND ((t2.purchase_attempted_at IS NOT NULL AND t2.purchase_attempted_at > now() - interval '30 days')
+             OR (t2.purchase_attempted_at IS NULL AND t2.created_at > now() - interval '7 days'))
     ) THEN RETURN; END IF;
+    WITH gone AS (
+      UPDATE transfers t2 SET direct_order_item_id = NULL
+      WHERE t2.direct_order_item_id = p_direct_order_item_id AND t2.finalized_at IS NULL
+      RETURNING t2.id
+    )
+    INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+    SELECT 'transfers', gone.id::text, 'direct_link_reclaimed', p_actor,
+           jsonb_build_object('direct_order_item_id', p_direct_order_item_id,
+                              'reason', 'expired unfinalized reservation superseded by a new draft')
+    FROM gone;
+    GET DIAGNOSTICS v_reclaimed = ROW_COUNT;
   END IF;
 
   SELECT COALESCE(bool_or((x->>'qty')::numeric > COALESCE(inv.on_hand_qty, 0) - COALESCE(res.reserved, 0)), false)
@@ -170,6 +163,7 @@ BEGIN
                              'over_onhand_override', v_any_over,
                              'direct_order_item_id', p_direct_order_item_id,
                              'group_buy_id', p_group_buy_id,
+                             'direct_links_reclaimed', COALESCE(v_reclaimed, 0),
                              'claimed_at', v_claimed));
 
   RETURN QUERY SELECT v_id::text, (jsonb_build_object('c', v_claimed)->>'c');

@@ -312,7 +312,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             : (m || 'Failed to save the transfer draft.') + ' Nothing was saved or purchased.');
         return;
       }
-      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived since rates were fetched, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, or its product is not on this transfer) — reload and re-quote.'); return; }
+      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived since rates were fetched, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, its SHIP-TO ADDRESS was corrected since the quote, or its product is not on this transfer) — reload and re-quote.'); return; }
       // 2. HEARTBEAT immediately before money moves: if this tab slept
       //    long enough for the birth lease to age out and another session
       //    deleted or re-claimed the draft, the own-token refresh returns
