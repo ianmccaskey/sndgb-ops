@@ -29,33 +29,42 @@ function finalizeTransfer() {
       -- double-finalize refusal: a concurrent finalize blocks on the
       -- lock, re-evaluates the WHERE, sees finalized_at set, and gets
       -- zero rows.
-      WITH sel AS (
-        SELECT t.id, t.rate_amount, t.carrier, t.direct_order_item_id, t.destination, t.direct_link_reclaimed_at
+      -- LOCK ORDER matches claim and reclaim exactly: direct-line
+      -- advisory lock FIRST, rows after — an inverted order here would
+      -- deadlock a finalize against a concurrent claim/reclaim holding
+      -- the advisory lock while waiting on this transfers row. The lock
+      -- key comes from an UNLOCKED pre-read: a link can only go
+      -- non-null->null (reclaim), so the worst staleness is taking a
+      -- lock nobody else wants — harmless.
+      WITH pre AS (
+        SELECT t.direct_order_item_id AS pre_item
         FROM transfers t
+        WHERE t.id = {{params.transfer_id}}::bigint
+      ),
+      lck AS (
+        SELECT CASE WHEN pre.pre_item IS NOT NULL
+                    THEN pg_advisory_xact_lock(hashtextextended('direct_line_' || pre.pre_item::text, 42005))
+               END AS locked
+        FROM pre
+      ),
+      sel AS (
+        SELECT t.id, t.rate_amount, t.carrier, t.direct_order_item_id, t.destination, t.direct_link_reclaimed_at
+        FROM transfers t, lck
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
           AND TRIM({{params.transaction_id}}) <> ''
           AND TRIM({{params.label_url}}) <> ''
           AND t.shippo_rate_id = TRIM({{params.rate_id}})
-        FOR UPDATE
+        FOR UPDATE OF t
       ),
-      -- serialize with claims and reclaims on the direct-line advisory
-      -- lock, and ROW-LOCK the order (FOR UPDATE) so the stamp's gates
-      -- are evaluated on the LATEST committed order state — a hold or
+      -- ROW-LOCK the order (FOR UPDATE) so the stamp's gates are
+      -- evaluated on the LATEST committed order state — a hold or
       -- address correction committing mid-statement is seen, not missed
       -- on the statement's opening snapshot
-      lck AS (
-        SELECT sel.id AS tid,
-               CASE WHEN sel.direct_order_item_id IS NOT NULL
-                    THEN pg_advisory_xact_lock(hashtextextended('direct_line_' || sel.direct_order_item_id::text, 42005))
-               END AS locked
-        FROM sel
-      ),
       olock AS (
         SELECT o.id, o.status, o.hold_shipping, o.group_buy_id,
                o.address_line1, o.address_line2, o.city, o.state_code, o.postal_code
-        FROM lck
-        JOIN sel ON sel.id = lck.tid
+        FROM sel
         JOIN order_items oi0 ON oi0.id = sel.direct_order_item_id
         JOIN orders o ON o.id = oi0.order_id
         FOR UPDATE OF o
