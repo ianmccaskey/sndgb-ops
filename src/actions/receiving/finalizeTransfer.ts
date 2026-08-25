@@ -39,6 +39,27 @@ function finalizeTransfer() {
           AND t.shippo_rate_id = TRIM({{params.rate_id}})
         FOR UPDATE
       ),
+      -- serialize with claims and reclaims on the direct-line advisory
+      -- lock, and ROW-LOCK the order (FOR UPDATE) so the stamp's gates
+      -- are evaluated on the LATEST committed order state — a hold or
+      -- address correction committing mid-statement is seen, not missed
+      -- on the statement's opening snapshot
+      lck AS (
+        SELECT sel.id AS tid,
+               CASE WHEN sel.direct_order_item_id IS NOT NULL
+                    THEN pg_advisory_xact_lock(hashtextextended('direct_line_' || sel.direct_order_item_id::text, 42005))
+               END AS locked
+        FROM sel
+      ),
+      olock AS (
+        SELECT o.id, o.status, o.hold_shipping, o.group_buy_id,
+               o.address_line1, o.address_line2, o.city, o.state_code, o.postal_code
+        FROM lck
+        JOIN sel ON sel.id = lck.tid
+        JOIN order_items oi0 ON oi0.id = sel.direct_order_item_id
+        JOIN orders o ON o.id = oi0.order_id
+        FOR UPDATE OF o
+      ),
       -- the linked direct-ship line completes WITH the label, in the same
       -- statement: only if it is still outstanding AND still passes the
       -- SAME money gates enforced at draft time — a draft finalized long
@@ -56,7 +77,7 @@ function finalizeTransfer() {
         -- the manual undo clears it, so a stamped-then-undone transfer
         -- can never resurface as the line's shipment later
         SET direct_fulfilled_at = now(), direct_fulfilled_transfer_id = sel.id
-        FROM sel, orders o
+        FROM sel, olock o
         LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
         WHERE sel.direct_order_item_id IS NOT NULL
           AND oi.id = sel.direct_order_item_id

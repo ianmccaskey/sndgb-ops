@@ -22,51 +22,67 @@ function markTransferPurchaseStarted() {
   return action('markTransferPurchaseStarted', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      WITH up AS (
+      -- lck serializes this claim with reclaim (create_transfer_draft)
+      -- on the SAME direct-line advisory lock: a reclaim cannot steal
+      -- the line mid-claim (it waits here, then its per-statement
+      -- snapshot sees our refreshed lease as FRESH and refuses), and a
+      -- claim racing a just-committed reclaim re-reads the transfers
+      -- row (EvalPlanQual) and sees direct_link_reclaimed_at. eligible
+      -- ROW-LOCKS the order line AND its order (FOR UPDATE), so every
+      -- gate is evaluated on the LATEST committed versions — serialized
+      -- with concurrent order edits, not the statement's opening
+      -- snapshot.
+      WITH lck AS (
+        SELECT t.id AS tid,
+               CASE WHEN t.direct_order_item_id IS NOT NULL
+                    THEN pg_advisory_xact_lock(hashtextextended('direct_line_' || t.direct_order_item_id::text, 42005))
+               END AS locked
+        FROM transfers t
+        WHERE t.id = {{params.transfer_id}}::bigint
+      ),
+      -- LAST server gate before money moves: for a direct-linked draft
+      -- the FULL draft-time eligibility must still hold — line
+      -- outstanding, order active, not held, money collected, the
+      -- stored destination still the order's CURRENT ship-to, the line
+      -- still in its order's campaign (its own gbp fixes it), and the
+      -- transfer still covering the line's current effective quantity.
+      eligible AS (
+        SELECT oi.id
+        FROM lck
+        JOIN transfers t ON t.id = lck.tid
+        JOIN order_items oi ON oi.id = t.direct_order_item_id
+        JOIN orders o ON o.id = oi.order_id
+        JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
+        LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
+        WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL
+          AND o.status NOT IN ('cancelled', 'refunded')
+          AND NOT o.hold_shipping
+          AND r.recon_status IN ('matched', 'over')
+          AND r.pending_payment_count = 0
+          AND COALESCE(t.destination->>'street1', '') = COALESCE(o.address_line1, '')
+          AND COALESCE(t.destination->>'street2', '') = COALESCE(o.address_line2, '')
+          AND COALESCE(t.destination->>'city', '')    = COALESCE(o.city, '')
+          AND COALESCE(t.destination->>'state', '')   = COALESCE(o.state_code, '')
+          AND COALESCE(t.destination->>'zip', '')     = COALESCE(o.postal_code, '')
+          AND gbp.group_buy_id = o.group_buy_id
+          AND EXISTS (
+            SELECT 1 FROM transfer_items ti
+            WHERE ti.transfer_id = t.id AND ti.product_id = gbp.product_id
+              AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
+          )
+        FOR UPDATE OF oi, o
+      ),
+      up AS (
         UPDATE transfers t
         -- purchase_attempted_at is the durable "a Shippo POST was actually
         -- dispatched after this" marker — it alone drives the long (30-day)
         -- inventory reservation; a draft that was merely created (tab died
         -- pre-POST) never gets it and stops reserving on the short window
         SET purchase_started_at = now(), purchase_attempted_at = now()
-        WHERE t.id = {{params.transfer_id}}::bigint
+        WHERE t.id = (SELECT tid FROM lck)
           AND t.finalized_at IS NULL
           AND t.direct_link_reclaimed_at IS NULL
-          -- LAST server gate before money moves: for a direct-linked
-          -- draft the FULL draft-time eligibility must still hold — line
-          -- outstanding (not fulfilled/removed, still direct), order
-          -- active, not held, money collected (matched/over, zero
-          -- pending payments), the stored destination still the order's
-          -- CURRENT ship-to, and the transfer still covering the line's
-          -- current effective quantity. Any drift refuses the claim, so
-          -- postage is never bought for an order that stopped being
-          -- eligible. Same field/qty semantics as the draft-time checks.
-          AND (t.direct_order_item_id IS NULL OR EXISTS (
-            SELECT 1 FROM order_items oi
-            JOIN orders o ON o.id = oi.order_id
-            JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
-            LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
-            WHERE oi.id = t.direct_order_item_id
-              AND oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL
-              AND o.status NOT IN ('cancelled', 'refunded')
-              AND NOT o.hold_shipping
-              AND r.recon_status IN ('matched', 'over')
-              AND r.pending_payment_count = 0
-              AND COALESCE(t.destination->>'street1', '') = COALESCE(o.address_line1, '')
-              AND COALESCE(t.destination->>'street2', '') = COALESCE(o.address_line2, '')
-              AND COALESCE(t.destination->>'city', '')    = COALESCE(o.city, '')
-              AND COALESCE(t.destination->>'state', '')   = COALESCE(o.state_code, '')
-              AND COALESCE(t.destination->>'zip', '')     = COALESCE(o.postal_code, '')
-              AND EXISTS (
-                SELECT 1 FROM transfer_items ti
-                WHERE ti.transfer_id = t.id AND ti.product_id = gbp.product_id
-                  AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
-              )
-              -- campaign consistency: the line's own gbp fixes its
-              -- campaign — an order reassigned to another buy after
-              -- draft creation mismatches and refuses the claim
-              AND gbp.group_buy_id = o.group_buy_id
-          ))
+          AND (t.direct_order_item_id IS NULL OR EXISTS (SELECT 1 FROM eligible))
           -- exclusive CAS with an OWN-TOKEN refresh: the current holder
           -- (presenting its exact claimed_at) may re-stamp the lease as a
           -- pre-POST HEARTBEAT — a tab that slept past the window learns
