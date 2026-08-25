@@ -23,6 +23,10 @@ function getOrderItems() {
       -- (label provably never used) hides the tracking too.
       LEFT JOIN transfers dt
         ON dt.id = oi.direct_fulfilled_transfer_id
+       -- only a line that is STILL an active direct-ship line renders
+       -- transfer tracking — a line reclassified back to local (or
+       -- removed) must not read as vendor-label-handled
+       AND oi.direct_ship AND oi.removed_at IS NULL
        AND COALESCE(dt.refund_status, '') <> 'SUCCESS'
       WHERE oi.order_id = {{params.order_id}}::bigint
       ORDER BY p.sku_code

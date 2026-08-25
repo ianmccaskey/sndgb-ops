@@ -33,6 +33,14 @@ function setOrderItemDirectShip() {
           direct_fulfilled_at = CASE
             WHEN {{params.direct_ship}}::boolean AND NOT oi.direct_ship THEN NULL
             ELSE oi.direct_fulfilled_at
+          END,
+          -- ANY routing flip releases the transfer that owned the direct
+          -- fulfillment: a line reclassified to LOCAL must not keep
+          -- rendering the old label's tracking on the order sheet, and a
+          -- line re-made direct starts with no owner
+          direct_fulfilled_transfer_id = CASE
+            WHEN {{params.direct_ship}}::boolean = oi.direct_ship THEN oi.direct_fulfilled_transfer_id
+            ELSE NULL
           END
         FROM lck, orders o
         WHERE oi.id = {{params.item_id}}::bigint
