@@ -32,20 +32,36 @@ function markTransferPurchaseStarted() {
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
           AND t.direct_link_reclaimed_at IS NULL
-          -- LAST server gate before money moves: a direct-linked draft's
-          -- stored destination must STILL be the order's ship-to — an
-          -- address corrected after draft creation (order re-import)
-          -- refuses the claim, so no label is ever bought for stale
-          -- routing. Same field semantics as the draft-time CAS.
+          -- LAST server gate before money moves: for a direct-linked
+          -- draft the FULL draft-time eligibility must still hold — line
+          -- outstanding (not fulfilled/removed, still direct), order
+          -- active, not held, money collected (matched/over, zero
+          -- pending payments), the stored destination still the order's
+          -- CURRENT ship-to, and the transfer still covering the line's
+          -- current effective quantity. Any drift refuses the claim, so
+          -- postage is never bought for an order that stopped being
+          -- eligible. Same field/qty semantics as the draft-time checks.
           AND (t.direct_order_item_id IS NULL OR EXISTS (
             SELECT 1 FROM order_items oi
             JOIN orders o ON o.id = oi.order_id
+            JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
+            LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
             WHERE oi.id = t.direct_order_item_id
+              AND oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL
+              AND o.status NOT IN ('cancelled', 'refunded')
+              AND NOT o.hold_shipping
+              AND r.recon_status IN ('matched', 'over')
+              AND r.pending_payment_count = 0
               AND COALESCE(t.destination->>'street1', '') = COALESCE(o.address_line1, '')
               AND COALESCE(t.destination->>'street2', '') = COALESCE(o.address_line2, '')
               AND COALESCE(t.destination->>'city', '')    = COALESCE(o.city, '')
               AND COALESCE(t.destination->>'state', '')   = COALESCE(o.state_code, '')
               AND COALESCE(t.destination->>'zip', '')     = COALESCE(o.postal_code, '')
+              AND EXISTS (
+                SELECT 1 FROM transfer_items ti
+                WHERE ti.transfer_id = t.id AND ti.product_id = gbp.product_id
+                  AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
+              )
           ))
           -- exclusive CAS with an OWN-TOKEN refresh: the current holder
           -- (presenting its exact claimed_at) may re-stamp the lease as a

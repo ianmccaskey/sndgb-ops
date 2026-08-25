@@ -33,7 +33,7 @@ function finalizeTransfer() {
           AND TRIM({{params.label_url}}) <> ''
           AND t.shippo_rate_id = TRIM({{params.rate_id}})
         RETURNING t.id, t.shippo_transaction_id, t.tracking_number, t.label_url, t.rate_amount,
-                  t.carrier, t.direct_order_item_id
+                  t.carrier, t.direct_order_item_id, t.destination
       ),
       -- the linked direct-ship line completes WITH the label, in the same
       -- statement: only if it is still outstanding AND still passes the
@@ -65,6 +65,16 @@ function finalizeTransfer() {
             WHERE ti.transfer_id = up.id AND ti.product_id = gbp.product_id
               AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
           )
+          -- ship-to CAS at stamp time too: recovery paths finalize
+          -- WITHOUT the pre-POST claim (the label already exists), so a
+          -- label bought before an address correction must not complete
+          -- the line — it records on the transfer, direct_stamped = 0,
+          -- and the operator remediates (refund/reship) manually
+          AND COALESCE(up.destination->>'street1', '') = COALESCE(o.address_line1, '')
+          AND COALESCE(up.destination->>'street2', '') = COALESCE(o.address_line2, '')
+          AND COALESCE(up.destination->>'city', '')    = COALESCE(o.city, '')
+          AND COALESCE(up.destination->>'state', '')   = COALESCE(o.state_code, '')
+          AND COALESCE(up.destination->>'zip', '')     = COALESCE(o.postal_code, '')
         RETURNING oi.id, oi.order_id
       ),
       stamp_audit AS (
