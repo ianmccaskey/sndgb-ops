@@ -307,7 +307,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         const m = e instanceof Error ? e.message : '';
         setPurchaseMsg(m.includes('transfers_rate_unique')
           ? 'This exact rate was already purchased (double-click?) — check the transfer log before buying again.'
-          : (m || 'Failed to save the transfer draft.') + ' Nothing was saved or purchased.');
+          : m.includes('transfers_direct_item_active_uniq')
+            ? 'Another unfinished transfer already reserves this direct-ship order line (possibly the other admin, just now) — check the drafts below before trying again.'
+            : (m || 'Failed to save the transfer draft.') + ' Nothing was saved or purchased.');
         return;
       }
       if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived since rates were fetched, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, or its product is not on this transfer) — reload and re-quote.'); return; }

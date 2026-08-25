@@ -16,11 +16,15 @@ function getOrderItems() {
       JOIN products p ON p.id = gbp.product_id
       -- the label we bought for this direct line, if any — joined through
       -- transfers.direct_order_item_id (newest finalized wins) so the
-      -- tracking shown here can never drift from the transfer log
+      -- tracking shown here can never drift from the transfer log. A
+      -- refund-SUCCESS label provably never shipped (Shippo only refunds
+      -- unused labels) — its tracking must not present as live customer
+      -- tracking on the line
       LEFT JOIN LATERAL (
         SELECT t.carrier, t.tracking_number
         FROM transfers t
         WHERE t.direct_order_item_id = oi.id AND t.finalized_at IS NOT NULL
+          AND COALESCE(t.refund_status, '') <> 'SUCCESS'
         ORDER BY t.finalized_at DESC LIMIT 1
       ) dt ON true
       WHERE oi.order_id = {{params.order_id}}::bigint
