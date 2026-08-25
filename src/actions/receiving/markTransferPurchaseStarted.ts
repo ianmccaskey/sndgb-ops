@@ -10,7 +10,13 @@ import { action } from '@uibakery/data';
  * any money moves. A definitive Shippo refusal clears the lease
  * (clearTransferPurchaseLease) so an honest retry needn't wait out the
  * window; ambiguous failures keep it, because money may have moved.
- * deleteTransferDraft refuses under the same fresh-lease rule. Audited.
+ * deleteTransferDraft refuses under the same fresh-lease rule. A draft
+ * whose direct-ship link was RECLAIMED (expired reservation superseded
+ * by a newer draft) refuses ALL claims permanently: a new label bought
+ * against it would duplicate the shipment the new link-holder is
+ * making. Recovery of an already-bought label bypasses this on purpose
+ * (finalizeTransfer needs no claim), as does verified-no-label
+ * deletion. Audited.
  */
 function markTransferPurchaseStarted() {
   return action('markTransferPurchaseStarted', 'SQL', {
@@ -25,6 +31,7 @@ function markTransferPurchaseStarted() {
         SET purchase_started_at = now(), purchase_attempted_at = now()
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
+          AND t.direct_link_reclaimed_at IS NULL
           -- exclusive CAS with an OWN-TOKEN refresh: the current holder
           -- (presenting its exact claimed_at) may re-stamp the lease as a
           -- pre-POST HEARTBEAT — a tab that slept past the window learns

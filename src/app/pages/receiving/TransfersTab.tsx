@@ -312,7 +312,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             : (m || 'Failed to save the transfer draft.') + ' Nothing was saved or purchased.');
         return;
       }
-      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived since rates were fetched, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, its SHIP-TO ADDRESS was corrected since the quote, or its product is not on this transfer) — reload and re-quote.'); return; }
+      if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived since rates were fetched, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, its SHIP-TO ADDRESS was corrected since the quote, or this transfer carries LESS than the ordered quantity of their product) — reload and re-quote.'); return; }
       // 2. HEARTBEAT immediately before money moves: if this tab slept
       //    long enough for the birth lease to age out and another session
       //    deleted or re-claimed the draft, the own-token refresh returns
@@ -434,7 +434,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       const claim = await doClaimPurchase({ transfer_id: t.id, prior_claimed_at: '', actor: userName }) as unknown[] | null;
       const claimRow = Array.isArray(claim) && claim.length > 0 ? claim[0] as { id: string; claimed_at?: string } : null;
       if (!claimRow) {
-        setDraftMsg(m => ({ ...m, [t.id]: 'Not purchased — either this draft no longer exists, or another purchase attempt (this draft\'s original try, or the other admin) is still fresh (<10 min). An explicit Shippo refusal frees it immediately; otherwise wait a few minutes and use "Check Shippo & retry" again.' }));
+        setDraftMsg(m => ({ ...m, [t.id]: 'Not purchased — this draft no longer exists, another purchase attempt (this draft\'s original try, or the other admin) is still fresh (<10 min), or this draft\'s direct-ship reservation expired and was taken over by a NEWER draft (buying here would duplicate that shipment — delete this draft instead). An explicit Shippo refusal frees a fresh lease immediately; otherwise wait a few minutes and use "Check Shippo & retry" again.' }));
         reloadTransfers();
         return;
       }
@@ -673,7 +673,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             <p className="text-[11px] text-muted-foreground">
               Ships to {directCandidate.contact_name || directCandidate.customer_name}, {directCandidate.address_line1}
               {directCandidate.address_line2 ? `, ${directCandidate.address_line2}` : ''}, {directCandidate.city}, {directCandidate.state_code} {directCandidate.postal_code}
-              {' '}— this customer ordered <span className="font-medium">{directCandidate.sku_code} × {fmtNum(directCandidate.qty)}</span>; buying the label marks that order line direct-shipped with this tracking number.
+              {' '}— this customer ordered <span className="font-medium">{directCandidate.sku_code} × {fmtNum(directCandidate.qty)}</span>; buying the label marks that order line direct-shipped with this tracking number. The transfer must carry at least that quantity of {directCandidate.sku_code} (more is fine — under-ships won't link).
             </p>
           )}
           {fDest === '__custom__' && (
