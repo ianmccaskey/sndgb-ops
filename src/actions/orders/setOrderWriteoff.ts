@@ -44,11 +44,11 @@ function setOrderWriteoff() {
         RETURNING w.id, w.amount_usd
       ), ins AS (
         INSERT INTO order_writeoffs (order_id, amount_usd, reason, created_by)
-        SELECT {{params.order_id}}::bigint, ({{params.amount}})::numeric, TRIM({{params.reason}}), {{params.actor}}
+        SELECT {{params.order_id}}::bigint, ({{params.amount}})::numeric, TRIM({{params.reason}}::text), {{params.actor}}
         FROM cap
         WHERE ({{params.amount}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.amount}})::numeric > 0
-          AND LENGTH(TRIM({{params.reason}})) > 0
+          AND LENGTH(TRIM({{params.reason}}::text)) > 0
           AND ({{params.amount}})::numeric <= cap.max_writeoff
           AND cap.pending_payment_count = 0
         ON CONFLICT (order_id) DO UPDATE SET
@@ -60,7 +60,7 @@ function setOrderWriteoff() {
       ), audit_set AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'order_writeoffs', ins.id::text, 'writeoff_set', {{params.actor}},
-               jsonb_build_object('order_id', {{params.order_id}}::bigint, 'amount_usd', ins.amount_usd, 'reason', TRIM({{params.reason}}))
+               jsonb_build_object('order_id', {{params.order_id}}::bigint, 'amount_usd', ins.amount_usd, 'reason', TRIM({{params.reason}}::text))
         FROM ins
         RETURNING row_pk
       ), audit_clear AS (

@@ -38,7 +38,7 @@ function undoPaymentRejection() {
           updated_at = now()
         FROM tgt
         WHERE p.id = tgt.id
-          AND LENGTH(TRIM({{params.reason}})) > 0
+          AND LENGTH(TRIM({{params.reason}}::text)) > 0
           AND NOT EXISTS (
             SELECT 1 FROM payments q
             WHERE q.id <> tgt.id AND q.status <> 'rejected'

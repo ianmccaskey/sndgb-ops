@@ -43,7 +43,7 @@ function addLocalOrderItem() {
           -- orders, so a local item here would be dormant billing that
           -- silently reappears if the status ever flips back
           AND o.status NOT IN ('cancelled', 'refunded')
-        WHERE p.sku_code = {{params.sku}}
+        WHERE p.sku_code = {{params.sku}}::text
           -- the order must still be in the pack flow: once its latest
           -- shipment is packed/shipped, a new item would bill the customer
           -- for something fulfillment never sees — reopen the shipment

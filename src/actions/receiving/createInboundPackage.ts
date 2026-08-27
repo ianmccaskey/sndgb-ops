@@ -35,14 +35,14 @@ function createInboundPackage() {
         INSERT INTO inbound_packages (receive_address_id, vendor_id, carrier, tracking_number, note, created_by)
         SELECT {{params.receive_address_id}}::bigint,
                NULLIF({{params.vendor_id}}::text, '')::bigint,
-               LOWER(TRIM({{params.carrier}})),
+               LOWER(TRIM({{params.carrier}}::text)),
                -- canonical UPPER: UPS-style numbers are case-insensitive,
                -- and the active-uniqueness guard must see 1Z... and 1z...
                -- as the same parcel
-               UPPER(TRIM({{params.tracking_number}})),
+               UPPER(TRIM({{params.tracking_number}}::text)),
                NULLIF(TRIM({{params.note}}::text), ''),
                {{params.actor}}
-        WHERE TRIM({{params.carrier}}) <> '' AND TRIM({{params.tracking_number}}) <> ''
+        WHERE TRIM({{params.carrier}}::text) <> '' AND TRIM({{params.tracking_number}}::text) <> ''
           -- expected_label ('' = no expectation, manual flow) is the
           -- identity-CAS for CSV imports: the reviewed (id, label) pair
           -- must still hold AT WRITE TIME, so a rename between preview
@@ -51,7 +51,7 @@ function createInboundPackage() {
           AND EXISTS (SELECT 1 FROM receive_addresses ra
                       WHERE ra.id = {{params.receive_address_id}}::bigint AND ra.active
                         AND (NULLIF({{params.expected_label}}::text, '') IS NULL
-                             OR ra.label = {{params.expected_label}}))
+                             OR ra.label = {{params.expected_label}}::text))
           AND (NULLIF({{params.vendor_id}}::text, '') IS NULL
                OR EXISTS (
                  SELECT 1 FROM vendors v

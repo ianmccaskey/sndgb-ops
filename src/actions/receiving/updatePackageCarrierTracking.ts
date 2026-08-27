@@ -17,8 +17,8 @@ function updatePackageCarrierTracking() {
     query: `
       WITH up AS (
         UPDATE inbound_packages p
-        SET carrier = LOWER(TRIM({{params.carrier}})),
-            tracking_number = UPPER(TRIM({{params.tracking_number}})),
+        SET carrier = LOWER(TRIM({{params.carrier}}::text)),
+            tracking_number = UPPER(TRIM({{params.tracking_number}}::text)),
             tracking_status = NULL, tracking_substatus = NULL, tracking_detail = NULL,
             tracking_error = NULL, tracking_location = NULL, eta = NULL,
             status_date = NULL, last_checked_at = NULL,
@@ -26,12 +26,12 @@ function updatePackageCarrierTracking() {
         FROM (SELECT id, carrier AS old_carrier, tracking_number AS old_tracking FROM inbound_packages WHERE id = {{params.package_id}}::bigint) old
         WHERE p.id = old.id
           AND p.received_at IS NULL
-          AND TRIM({{params.carrier}}) <> '' AND TRIM({{params.tracking_number}}) <> ''
+          AND TRIM({{params.carrier}}::text) <> '' AND TRIM({{params.tracking_number}}::text) <> ''
           -- CAS on the identity the dialog OPENED with: if another session
           -- corrected this package meanwhile, this stale save refuses
           -- instead of silently repointing the row a second time
-          AND old.old_carrier = LOWER(TRIM({{params.expected_carrier}}))
-          AND old.old_tracking = UPPER(TRIM({{params.expected_tracking}}))
+          AND old.old_carrier = LOWER(TRIM({{params.expected_carrier}}::text))
+          AND old.old_tracking = UPPER(TRIM({{params.expected_tracking}}::text))
         RETURNING p.id, old.old_carrier, old.old_tracking, p.carrier, p.tracking_number
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, old_data, new_data)

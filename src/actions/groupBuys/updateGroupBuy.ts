@@ -5,7 +5,7 @@ function updateGroupBuy() {
     datasourceName: 'SND GB DB',
     query: `
       UPDATE group_buys SET
-        name = {{params.name}},
+        name = {{params.name}}::text,
         status = {{params.status}}::group_buy_status,
         starts_on = NULLIF({{params.starts_on}}::text, '')::date,
         ends_on = NULLIF({{params.ends_on}}::text, '')::date,

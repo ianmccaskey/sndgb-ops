@@ -30,14 +30,14 @@ function addOrderCredit() {
         WHERE r.order_id = {{params.order_id}}::bigint
       ), ins AS (
         INSERT INTO order_credits (order_id, amount_usd, reason, created_by)
-        SELECT o.id, {{params.amount_usd}}::numeric, TRIM({{params.reason}}), {{params.actor}}
+        SELECT o.id, {{params.amount_usd}}::numeric, TRIM({{params.reason}}::text), {{params.actor}}
         FROM cap, orders o
         WHERE o.id = {{params.order_id}}::bigint
           AND o.status NOT IN ('cancelled', 'refunded')
           AND ({{params.amount_usd}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.amount_usd}})::numeric > 0
           AND ({{params.amount_usd}})::numeric <= cap.max_credit
-          AND LENGTH(TRIM({{params.reason}})) > 0
+          AND LENGTH(TRIM({{params.reason}}::text)) > 0
         RETURNING id, order_id, amount_usd, reason
       ), wo_clear AS (
         DELETE FROM order_writeoffs w

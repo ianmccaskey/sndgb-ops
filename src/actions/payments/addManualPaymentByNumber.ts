@@ -14,7 +14,7 @@ function addManualPaymentByNumber() {
       WITH target AS (
         SELECT id FROM orders
         WHERE group_buy_id = {{params.group_buy_id}}::bigint
-          AND order_number = TRIM({{params.order_number}})
+          AND order_number = TRIM({{params.order_number}}::text)
           AND status NOT IN ('cancelled','refunded')
         LIMIT 1
       ), lck AS (

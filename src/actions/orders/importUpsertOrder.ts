@@ -37,11 +37,11 @@ function importUpsertOrder() {
       ), lck AS (
         SELECT pg_advisory_xact_lock(42001, o.id::int) AS locked
         FROM orders o
-        WHERE o.order_number = {{params.order_number}}
+        WHERE o.order_number = {{params.order_number}}::text
       ), prev AS (
         SELECT o.id, o.total_usd
         FROM lck, orders o
-        WHERE o.order_number = {{params.order_number}}
+        WHERE o.order_number = {{params.order_number}}::text
       ), up AS (
       INSERT INTO orders (
         external_id, order_number, group_buy_id, customer_id, status, payment_rail,

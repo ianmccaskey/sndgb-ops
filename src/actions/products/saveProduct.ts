@@ -6,7 +6,7 @@ function saveProduct() {
     query: `
       INSERT INTO products (sku_code, name, mass_label, external_id, active)
       VALUES (
-        TRIM({{params.sku_code}}),
+        TRIM({{params.sku_code}}::text),
         {{params.name}},
         NULLIF({{params.mass_label}}::text, ''),
         NULLIF({{params.external_id}}::text, ''),

@@ -22,7 +22,7 @@ function createTransfer() {
     query: `
       SELECT id, claimed_at FROM create_transfer_draft(
         {{params.from_address_id}}::bigint,
-        {{params.destination_label}},
+        {{params.destination_label}}::text,
         {{params.destination}}::jsonb,
         {{params.parcel}}::jsonb,
         {{params.carrier}}::text,

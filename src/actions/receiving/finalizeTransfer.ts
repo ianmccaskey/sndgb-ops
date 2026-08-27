@@ -52,9 +52,9 @@ function finalizeTransfer() {
         FROM transfers t, lck
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
-          AND TRIM({{params.transaction_id}}) <> ''
-          AND TRIM({{params.label_url}}) <> ''
-          AND t.shippo_rate_id = TRIM({{params.rate_id}})
+          AND TRIM({{params.transaction_id}}::text) <> ''
+          AND TRIM({{params.label_url}}::text) <> ''
+          AND t.shippo_rate_id = TRIM({{params.rate_id}}::text)
         FOR UPDATE OF t
       ),
       -- ROW-LOCK the order (FOR UPDATE) so the stamp's gates are
@@ -128,9 +128,9 @@ function finalizeTransfer() {
       -- sheet's tracking join requires
       up AS (
         UPDATE transfers t
-        SET shippo_transaction_id = {{params.transaction_id}},
+        SET shippo_transaction_id = {{params.transaction_id}}::text,
             tracking_number = NULLIF({{params.tracking_number}}::text, ''),
-            label_url = {{params.label_url}},
+            label_url = {{params.label_url}}::text,
             finalized_at = now(),
             direct_stamped_at = CASE WHEN EXISTS (SELECT 1 FROM stamp) THEN now() ELSE t.direct_stamped_at END
         FROM sel

@@ -28,7 +28,7 @@ function setOrderItemComp() {
       ), upd AS (
         UPDATE order_items oi SET
           comp_qty = ({{params.comp_qty}})::numeric,
-          comp_reason = CASE WHEN ({{params.comp_qty}})::numeric > 0 THEN TRIM({{params.reason}}) ELSE NULL END
+          comp_reason = CASE WHEN ({{params.comp_qty}})::numeric > 0 THEN TRIM({{params.reason}}::text) ELSE NULL END
         FROM lck, orders o
         WHERE oi.id = {{params.item_id}}::bigint
           AND oi.order_id = {{params.order_id}}::bigint
@@ -48,7 +48,7 @@ function setOrderItemComp() {
           -- stored comp can never exceed what the customer actually gets —
           -- a removed line only accepts 0 (clearing)
           AND ({{params.comp_qty}})::numeric <= (CASE WHEN oi.removed_at IS NULL THEN COALESCE(oi.qty_override, oi.qty) ELSE 0 END)
-          AND (({{params.comp_qty}})::numeric = 0 OR LENGTH(TRIM({{params.reason}})) > 0)
+          AND (({{params.comp_qty}})::numeric = 0 OR LENGTH(TRIM({{params.reason}}::text)) > 0)
         RETURNING oi.id, oi.comp_qty, oi.qty
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

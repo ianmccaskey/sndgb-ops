@@ -30,8 +30,8 @@ function updatePackageTracking() {
           status_date = CASE WHEN {{params.error}}::text <> '' THEN status_date ELSE NULLIF({{params.status_date}}::text, '')::timestamptz END,
           last_checked_at = now()
       WHERE id = {{params.package_id}}::bigint
-        AND carrier = LOWER(TRIM({{params.carrier}}))
-        AND tracking_number = UPPER(TRIM({{params.tracking_number}}))
+        AND carrier = LOWER(TRIM({{params.carrier}}::text))
+        AND tracking_number = UPPER(TRIM({{params.tracking_number}}::text))
       RETURNING id, tracking_status, tracking_substatus, received_at
     `,
   });

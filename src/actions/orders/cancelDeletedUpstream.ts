@@ -26,7 +26,7 @@ function cancelDeletedUpstream() {
           END
         WHERE id = {{params.order_id}}::bigint
           AND group_buy_id = {{params.group_buy_id}}::bigint
-          AND external_id = {{params.external_id}}
+          AND external_id = {{params.external_id}}::text
           AND status NOT IN ('cancelled','refunded')
           AND raw_import->>'source' = 'base44'
           AND (raw_import->>'json')::jsonb->>'group_buy_id' = {{params.gb_external_id}}

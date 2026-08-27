@@ -33,14 +33,14 @@ function addOrderRefund() {
         SELECT o.id, {{params.amount_usd}}::numeric, {{params.method}}::payment_method,
                NULLIF({{params.wallet_id}}::text, '')::bigint,
                NULLIF({{params.tx_ref}}::text, ''),
-               TRIM({{params.reason}}), {{params.actor}}
+               TRIM({{params.reason}}::text), {{params.actor}}
         FROM cap, orders o
         WHERE o.id = {{params.order_id}}::bigint
           AND o.status NOT IN ('cancelled', 'refunded')
           AND ({{params.amount_usd}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.amount_usd}})::numeric > 0
           AND ({{params.amount_usd}})::numeric <= cap.max_refund
-          AND LENGTH(TRIM({{params.reason}})) > 0
+          AND LENGTH(TRIM({{params.reason}}::text)) > 0
           -- the refund rail must MATCH the order's rail: the recon view
           -- subtracts refunds from received on the ORDER's rail while the
           -- rail cards attribute wallet outflows by chain — a cross-rail

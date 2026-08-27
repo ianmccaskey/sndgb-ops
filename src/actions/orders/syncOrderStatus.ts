@@ -11,7 +11,7 @@ function syncOrderStatus() {
     datasourceName: 'SND GB DB',
     query: `
       UPDATE orders SET status = {{params.status}}::order_status
-      WHERE order_number = {{params.order_number}}
+      WHERE order_number = {{params.order_number}}::text
         AND group_buy_id = {{params.group_buy_id}}::bigint
         AND status <> {{params.status}}::order_status
       RETURNING id

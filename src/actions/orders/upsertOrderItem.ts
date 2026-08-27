@@ -35,7 +35,7 @@ function upsertOrderItem() {
         FROM order_items oi
         JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
           AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
-        JOIN products p ON p.id = gbp.product_id AND p.sku_code = {{params.sku}}
+        JOIN products p ON p.id = gbp.product_id AND p.sku_code = {{params.sku}}::text
         WHERE oi.order_id = {{params.order_id}}::bigint
           AND (SELECT COUNT(*) FROM lck) >= 0
         FOR UPDATE OF oi
@@ -51,7 +51,7 @@ function upsertOrderItem() {
         FROM products p
         JOIN group_buy_products gbp ON gbp.product_id = p.id
           AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
-        WHERE p.sku_code = {{params.sku}}
+        WHERE p.sku_code = {{params.sku}}::text
           AND ({{params.qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.qty}})::numeric > 0
           AND (SELECT COUNT(*) FROM lck) >= 0

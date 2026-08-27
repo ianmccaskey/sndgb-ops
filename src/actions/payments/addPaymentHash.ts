@@ -19,9 +19,9 @@ function addPaymentHash() {
         -- write-offs while any payment is pending)
         SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
       ), input AS (
-        SELECT CASE WHEN TRIM({{params.tx_hash}}) ~ '^0x[0-9a-fA-F]{64}$'
-                    THEN lower(TRIM({{params.tx_hash}}))
-                    ELSE TRIM({{params.tx_hash}}) END AS h
+        SELECT CASE WHEN TRIM({{params.tx_hash}}::text) ~ '^0x[0-9a-fA-F]{64}$'
+                    THEN lower(TRIM({{params.tx_hash}}::text))
+                    ELSE TRIM({{params.tx_hash}}::text) END AS h
       ), ins AS (
         INSERT INTO payments (order_id, method, tx_hash, status)
         SELECT {{params.order_id}}::bigint, {{params.method}}::payment_method, input.h, 'pending'
