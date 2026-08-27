@@ -18,7 +18,7 @@ function createManualTransfer() {
     query: `
       SELECT id FROM create_manual_transfer(
         {{params.from_address_id}}::bigint,
-        {{params.destination_label}},
+        {{params.destination_label}}::text,
         {{params.destination}}::jsonb,
         {{params.carrier}}::text,
         {{params.tracking_number}}::text,

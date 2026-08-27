@@ -22,12 +22,12 @@ function importUpsertOrder() {
       WITH existing AS (
         SELECT id FROM customers
         WHERE ({{params.email}} <> '' AND email = {{params.email}}::citext)
-           OR ({{params.email}} = '' AND email IS NULL AND display_name = {{params.customer_name}})
+           OR ({{params.email}} = '' AND email IS NULL AND display_name = {{params.customer_name}}::text)
         LIMIT 1
       ), ins AS (
         INSERT INTO customers (email, display_name, discord_username, phone)
         SELECT NULLIF({{params.email}}::text, '')::citext,
-               {{params.customer_name}},
+               {{params.customer_name}}::text,
                NULLIF({{params.discord}}::text, ''),
                NULLIF({{params.phone}}::text, '')
         WHERE NOT EXISTS (SELECT 1 FROM existing)
@@ -52,12 +52,12 @@ function importUpsertOrder() {
       )
       SELECT
         NULLIF({{params.external_id}}::text, ''),
-        {{params.order_number}},
+        {{params.order_number}}::text,
         {{params.group_buy_id}}::bigint,
         cust.id,
         'imported',
         {{params.payment_rail}}::payment_rail,
-        {{params.customer_name}},
+        {{params.customer_name}}::text,
         NULLIF({{params.email}}::text, '')::citext,
         NULLIF({{params.phone}}::text, ''),
         NULLIF({{params.discord}}::text, ''),

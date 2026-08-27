@@ -6,7 +6,7 @@ function createGroupBuy() {
     query: `
       INSERT INTO group_buys (name, status, starts_on, ends_on, admin_fee_usd, shipping_fee_usd, cash_processor_fee_pct)
       VALUES (
-        {{params.name}},
+        {{params.name}}::text,
         'draft',
         NULLIF({{params.starts_on}}::text, '')::date,
         NULLIF({{params.ends_on}}::text, '')::date,

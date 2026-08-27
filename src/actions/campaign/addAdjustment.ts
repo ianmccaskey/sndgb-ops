@@ -46,9 +46,9 @@ function addAdjustment() {
       SELECT
         gbp.id,
         ({{params.qty}})::numeric,
-        {{params.reason}},
-        {{params.created_by}},
-        {{params.beneficiary}},
+        {{params.reason}}::text,
+        {{params.created_by}}::text,
+        {{params.beneficiary}}::text,
         COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb'),
         CASE WHEN COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
              THEN ROUND(({{params.qty}})::numeric * (gbp.unit_cost_usd + gbp.freight_usd), 2)
@@ -72,7 +72,7 @@ function addAdjustment() {
         -- already-defined meaning
         AND (COALESCE(NULLIF({{params.stock}}::text, ''), 'false') = 'false'
              OR (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'cost'
-                 AND {{params.beneficiary}} = 'both'
+                 AND {{params.beneficiary}}::text = 'both'
                  AND COALESCE(NULLIF({{params.preordered}}::text, ''), 'false') = 'false'))
         AND (COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') = 'gb'
              -- at-cost rows: positive WHOLE kits on a flat-cost product only.
@@ -97,12 +97,12 @@ function addAdjustment() {
         -- ANY row with a party beneficiary (gb-priced or at-cost personal
         -- stock) must name a split party in THE GROUP BUY BEING ADJUSTED —
         -- otherwise its value would be deducted from no one's payout
-        AND ({{params.beneficiary}} = 'both'
+        AND ({{params.beneficiary}}::text = 'both'
              OR EXISTS (
                SELECT 1
                FROM profit_splits ps
                WHERE ps.group_buy_id = gbp.group_buy_id
-                 AND ps.party = {{params.beneficiary}}
+                 AND ps.party = {{params.beneficiary}}::text
              ))
       RETURNING id
     `,

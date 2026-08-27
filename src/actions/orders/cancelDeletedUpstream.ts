@@ -21,20 +21,20 @@ function cancelDeletedUpstream() {
         UPDATE orders SET
           status = 'cancelled'::order_status,
           admin_note = CASE
-            WHEN admin_note IS NULL OR admin_note = '' THEN {{params.note}}
-            ELSE admin_note || E'\\n' || {{params.note}}
+            WHEN admin_note IS NULL OR admin_note = '' THEN {{params.note}}::text
+            ELSE admin_note || E'\\n' || {{params.note}}::text
           END
         WHERE id = {{params.order_id}}::bigint
           AND group_buy_id = {{params.group_buy_id}}::bigint
           AND external_id = {{params.external_id}}::text
           AND status NOT IN ('cancelled','refunded')
           AND raw_import->>'source' = 'base44'
-          AND (raw_import->>'json')::jsonb->>'group_buy_id' = {{params.gb_external_id}}
+          AND (raw_import->>'json')::jsonb->>'group_buy_id' = {{params.gb_external_id}}::text
         RETURNING id
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'orders', upd.id::text, 'cancelled_deleted_upstream', {{params.actor}},
-               jsonb_build_object('note', {{params.note}}, 'external_id', {{params.external_id}})
+               jsonb_build_object('note', {{params.note}}::text, 'external_id', {{params.external_id}})
         FROM upd
         RETURNING row_pk
       )

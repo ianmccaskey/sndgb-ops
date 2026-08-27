@@ -8,7 +8,7 @@ function addExpense() {
       VALUES (
         {{params.group_buy_id}}::bigint,
         {{params.category}}::expense_category,
-        {{params.description}},
+        {{params.description}}::text,
         {{params.unit_cost_usd}}::numeric,
         {{params.qty}}::numeric,
         NULLIF({{params.incurred_on}}::text, '')::date

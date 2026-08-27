@@ -24,7 +24,7 @@ function listActiveExternalOrders() {
         AND o.status NOT IN ('cancelled','refunded')
         AND o.external_id IS NOT NULL AND o.external_id <> ''
         AND o.raw_import->>'source' = 'base44'
-        AND (o.raw_import->>'json')::jsonb->>'group_buy_id' = {{params.gb_external_id}}
+        AND (o.raw_import->>'json')::jsonb->>'group_buy_id' = {{params.gb_external_id}}::text
       ORDER BY o.order_number
     `,
   });

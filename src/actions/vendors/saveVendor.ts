@@ -7,7 +7,7 @@ function saveVendor() {
       INSERT INTO vendors (code, name, notes, active)
       VALUES (
         UPPER(TRIM({{params.code}}::text)),
-        {{params.name}},
+        {{params.name}}::text,
         NULLIF({{params.notes}}::text, ''),
         {{params.active}}::boolean
       )

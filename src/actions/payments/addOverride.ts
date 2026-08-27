@@ -13,7 +13,7 @@ function addOverride() {
         SELECT
           {{params.order_id}}::bigint,
           {{params.amount_usd}}::numeric,
-          {{params.reason}},
+          {{params.reason}}::text,
           {{params.created_by}}
         FROM lck
         RETURNING id, order_id, amount_usd, reason
