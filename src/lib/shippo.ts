@@ -164,7 +164,9 @@ export async function trackPackage(http: ShippoHttp, key: string, carrier: strin
     // deterministic failure into minutes of stalls. The fail-closed PROOF
     // walks keep the deep budget; this differentiation is by caller
     // stakes, never by text-derived status.
-    body = await getWithRetry(http, key.trim(), `/tracks/${encodeURIComponent(carrier.trim())}/${encodeURIComponent(trackingNumber.trim())}`, 2);
+    // String() guards: an all-numeric tracking number can reach here as a
+    // JS number (action transport re-types digit-only text columns)
+    body = await getWithRetry(http, key.trim(), `/tracks/${encodeURIComponent(String(carrier).trim())}/${encodeURIComponent(String(trackingNumber).trim())}`, 2);
   } catch (e: unknown) {
     // statuses below are HINTS parsed from unstructured error text, never
     // control flow — phrased accordingly

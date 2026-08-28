@@ -53,7 +53,13 @@ export function ReceivingPage() {
   const vendorsReady = groupBuyId != null && !vendorsLoading && !vendorsError;
 
   const addresses = rows<RxAddress>(rawAddresses);
-  const packages = rows<Pkg>(rawPackages);
+  // the action transport returns all-digit text columns as JS numbers, so
+  // an all-numeric tracking number would crash every .trim()/.toUpperCase()
+  // downstream (Shippo path, correction dialog seed) — re-string them once
+  // at the row boundary so every consumer sees the DB's text value
+  const packages = useMemo(() => rows<Pkg>(rawPackages).map(p => ({
+    ...p, carrier: String(p.carrier ?? ''), tracking_number: String(p.tracking_number ?? ''),
+  })), [rawPackages]);
   const inventory = rows<InvRow>(rawInventory);
   const transfers = rows<TransferRow>(rawTransfers);
   const destinations = rows<RxAddress>(rawDestinations);
