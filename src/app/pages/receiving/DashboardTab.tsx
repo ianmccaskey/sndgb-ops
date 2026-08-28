@@ -179,8 +179,14 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
     }
     setRowMsg(m => ({ ...m, [p.id]: '' }));
     afterChange();
-    // first tracking check right away, so the card shows something
-    if (hasKey) { await refreshOne({ ...p, committed_at: new Date().toISOString() }); afterChange(); }
+    // first tracking check right away, so the card shows something — and if
+    // it refuses (mangled tracking, Shippo problem), say so on the row now
+    // rather than letting commit look like tracking started
+    if (hasKey) {
+      const err = await refreshOne({ ...p, committed_at: new Date().toISOString() });
+      if (err) setRowMsg(m => ({ ...m, [p.id]: err }));
+      afterChange();
+    }
   };
 
   const receivePkg = async (p: Pkg) => {

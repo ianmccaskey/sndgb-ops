@@ -124,14 +124,19 @@ export function ReceivingPage() {
     // mode), and skipping it would strand inventory understated forever.
     const targets = packages.filter(p => p.committed_at && !p.received_at);
     if (targets.length === 0) { setRefreshAllProgress('Nothing to refresh.'); return; }
-    let done = 0;
+    // a non-null return is a package that did NOT get a clean refresh
+    // (blocked mangled tracking, Shippo failure) — counting it as
+    // "refreshed" would hide rows that need operator action
+    let ok = 0, failed = 0;
     for (const p of targets) {
-      setRefreshAllProgress(`${done}/${targets.length} refreshed…`);
-      await refreshOne(p);
-      done += 1;
+      setRefreshAllProgress(`${ok + failed}/${targets.length} refreshed…`);
+      const err = await refreshOne(p);
+      if (err) failed += 1; else ok += 1;
       await new Promise(r => setTimeout(r, 250)); // gentle pacing on top of backoff
     }
-    setRefreshAllProgress(`${done}/${targets.length} refreshed.`);
+    setRefreshAllProgress(failed === 0
+      ? `${ok}/${targets.length} refreshed.`
+      : `${ok}/${targets.length} refreshed — ${failed} had problems; use those packages' own Refresh button for the reason.`);
     reloadPackages();
   };
 
