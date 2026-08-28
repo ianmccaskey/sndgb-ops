@@ -20,6 +20,11 @@ export type Pkg = {
   received_at: string | null; received_by: string | null; auto_receive_suppressed: boolean;
   created_by: string; created_at: string;
   items: PkgItem[] | null;
+  // set at the row boundary (ReceivingPage): the transport re-typed the
+  // tracking number to a JS number past Number.MAX_SAFE_INTEGER, so the
+  // exact DB text is unrecoverable client-side — refresh and correction
+  // fail closed on it instead of acting on a rounded value
+  tracking_mangled?: boolean;
 };
 export type InvRow = {
   receive_address_id: number; address_label: string; product_id: number;

@@ -213,6 +213,10 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
 
   const saveCorrection = async () => {
     if (!correcting) return;
+    // the CAS below compares against the identity this dialog opened with;
+    // a mangled row opened with a ROUNDED number, so the save could never
+    // match — refuse with the real reason instead of the generic CAS copy
+    if (correcting.tracking_mangled) { setCMsg('Cannot correct: the platform returned this tracking number rounded, so the original to match against is unrecoverable here. Delete the package and re-log it — the database record is intact.'); return; }
     setCMsg('');
     try {
       const res = await doCorrect({

@@ -56,10 +56,17 @@ export function ReceivingPage() {
   // the action transport returns all-digit text columns as JS numbers, so
   // an all-numeric tracking number would crash every .trim()/.toUpperCase()
   // downstream (Shippo path, correction dialog seed) — re-string them once
-  // at the row boundary so every consumer sees the DB's text value
-  const packages = useMemo(() => rows<Pkg>(rawPackages).map(p => ({
-    ...p, carrier: String(p.carrier ?? ''), tracking_number: String(p.tracking_number ?? ''),
-  })), [rawPackages]);
+  // at the row boundary so every consumer sees the DB's text value.
+  // Safe-integer re-typed values (12-digit FedEx) round-trip exactly; a
+  // digit-only value PAST Number.MAX_SAFE_INTEGER (22-digit USPS) was
+  // rounded before we ever saw it, so re-stringing it would drive Shippo
+  // lookups and CAS writes off a wrong number — flag those rows instead
+  // and let refresh/correction fail closed with an honest message
+  const packages = useMemo(() => rows<Pkg>(rawPackages).map(p => {
+    const rawTracking = p.tracking_number as unknown;
+    const mangled = typeof rawTracking === 'number' && !Number.isSafeInteger(rawTracking);
+    return { ...p, carrier: String(p.carrier ?? ''), tracking_number: String(rawTracking ?? ''), tracking_mangled: mangled };
+  }), [rawPackages]);
   const inventory = rows<InvRow>(rawInventory);
   const transfers = rows<TransferRow>(rawTransfers);
   const destinations = rows<RxAddress>(rawDestinations);
@@ -75,6 +82,7 @@ export function ReceivingPage() {
 
   const refreshOne = async (p: Pkg): Promise<string | null> => {
     if (!shippoKey) return 'Add your Shippo API token in Settings first.';
+    if (p.tracking_mangled) return 'Refresh blocked: the platform returned this tracking number rounded (too many digits to survive as a number), so refreshing would track the WRONG number. Delete this package and re-log it — the record in the database is intact.';
     setRefreshingIds(s => new Set(s).add(p.id));
     try {
       const r = await trackPackage(shippoHttp, shippoKey, p.carrier, p.tracking_number);
