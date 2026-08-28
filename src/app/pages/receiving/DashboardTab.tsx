@@ -190,6 +190,9 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
   };
 
   const receivePkg = async (p: Pkg) => {
+    // the receive action CASes on carrier+tracking; a mangled row can never
+    // supply the identity it needs — refuse with the real reason up front
+    if (p.tracking_mangled) { setRowMsg(m => ({ ...m, [p.id]: 'Cannot mark received: the platform returned this tracking number rounded, so the identity check cannot pass. Delete the package and re-log it — the database record is intact.' })); return; }
     const res = await doReceive({ package_id: p.id, carrier: p.carrier, tracking_number: p.tracking_number, actor: userName, mode: 'manual' }) as unknown[] | null;
     if (!(Array.isArray(res) ? res.length > 0 : !!res)) setRowMsg(m => ({ ...m, [p.id]: 'Not received — is it committed, not already received, and unchanged since this page loaded? Reload and retry.' }));
     else setRowMsg(m => ({ ...m, [p.id]: '' }));
@@ -211,7 +214,7 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
   };
 
   const deletePkg = async (p: Pkg) => {
-    if (!window.confirm(`Delete package ${p.tracking_number} (${p.address_label})? The full record is preserved in the audit log.`)) return;
+    if (!window.confirm(`Delete package ${p.tracking_mangled ? '(unreadable tracking)' : p.tracking_number} (${p.address_label})? The full record is preserved in the audit log.`)) return;
     const res = await doDelete({ package_id: p.id, actor: userName }) as unknown[] | null;
     if (!(Array.isArray(res) ? res.length > 0 : !!res)) setRowMsg(m => ({ ...m, [p.id]: 'Not deleted — received packages must be un-received first.' }));
     afterChange();
@@ -417,8 +420,15 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
                       {p.eta && !p.received_at && <span className="text-[10px] text-muted-foreground">ETA {fmtDate(p.eta)}</span>}
                     </div>
                     <div className="text-xs font-mono break-all text-muted-foreground" title={p.note || undefined}>
-                      {p.carrier.toUpperCase()} · {p.tracking_number}
+                      {p.carrier.toUpperCase()} · {p.tracking_mangled
+                        ? <span className="text-amber-700">(tracking number unreadable here)</span>
+                        : p.tracking_number}
                     </div>
+                    {p.tracking_mangled && (
+                      <p className="text-[11px] rounded border border-amber-300 bg-amber-50 text-amber-900 p-1.5">
+                        The platform returned this tracking number rounded (too many digits), so this page can't show or track the real number. The database record is intact — delete this package and re-log it with the exact number from the label.
+                      </p>
+                    )}
                     {p.tracking_error && <p className="text-[11px] text-red-600">{p.tracking_error}</p>}
                     {p.received_at && p.tracking_status === 'RETURNED' && (
                       <p className="text-[11px] rounded border border-amber-300 bg-amber-50 text-amber-900 p-1.5">Received but tracking now says RETURNED — un-receive if the box left.</p>
