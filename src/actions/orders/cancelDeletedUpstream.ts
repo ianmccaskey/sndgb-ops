@@ -33,8 +33,8 @@ function cancelDeletedUpstream() {
         RETURNING id
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'orders', upd.id::text, 'cancelled_deleted_upstream', {{params.actor}},
-               jsonb_build_object('note', {{params.note}}::text, 'external_id', {{params.external_id}})
+        SELECT 'orders', upd.id::text, 'cancelled_deleted_upstream', {{params.actor}}::text,
+               jsonb_build_object('note', {{params.note}}::text, 'external_id', {{params.external_id}}::text)
         FROM upd
         RETURNING row_pk
       )

@@ -22,7 +22,7 @@ function saveDestination() {
         RETURNING id, label
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'transfer_destinations', up.id::text, 'destination_saved', {{params.actor}},
+      SELECT 'transfer_destinations', up.id::text, 'destination_saved', {{params.actor}}::text,
              jsonb_build_object('label', up.label)
       FROM up
       RETURNING row_pk AS id

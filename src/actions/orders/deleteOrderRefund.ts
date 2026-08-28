@@ -26,13 +26,13 @@ function deleteOrderRefund() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'refund_removed')
         FROM wo_clear
         RETURNING row_pk
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'order_refunds', del.id::text, 'order_refund_removed', {{params.actor}},
+      SELECT 'order_refunds', del.id::text, 'order_refund_removed', {{params.actor}}::text,
              jsonb_build_object('order_id', del.order_id, 'amount_usd', del.amount_usd,
                                 'method', del.method, 'wallet_id', del.wallet_id,
                                 'tx_ref', del.tx_ref, 'reason', del.reason)

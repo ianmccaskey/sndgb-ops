@@ -26,7 +26,7 @@ function clearTransferAttemptVerified() {
         RETURNING t.id, t.shippo_rate_id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'transfers', up.id::text, 'transfer_attempt_cleared_verified', {{params.actor}},
+      SELECT 'transfers', up.id::text, 'transfer_attempt_cleared_verified', {{params.actor}}::text,
              jsonb_build_object('shippo_rate_id', up.shippo_rate_id, 'reason', 'shippo_verified_no_label')
       FROM up
       RETURNING row_pk AS id

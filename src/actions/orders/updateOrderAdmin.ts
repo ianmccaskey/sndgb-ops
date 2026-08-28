@@ -13,7 +13,7 @@ function updateOrderAdmin() {
         RETURNING id, status, hold_shipping
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'orders', upd.id::text, 'admin_update', {{params.actor}},
+      SELECT 'orders', upd.id::text, 'admin_update', {{params.actor}}::text,
              jsonb_build_object('status', upd.status, 'hold_shipping', upd.hold_shipping)
       FROM upd
       RETURNING row_pk AS id

@@ -74,7 +74,7 @@ function createInboundPackage() {
         RETURNING id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'inbound_packages', ins.id::text, 'package_created', {{params.actor}},
+      SELECT 'inbound_packages', ins.id::text, 'package_created', {{params.actor}}::text,
              jsonb_build_object('receive_address_id', ins.receive_address_id, 'carrier', ins.carrier,
                                 'tracking_number', ins.tracking_number,
                                 'items', (SELECT jsonb_agg(jsonb_build_object('product_id', product_id, 'qty', qty_text)) FROM input_items),

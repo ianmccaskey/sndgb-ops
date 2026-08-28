@@ -34,13 +34,13 @@ function deleteVendorPayment() {
         RETURNING i.id
       ), unstamp_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'stock_plan_items', unstamp.id::text, 'stock_plan_item_unstamped', {{params.actor}},
+        SELECT 'stock_plan_items', unstamp.id::text, 'stock_plan_item_unstamped', {{params.actor}}::text,
                jsonb_build_object('trigger', 'vendor_payment_deleted', 'vendor_payment_id', (SELECT id FROM del))
         FROM unstamp
         RETURNING row_pk
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'vendor_payments', del.id::text, 'vendor_payment_deleted', {{params.actor}},
+      SELECT 'vendor_payments', del.id::text, 'vendor_payment_deleted', {{params.actor}}::text,
              to_jsonb(del.*)
       FROM del
       RETURNING row_pk AS id

@@ -35,7 +35,7 @@ function updatePackageCarrierTracking() {
         RETURNING p.id, old.old_carrier, old.old_tracking, p.carrier, p.tracking_number
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, old_data, new_data)
-      SELECT 'inbound_packages', up.id::text, 'package_tracking_corrected', {{params.actor}},
+      SELECT 'inbound_packages', up.id::text, 'package_tracking_corrected', {{params.actor}}::text,
              jsonb_build_object('carrier', up.old_carrier, 'tracking_number', up.old_tracking),
              jsonb_build_object('carrier', up.carrier, 'tracking_number', up.tracking_number)
       FROM up

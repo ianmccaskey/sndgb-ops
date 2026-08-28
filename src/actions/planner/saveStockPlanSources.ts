@@ -31,7 +31,7 @@ function saveStockPlanSources() {
         RETURNING id, outside_total_usd, outside_max_usd, cash_assignable_usd
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'stock_plans', up.id::text, 'stock_plan_sources_saved', {{params.actor}},
+      SELECT 'stock_plans', up.id::text, 'stock_plan_sources_saved', {{params.actor}}::text,
              jsonb_build_object('outside_total_usd', up.outside_total_usd,
                                 'outside_max_usd', up.outside_max_usd,
                                 'cash_assignable_usd', up.cash_assignable_usd)

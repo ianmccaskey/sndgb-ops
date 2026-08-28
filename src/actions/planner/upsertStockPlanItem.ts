@@ -16,7 +16,7 @@ function upsertStockPlanItem() {
     query: `
       WITH plan AS (
         INSERT INTO stock_plans (group_buy_id, updated_by)
-        VALUES ({{params.group_buy_id}}::bigint, {{params.actor}})
+        VALUES ({{params.group_buy_id}}::bigint, {{params.actor}}::text)
         ON CONFLICT (group_buy_id) DO UPDATE SET updated_at = now()
         RETURNING id
       ), gbp_lock AS (
@@ -30,7 +30,7 @@ function upsertStockPlanItem() {
         FOR UPDATE OF gbp
       ), up AS (
         INSERT INTO stock_plan_items (plan_id, group_buy_product_id, kits, created_by)
-        SELECT plan.id, gbp.id, ({{params.kits}})::numeric, {{params.actor}}
+        SELECT plan.id, gbp.id, ({{params.kits}})::numeric, {{params.actor}}::text
         FROM plan
         JOIN gbp_lock gbp ON gbp.group_buy_id = {{params.group_buy_id}}::bigint
           AND gbp.status = 'active'
@@ -44,7 +44,7 @@ function upsertStockPlanItem() {
         RETURNING id, group_buy_product_id, kits
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'stock_plan_items', up.id::text, 'stock_plan_item_set', {{params.actor}},
+      SELECT 'stock_plan_items', up.id::text, 'stock_plan_item_set', {{params.actor}}::text,
              jsonb_build_object('group_buy_product_id', up.group_buy_product_id, 'kits', up.kits)
       FROM up
       RETURNING row_pk AS id

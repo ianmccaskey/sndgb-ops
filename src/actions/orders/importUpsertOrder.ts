@@ -21,8 +21,8 @@ function importUpsertOrder() {
     query: `
       WITH existing AS (
         SELECT id FROM customers
-        WHERE ({{params.email}} <> '' AND email = {{params.email}}::citext)
-           OR ({{params.email}} = '' AND email IS NULL AND display_name = {{params.customer_name}}::text)
+        WHERE ({{params.email}}::text <> '' AND email = {{params.email}}::citext)
+           OR ({{params.email}}::text = '' AND email IS NULL AND display_name = {{params.customer_name}}::text)
         LIMIT 1
       ), ins AS (
         INSERT INTO customers (email, display_name, discord_username, phone)

@@ -73,14 +73,14 @@ function addLocalOrderItem() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'local_item_added')
         FROM wo_clear
         RETURNING row_pk
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_items', ins.id::text, 'local_item_added', {{params.actor}},
-               jsonb_build_object('order_id', {{params.order_id}}::bigint, 'sku', {{params.sku}},
+        SELECT 'order_items', ins.id::text, 'local_item_added', {{params.actor}}::text,
+               jsonb_build_object('order_id', {{params.order_id}}::bigint, 'sku', {{params.sku}}::text,
                                   'qty', ins.qty, 'unit_price_usd', ins.unit_price_usd,
                                   'value_usd', ins.qty * ins.unit_price_usd)
         FROM ins

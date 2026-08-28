@@ -58,7 +58,7 @@ function setOrderItemDirectShip() {
         RETURNING oi.id, oi.direct_ship
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'order_items', upd.id::text, 'direct_ship_set', {{params.actor}},
+      SELECT 'order_items', upd.id::text, 'direct_ship_set', {{params.actor}}::text,
              jsonb_build_object('order_id', {{params.order_id}}::bigint,
                                 'old_direct_ship', prev.direct_ship,
                                 'old_source', prev.direct_ship_source,

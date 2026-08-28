@@ -20,7 +20,7 @@ function appendOrderAdminNote() {
         RETURNING id, admin_note
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'orders', upd.id::text, 'admin_note_appended', {{params.actor}},
+        SELECT 'orders', upd.id::text, 'admin_note_appended', {{params.actor}}::text,
                jsonb_build_object('note', {{params.note}}::text, 'detail', {{params.detail}}::jsonb)
         FROM upd
         RETURNING row_pk

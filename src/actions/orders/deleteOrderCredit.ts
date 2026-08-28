@@ -26,13 +26,13 @@ function deleteOrderCredit() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'credit_removed')
         FROM wo_clear
         RETURNING row_pk
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'order_credits', del.id::text, 'order_credit_removed', {{params.actor}},
+      SELECT 'order_credits', del.id::text, 'order_credit_removed', {{params.actor}}::text,
              jsonb_build_object('order_id', del.order_id, 'amount_usd', del.amount_usd, 'reason', del.reason)
       FROM del
       RETURNING row_pk AS id

@@ -25,7 +25,7 @@ function deleteStockPlanItem() {
         RETURNING i.id, i.group_buy_product_id, i.kits
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'stock_plan_items', del.id::text, 'stock_plan_item_deleted', {{params.actor}},
+      SELECT 'stock_plan_items', del.id::text, 'stock_plan_item_deleted', {{params.actor}}::text,
              jsonb_build_object('group_buy_product_id', del.group_buy_product_id, 'kits', del.kits)
       FROM del
       RETURNING row_pk AS id

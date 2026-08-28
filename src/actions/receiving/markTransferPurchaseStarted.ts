@@ -94,7 +94,7 @@ function markTransferPurchaseStarted() {
         RETURNING t.id, t.shippo_rate_id, t.purchase_started_at
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'transfers', up.id::text, 'transfer_purchase_claimed', {{params.actor}},
+      SELECT 'transfers', up.id::text, 'transfer_purchase_claimed', {{params.actor}}::text,
              jsonb_build_object('shippo_rate_id', up.shippo_rate_id, 'claimed_at', up.purchase_started_at)
       FROM up
       -- claimed_at travels back to the caller: releasing the lease later

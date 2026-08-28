@@ -55,13 +55,13 @@ function undoPaymentRejection() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'rejection_undone')
         FROM wo_clear
         RETURNING row_pk
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'payments', upd.id::text, 'payment_rejection_undone', {{params.actor}},
+        SELECT 'payments', upd.id::text, 'payment_rejection_undone', {{params.actor}}::text,
                jsonb_build_object('method', upd.method, 'reason', {{params.reason}}::text, 'note', {{params.note}}::text)
         FROM upd
         RETURNING row_pk

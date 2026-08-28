@@ -41,7 +41,7 @@ function saveReceiveAddress() {
         RETURNING id, label
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'receive_addresses', up.id::text, 'receive_address_saved', {{params.actor}},
+      SELECT 'receive_addresses', up.id::text, 'receive_address_saved', {{params.actor}}::text,
              jsonb_build_object('label', up.label)
       FROM up
       RETURNING row_pk AS id

@@ -21,7 +21,7 @@ function unmarkPackageReceived() {
         RETURNING p.id, p.carrier, p.tracking_number
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'inbound_packages', up.id::text, 'package_unreceived', {{params.actor}},
+      SELECT 'inbound_packages', up.id::text, 'package_unreceived', {{params.actor}}::text,
              jsonb_build_object('carrier', up.carrier, 'tracking_number', up.tracking_number, 'auto_receive_suppressed', true)
       FROM up
       RETURNING row_pk AS id

@@ -113,7 +113,7 @@ function addVendorPayment() {
         RETURNING id, vendor_id, amount_usd, kits_qty, freight_usd, group_buy_product_id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'vendor_payments', ins.id::text, 'insert', {{params.actor}},
+      SELECT 'vendor_payments', ins.id::text, 'insert', {{params.actor}}::text,
              jsonb_build_object('vendor_id', ins.vendor_id, 'amount_usd', ins.amount_usd, 'kits_qty', ins.kits_qty, 'freight_usd', ins.freight_usd, 'group_buy_product_id', ins.group_buy_product_id,
                                 'over_owed_override', {{params.allow_over}}::text = 'true',
                                 'confirmed_owed', inp.confirmed_owed,

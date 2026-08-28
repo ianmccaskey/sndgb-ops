@@ -29,8 +29,8 @@ function listOrders() {
         WHERE sh.order_id = o.id ORDER BY sh.created_at DESC LIMIT 1
       ) s ON true
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
-        AND ({{params.status}} = 'all' OR o.status::text = {{params.status}})
-        AND ({{params.rail}} = 'all' OR o.payment_rail::text = {{params.rail}})
+        AND ({{params.status}}::text = 'all' OR o.status::text = {{params.status}}::text)
+        AND ({{params.rail}}::text = 'all' OR o.payment_rail::text = {{params.rail}}::text)
         AND ({{params.recon}}::text = 'all' OR COALESCE(r.recon_status, 'awaiting') = {{params.recon}}::text)
         AND (
           {{params.search}}::text = ''

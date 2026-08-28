@@ -56,7 +56,7 @@ function removeOrderItem() {
         RETURNING oi.id, oi.qty, oi.qty_override, oi.removed_at, oi.comp_qty
       ), comp_clear_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_items', upd.id::text, 'comp_cleared_on_removal', {{params.actor}},
+        SELECT 'order_items', upd.id::text, 'comp_cleared_on_removal', {{params.actor}}::text,
                jsonb_build_object('order_id', {{params.order_id}}::bigint,
                                   'old_comp_qty', prev.comp_qty)
         FROM upd
@@ -70,7 +70,7 @@ function removeOrderItem() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'item_removed_change')
         FROM wo_clear
         RETURNING row_pk

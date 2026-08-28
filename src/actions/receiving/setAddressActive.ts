@@ -12,7 +12,7 @@ function setAddressActive() {
         RETURNING id, label, active
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'receive_addresses', up.id::text, 'receive_address_active_set', {{params.actor}},
+      SELECT 'receive_addresses', up.id::text, 'receive_address_active_set', {{params.actor}}::text,
              jsonb_build_object('label', up.label, 'active', up.active)
       FROM up
       RETURNING row_pk AS id

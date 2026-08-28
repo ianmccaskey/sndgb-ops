@@ -29,7 +29,7 @@ function addPackageItem() {
         RETURNING id, package_id, product_id, qty
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'inbound_package_items', up.id::text, 'package_item_set', {{params.actor}},
+      SELECT 'inbound_package_items', up.id::text, 'package_item_set', {{params.actor}}::text,
              jsonb_build_object('package_id', up.package_id, 'product_id', up.product_id, 'qty', up.qty)
       FROM up
       RETURNING row_pk AS id

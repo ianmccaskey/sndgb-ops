@@ -68,7 +68,7 @@ function setOrderItemQty() {
         RETURNING oi.id, oi.qty, oi.qty_override, COALESCE(oi.qty_override, oi.qty) AS eff_qty, oi.comp_qty, oi.direct_fulfilled_at
       ), comp_clamp_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_items', upd.id::text, 'comp_clamped_on_qty_edit', {{params.actor}},
+        SELECT 'order_items', upd.id::text, 'comp_clamped_on_qty_edit', {{params.actor}}::text,
                jsonb_build_object('order_id', {{params.order_id}}::bigint,
                                   'old_comp_qty', prev.comp_qty, 'new_comp_qty', upd.comp_qty,
                                   'new_effective_qty', upd.eff_qty)
@@ -86,13 +86,13 @@ function setOrderItemQty() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'item_qty_edit')
         FROM wo_clear
         RETURNING row_pk
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_items', upd.id::text, 'item_qty_override_set', {{params.actor}},
+        SELECT 'order_items', upd.id::text, 'item_qty_override_set', {{params.actor}}::text,
                jsonb_build_object('order_id', {{params.order_id}}::bigint,
                                   'imported_qty', upd.qty,
                                   'qty_override', upd.qty_override,

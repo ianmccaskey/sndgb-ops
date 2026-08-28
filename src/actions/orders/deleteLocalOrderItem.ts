@@ -45,13 +45,13 @@ function deleteLocalOrderItem() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'local_item_removed')
         FROM wo_clear
         RETURNING row_pk
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'order_items', del.id::text, 'local_item_removed', {{params.actor}},
+      SELECT 'order_items', del.id::text, 'local_item_removed', {{params.actor}}::text,
              jsonb_build_object('order_id', {{params.order_id}}::bigint,
                                 'group_buy_product_id', del.group_buy_product_id,
                                 'qty', del.qty, 'unit_price_usd', del.unit_price_usd)

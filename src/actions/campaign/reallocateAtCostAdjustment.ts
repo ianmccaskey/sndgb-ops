@@ -86,7 +86,7 @@ function reallocateAtCostAdjustment() {
         RETURNING a.id, a.qty, a.expected_usd, a.reason
       ), pay_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'vendor_payments', pay.id::text, 'insert', {{params.actor}},
+        SELECT 'vendor_payments', pay.id::text, 'insert', {{params.actor}}::text,
                jsonb_build_object('vendor_id', pay.vendor_id, 'amount_usd', pay.amount_usd,
                                   'kits_qty', pay.kits_qty, 'freight_usd', NULL,
                                   'group_buy_product_id', pay.group_buy_product_id,
@@ -98,7 +98,7 @@ function reallocateAtCostAdjustment() {
         RETURNING row_pk
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'admin_adjustments', del.id::text, 'at_cost_reallocated_to_gb', {{params.actor}},
+      SELECT 'admin_adjustments', del.id::text, 'at_cost_reallocated_to_gb', {{params.actor}}::text,
              jsonb_build_object('qty', del.qty, 'expected_usd', del.expected_usd, 'reason', del.reason,
                                 'vendor_payment_id', (SELECT id FROM pay))
       FROM del

@@ -30,7 +30,7 @@ function addOrderCredit() {
         WHERE r.order_id = {{params.order_id}}::bigint
       ), ins AS (
         INSERT INTO order_credits (order_id, amount_usd, reason, created_by)
-        SELECT o.id, {{params.amount_usd}}::numeric, TRIM({{params.reason}}::text), {{params.actor}}
+        SELECT o.id, {{params.amount_usd}}::numeric, TRIM({{params.reason}}::text), {{params.actor}}::text
         FROM cap, orders o
         WHERE o.id = {{params.order_id}}::bigint
           AND o.status NOT IN ('cancelled', 'refunded')
@@ -46,13 +46,13 @@ function addOrderCredit() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'credit_added')
         FROM wo_clear
         RETURNING row_pk
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'order_credits', ins.id::text, 'order_credit_added', {{params.actor}},
+      SELECT 'order_credits', ins.id::text, 'order_credit_added', {{params.actor}}::text,
              jsonb_build_object('order_id', ins.order_id, 'amount_usd', ins.amount_usd, 'reason', ins.reason,
                                 'max_credit_at_insert', (SELECT max_credit FROM cap))
       FROM ins

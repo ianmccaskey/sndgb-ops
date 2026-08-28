@@ -41,7 +41,7 @@ function setTransferRefund() {
         RETURNING t.id, t.refund_status, t.shippo_transaction_id, t.refund_requested_at
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'transfers', up.id::text, 'transfer_refund_status_set', {{params.actor}},
+      SELECT 'transfers', up.id::text, 'transfer_refund_status_set', {{params.actor}}::text,
              jsonb_build_object('refund_status', up.refund_status, 'shippo_transaction_id', up.shippo_transaction_id,
                                 'requested_at', up.refund_requested_at)
       FROM up

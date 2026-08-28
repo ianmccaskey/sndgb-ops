@@ -116,13 +116,13 @@ function upsertOrderItem() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'item_change')
         FROM wo_clear
         RETURNING row_pk
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_items', ins.id::text, 'comp_clamped_on_import', {{params.actor}},
+        SELECT 'order_items', ins.id::text, 'comp_clamped_on_import', {{params.actor}}::text,
                jsonb_build_object('old_comp_qty', prev.comp_qty, 'new_comp_qty', ins.comp_qty, 'imported_qty', ({{params.qty}})::numeric)
         FROM ins
         JOIN prev ON prev.id = ins.id
@@ -130,8 +130,8 @@ function upsertOrderItem() {
         RETURNING row_pk
       ), adopt_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_items', ins.id::text, 'local_item_adopted_by_import', {{params.actor}},
-               jsonb_build_object('order_id', {{params.order_id}}::bigint, 'sku', {{params.sku}},
+        SELECT 'order_items', ins.id::text, 'local_item_adopted_by_import', {{params.actor}}::text,
+               jsonb_build_object('order_id', {{params.order_id}}::bigint, 'sku', {{params.sku}}::text,
                                   'imported_qty', ({{params.qty}})::numeric)
         FROM ins
         JOIN prev ON prev.id = ins.id

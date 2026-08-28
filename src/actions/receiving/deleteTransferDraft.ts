@@ -29,7 +29,7 @@ function deleteTransferDraft() {
         RETURNING t.id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, old_data)
-      SELECT 'transfers', s.id::text, 'transfer_draft_deleted', {{params.actor}},
+      SELECT 'transfers', s.id::text, 'transfer_draft_deleted', {{params.actor}}::text,
              jsonb_build_object('from_address_id', s.from_address_id, 'destination_label', s.destination_label,
                                 'shippo_rate_id', s.shippo_rate_id, 'rate_amount', s.rate_amount, 'items', s.items)
       FROM snapshot s

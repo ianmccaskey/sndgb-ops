@@ -24,7 +24,7 @@ function deleteInboundPackage() {
         RETURNING p.id
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, old_data)
-      SELECT 'inbound_packages', s.id::text, 'package_deleted', {{params.actor}},
+      SELECT 'inbound_packages', s.id::text, 'package_deleted', {{params.actor}}::text,
              jsonb_build_object('receive_address_id', s.receive_address_id, 'carrier', s.carrier,
                                 'tracking_number', s.tracking_number, 'note', s.note,
                                 'committed_at', s.committed_at, 'items', s.items)

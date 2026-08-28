@@ -140,7 +140,7 @@ function finalizeTransfer() {
       ),
       stamp_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_items', s.id::text, 'direct_ship_label_attached', {{params.actor}},
+        SELECT 'order_items', s.id::text, 'direct_ship_label_attached', {{params.actor}}::text,
                jsonb_build_object('order_id', s.order_id, 'transfer_id', up.id,
                                   'carrier', up.carrier, 'tracking_number', up.tracking_number)
         FROM stamp s, up
@@ -148,7 +148,7 @@ function finalizeTransfer() {
       ),
       fin_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'transfers', up.id::text, 'transfer_finalized', {{params.actor}},
+        SELECT 'transfers', up.id::text, 'transfer_finalized', {{params.actor}}::text,
                jsonb_build_object('shippo_transaction_id', up.shippo_transaction_id,
                                   'tracking_number', up.tracking_number, 'label_url', up.label_url,
                                   'rate_amount', up.rate_amount,

@@ -52,8 +52,8 @@ function setOrderItemComp() {
         RETURNING oi.id, oi.comp_qty, oi.qty
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_items', upd.id::text, 'comp_set', {{params.actor}},
-               jsonb_build_object('order_id', {{params.order_id}}::bigint, 'comp_qty', upd.comp_qty, 'line_qty', upd.qty, 'reason', {{params.reason}})
+        SELECT 'order_items', upd.id::text, 'comp_set', {{params.actor}}::text,
+               jsonb_build_object('order_id', {{params.order_id}}::bigint, 'comp_qty', upd.comp_qty, 'line_qty', upd.qty, 'reason', {{params.reason}}::text)
         FROM upd
         RETURNING row_pk
       ), wo_clear AS (
@@ -68,7 +68,7 @@ function setOrderItemComp() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'comp_change')
         FROM wo_clear
         RETURNING row_pk

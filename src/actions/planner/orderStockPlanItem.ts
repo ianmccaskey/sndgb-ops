@@ -92,7 +92,7 @@ function orderStockPlanItem() {
         RETURNING i.id, i.ordered_value_usd
       ), pay_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'vendor_payments', pay.id::text, 'insert', {{params.actor}},
+        SELECT 'vendor_payments', pay.id::text, 'insert', {{params.actor}}::text,
                jsonb_build_object('vendor_id', pay.vendor_id, 'amount_usd', pay.amount_usd,
                                   'kits_qty', pay.kits_qty, 'freight_usd', NULL,
                                   'group_buy_product_id', pay.group_buy_product_id,
@@ -104,7 +104,7 @@ function orderStockPlanItem() {
         RETURNING row_pk
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'stock_plan_items', stamp.id::text, 'stock_plan_item_ordered', {{params.actor}},
+      SELECT 'stock_plan_items', stamp.id::text, 'stock_plan_item_ordered', {{params.actor}}::text,
              jsonb_build_object('vendor_payment_id', (SELECT id FROM pay),
                                 'ordered_value_usd', stamp.ordered_value_usd)
       FROM stamp

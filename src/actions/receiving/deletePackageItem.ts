@@ -27,7 +27,7 @@ function deletePackageItem() {
         RETURNING i.id, i.package_id, i.product_id, i.qty
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, old_data)
-      SELECT 'inbound_package_items', del.id::text, 'package_item_deleted', {{params.actor}},
+      SELECT 'inbound_package_items', del.id::text, 'package_item_deleted', {{params.actor}}::text,
              jsonb_build_object('package_id', del.package_id, 'product_id', del.product_id, 'qty', del.qty)
       FROM del
       RETURNING row_pk AS id

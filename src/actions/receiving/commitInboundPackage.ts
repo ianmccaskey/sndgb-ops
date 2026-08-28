@@ -18,7 +18,7 @@ function commitInboundPackage() {
         RETURNING p.id, p.carrier, p.tracking_number
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'inbound_packages', up.id::text, 'package_committed', {{params.actor}},
+      SELECT 'inbound_packages', up.id::text, 'package_committed', {{params.actor}}::text,
              jsonb_build_object('carrier', up.carrier, 'tracking_number', up.tracking_number)
       FROM up
       RETURNING row_pk AS id

@@ -36,7 +36,7 @@ function addManualPaymentByNumber() {
         RETURNING id, order_id, amount_usd, method
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'payments', ins.id::text, 'manual_payment', {{params.actor}},
+        SELECT 'payments', ins.id::text, 'manual_payment', {{params.actor}}::text,
                jsonb_build_object('order_id', ins.order_id, 'amount_usd', ins.amount_usd, 'method', ins.method)
         FROM ins
         RETURNING row_pk
@@ -49,7 +49,7 @@ function addManualPaymentByNumber() {
         RETURNING w.id, w.order_id, w.amount_usd
       ), wo_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}},
+        SELECT 'order_writeoffs', wo_clear.id::text, 'writeoff_auto_cleared', {{params.actor}}::text,
                jsonb_build_object('order_id', wo_clear.order_id, 'amount_usd', wo_clear.amount_usd, 'trigger', 'manual_payment')
         FROM wo_clear
         RETURNING row_pk

@@ -44,7 +44,7 @@ function updateOrderRail() {
         RETURNING id, payment_rail, admin_note
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-        SELECT 'orders', upd.id::text, 'payment_rail_corrected', {{params.actor}},
+        SELECT 'orders', upd.id::text, 'payment_rail_corrected', {{params.actor}}::text,
                jsonb_build_object('new_rail', upd.payment_rail, 'note', {{params.note}}::text)
         FROM upd
         RETURNING row_pk
