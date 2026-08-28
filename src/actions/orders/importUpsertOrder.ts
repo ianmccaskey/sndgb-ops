@@ -81,6 +81,12 @@ function importUpsertOrder() {
       -- not suppress the insert; referencing it forces the lock to be taken
       -- first when the order exists
       WHERE (SELECT COUNT(*) FROM lck) >= 0
+        -- fail-closed coercion tripwire: every real order number contains a
+        -- non-digit ('2026-…'). A purely numeric arrival means an upstream
+        -- layer coerced the string to a number (which cannot preserve
+        -- leading zeros), so persisting it could merge distinct upstream
+        -- identifiers — refuse the row instead of writing a mangled key
+        AND {{params.order_number}}::text ~ '[^0-9]'
       ON CONFLICT (order_number) DO UPDATE SET
         -- guarded below: never adopt an order that belongs to another campaign
         external_id = COALESCE(EXCLUDED.external_id, orders.external_id),
