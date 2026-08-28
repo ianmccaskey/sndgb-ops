@@ -41,7 +41,7 @@ function createInboundPackage() {
                -- as the same parcel
                UPPER(TRIM({{params.tracking_number}}::text)),
                NULLIF(TRIM({{params.note}}::text), ''),
-               {{params.actor}}
+               {{params.actor}}::text
         WHERE TRIM({{params.carrier}}::text) <> '' AND TRIM({{params.tracking_number}}::text) <> ''
           -- expected_label ('' = no expectation, manual flow) is the
           -- identity-CAS for CSV imports: the reviewed (id, label) pair

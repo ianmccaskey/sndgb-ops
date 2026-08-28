@@ -33,21 +33,21 @@ function reopenPaymentOnNetwork() {
           AND p.order_id = {{params.order_id}}::bigint
           AND p.status = 'rejected'
           AND p.tx_hash IS NOT NULL AND p.tx_hash <> ''
-          AND p.method <> {{params.method}}::payment_method
+          AND p.method <> {{params.method}}::text::payment_method
       ), upd AS (
         UPDATE payments p SET
-          method = {{params.method}}::payment_method,
+          method = {{params.method}}::text::payment_method,
           status = 'pending',
           verify_source = NULL,
           verified_at = NULL,
-          notes = CASE WHEN p.notes IS NULL OR p.notes = '' THEN {{params.note}}
-                       ELSE p.notes || E'\\n' || {{params.note}} END,
+          notes = CASE WHEN p.notes IS NULL OR p.notes = '' THEN {{params.note}}::text
+                       ELSE p.notes || E'\\n' || {{params.note}}::text END,
           updated_at = now()
         FROM tgt
         WHERE p.id = tgt.id
           AND (
-            ({{params.method}} IN ('eth','base') AND tgt.tx_hash ~ '^0x[0-9a-fA-F]{64}$')
-            OR ({{params.method}} = 'sol' AND tgt.tx_hash ~ '^[1-9A-HJ-NP-Za-km-z]{64,90}$')
+            ({{params.method}}::text IN ('eth','base') AND tgt.tx_hash ~ '^0x[0-9a-fA-F]{64}$')
+            OR ({{params.method}}::text = 'sol' AND tgt.tx_hash ~ '^[1-9A-HJ-NP-Za-km-z]{64,90}$')
           )
           AND NOT EXISTS (
             SELECT 1 FROM payments q
@@ -72,7 +72,7 @@ function reopenPaymentOnNetwork() {
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'payments', upd.id::text, 'payment_reopened_on_network', {{params.actor}},
-               jsonb_build_object('from_method', (SELECT old_method FROM tgt), 'to_method', upd.method, 'note', {{params.note}})
+               jsonb_build_object('from_method', (SELECT old_method FROM tgt), 'to_method', upd.method, 'note', {{params.note}}::text)
         FROM upd
         RETURNING row_pk
       )

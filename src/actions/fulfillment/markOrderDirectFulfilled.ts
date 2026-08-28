@@ -77,7 +77,7 @@ function markOrderDirectFulfilled() {
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
       SELECT 'order_items', {{params.order_id}}::text,
              CASE WHEN {{params.fulfilled}}::boolean THEN 'direct_marked_fulfilled' ELSE 'direct_fulfillment_undone' END,
-             {{params.actor}},
+             {{params.actor}}::text,
              jsonb_build_object('order_id', {{params.order_id}}::bigint,
                                 'item_ids', (SELECT jsonb_agg(upd.id) FROM upd),
                                 'fulfilled', {{params.fulfilled}}::boolean)

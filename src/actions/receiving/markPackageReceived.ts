@@ -16,7 +16,7 @@ function markPackageReceived() {
         -- a manual receive clears the suppression; an AUTO receive is
         -- DB-refused while it is set, so a manual un-receive sticks no
         -- matter which client refreshes next
-        SET received_at = now(), received_by = {{params.actor}}, auto_receive_suppressed = false
+        SET received_at = now(), received_by = {{params.actor}}::text, auto_receive_suppressed = false
         WHERE p.id = {{params.package_id}}::bigint
           AND p.received_at IS NULL
           AND p.committed_at IS NOT NULL
@@ -33,7 +33,7 @@ function markPackageReceived() {
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
       SELECT 'inbound_packages', up.id::text,
              CASE WHEN {{params.mode}}::text = 'auto' THEN 'package_received_auto' ELSE 'package_received_manual' END,
-             {{params.actor}},
+             {{params.actor}}::text,
              jsonb_build_object('carrier', up.carrier, 'tracking_number', up.tracking_number)
       FROM up
       RETURNING row_pk AS id

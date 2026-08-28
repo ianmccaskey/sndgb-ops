@@ -21,10 +21,10 @@ function listOrderRecon() {
              END AS native_unpriced
       FROM v_order_reconciliation r
       WHERE group_buy_id = {{params.group_buy_id}}::bigint
-        AND ({{params.recon}} = 'all' OR recon_status = {{params.recon}})
-        AND (COALESCE({{params.rail}}, 'all') = 'all'
-             OR (COALESCE({{params.rail}}, 'all') = 'crypto' AND payment_rail IN ('eth','sol','base'))
-             OR payment_rail::text = COALESCE({{params.rail}}, 'all'))
+        AND ({{params.recon}}::text = 'all' OR recon_status = {{params.recon}}::text)
+        AND (COALESCE({{params.rail}}::text, 'all') = 'all'
+             OR (COALESCE({{params.rail}}::text, 'all') = 'crypto' AND payment_rail IN ('eth','sol','base'))
+             OR payment_rail::text = COALESCE({{params.rail}}::text, 'all'))
       ORDER BY
         CASE recon_status WHEN 'short' THEN 0 WHEN 'over' THEN 1 WHEN 'awaiting' THEN 2 ELSE 3 END,
         ABS(diff_usd) DESC

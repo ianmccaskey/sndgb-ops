@@ -13,15 +13,15 @@ function appendOrderAdminNote() {
       WITH upd AS (
         UPDATE orders SET
           admin_note = CASE
-            WHEN admin_note IS NULL OR admin_note = '' THEN {{params.note}}
-            ELSE admin_note || E'\\n' || {{params.note}}
+            WHEN admin_note IS NULL OR admin_note = '' THEN {{params.note}}::text
+            ELSE admin_note || E'\\n' || {{params.note}}::text
           END
         WHERE id = {{params.order_id}}::bigint
         RETURNING id, admin_note
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'orders', upd.id::text, 'admin_note_appended', {{params.actor}},
-               jsonb_build_object('note', {{params.note}}, 'detail', {{params.detail}}::jsonb)
+               jsonb_build_object('note', {{params.note}}::text, 'detail', {{params.detail}}::jsonb)
         FROM upd
         RETURNING row_pk
       )

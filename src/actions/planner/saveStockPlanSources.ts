@@ -17,7 +17,7 @@ function saveStockPlanSources() {
                ({{params.outside_total_usd}})::numeric,
                ({{params.outside_max_usd}})::numeric,
                ({{params.cash_assignable_usd}})::numeric,
-               {{params.actor}}, now()
+               {{params.actor}}::text, now()
         WHERE ({{params.outside_total_usd}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.outside_max_usd}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.cash_assignable_usd}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'

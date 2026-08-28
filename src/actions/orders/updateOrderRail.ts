@@ -26,26 +26,26 @@ function updateOrderRail() {
     query: `
       WITH upd AS (
         UPDATE orders SET
-          payment_rail = {{params.rail}}::payment_rail,
+          payment_rail = {{params.rail}}::text::payment_rail,
           admin_note = CASE
-            WHEN admin_note IS NULL OR admin_note = '' THEN {{params.note}}
-            ELSE admin_note || E'\\n' || {{params.note}}
+            WHEN admin_note IS NULL OR admin_note = '' THEN {{params.note}}::text
+            ELSE admin_note || E'\\n' || {{params.note}}::text
           END
         WHERE id = {{params.order_id}}::bigint
-          AND {{params.rail}} IN ('eth','sol')
+          AND {{params.rail}}::text IN ('eth','sol')
           AND payment_rail = {{params.expected_rail}}::payment_rail
-          AND payment_rail IS DISTINCT FROM {{params.rail}}::payment_rail
+          AND payment_rail IS DISTINCT FROM {{params.rail}}::text::payment_rail
           AND (SELECT COUNT(DISTINCT p.method) FROM payments p
                WHERE p.order_id = {{params.order_id}}::bigint
                  AND p.status = 'verified' AND p.tx_hash IS NOT NULL AND p.tx_hash <> '') = 1
           AND (SELECT MIN(p.method::text) FROM payments p
                WHERE p.order_id = {{params.order_id}}::bigint
-                 AND p.status = 'verified' AND p.tx_hash IS NOT NULL AND p.tx_hash <> '') = {{params.rail}}
+                 AND p.status = 'verified' AND p.tx_hash IS NOT NULL AND p.tx_hash <> '') = {{params.rail}}::text
         RETURNING id, payment_rail, admin_note
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'orders', upd.id::text, 'payment_rail_corrected', {{params.actor}},
-               jsonb_build_object('new_rail', upd.payment_rail, 'note', {{params.note}})
+               jsonb_build_object('new_rail', upd.payment_rail, 'note', {{params.note}}::text)
         FROM upd
         RETURNING row_pk
       )

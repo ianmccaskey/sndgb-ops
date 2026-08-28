@@ -33,8 +33,8 @@ function undoPaymentRejection() {
           status = 'pending',
           verify_source = NULL,
           verified_at = NULL,
-          notes = CASE WHEN p.notes IS NULL OR p.notes = '' THEN {{params.note}}
-                       ELSE p.notes || E'\\n' || {{params.note}} END,
+          notes = CASE WHEN p.notes IS NULL OR p.notes = '' THEN {{params.note}}::text
+                       ELSE p.notes || E'\\n' || {{params.note}}::text END,
           updated_at = now()
         FROM tgt
         WHERE p.id = tgt.id
@@ -62,7 +62,7 @@ function undoPaymentRejection() {
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'payments', upd.id::text, 'payment_rejection_undone', {{params.actor}},
-               jsonb_build_object('method', upd.method, 'reason', {{params.reason}}, 'note', {{params.note}})
+               jsonb_build_object('method', upd.method, 'reason', {{params.reason}}::text, 'note', {{params.note}}::text)
         FROM upd
         RETURNING row_pk
       )

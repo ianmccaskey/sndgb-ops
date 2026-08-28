@@ -36,7 +36,7 @@ function createTransfer() {
         NULLIF({{params.destination_id}}::text, '')::bigint,
         NULLIF({{params.expected_destination}}::text, '')::jsonb,
         {{params.note}}::text,
-        {{params.actor}},
+        {{params.actor}}::text,
         NULLIF({{params.direct_order_item_id}}::text, '')::bigint,
         NULLIF({{params.group_buy_id}}::text, '')::bigint
       )

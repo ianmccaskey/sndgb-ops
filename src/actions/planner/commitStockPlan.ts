@@ -60,7 +60,7 @@ function commitStockPlan() {
       SELECT id
       FROM commit_stock_plan(
         {{params.group_buy_id}}::bigint,
-        {{params.actor}},
+        {{params.actor}}::text,
         NULLIF({{params.confirmed_items}}::text, '')
       )
     `,

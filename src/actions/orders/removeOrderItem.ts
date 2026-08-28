@@ -78,7 +78,7 @@ function removeOrderItem() {
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'order_items', upd.id::text,
                CASE WHEN {{params.removed}}::boolean THEN 'item_removed_locally' ELSE 'item_removal_undone' END,
-               {{params.actor}},
+               {{params.actor}}::text,
                jsonb_build_object('order_id', {{params.order_id}}::bigint,
                                   'imported_qty', upd.qty, 'qty_override', upd.qty_override)
         FROM upd

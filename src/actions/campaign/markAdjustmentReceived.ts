@@ -14,7 +14,7 @@ function markAdjustmentReceived() {
     query: `
       WITH upd AS (
         UPDATE admin_adjustments a
-        SET received_at = now(), received_by = {{params.actor}}
+        SET received_at = now(), received_by = {{params.actor}}::text
         FROM group_buy_products gbp
         WHERE a.id = {{params.adjustment_id}}::bigint
           AND gbp.id = a.group_buy_product_id
@@ -30,7 +30,7 @@ function markAdjustmentReceived() {
         RETURNING a.id, a.expected_usd, a.reason
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
-      SELECT 'admin_adjustments', upd.id::text, 'at_cost_payment_received', {{params.actor}},
+      SELECT 'admin_adjustments', upd.id::text, 'at_cost_payment_received', {{params.actor}}::text,
              jsonb_build_object('expected_usd', upd.expected_usd, 'reason', upd.reason)
       FROM upd
       RETURNING row_pk AS id

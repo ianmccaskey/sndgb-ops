@@ -24,7 +24,7 @@ function updatePaymentStatus() {
           status = {{params.status}}::payment_status,
           amount_usd = {{params.amount_usd}}::numeric,
           verify_source = 'manual',
-          verified_at = CASE WHEN {{params.status}} = 'verified' THEN now() ELSE verified_at END,
+          verified_at = CASE WHEN {{params.status}}::text = 'verified' THEN now() ELSE verified_at END,
           notes = NULLIF({{params.notes}}::text, '')
         FROM lck
         WHERE id = {{params.payment_id}}::bigint

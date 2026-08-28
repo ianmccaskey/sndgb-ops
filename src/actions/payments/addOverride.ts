@@ -14,7 +14,7 @@ function addOverride() {
           {{params.order_id}}::bigint,
           {{params.amount_usd}}::numeric,
           {{params.reason}}::text,
-          {{params.created_by}}
+          {{params.created_by}}::text
         FROM lck
         RETURNING id, order_id, amount_usd, reason
       ), wo_clear AS (

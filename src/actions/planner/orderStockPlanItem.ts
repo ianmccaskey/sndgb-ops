@@ -86,7 +86,7 @@ function orderStockPlanItem() {
         RETURNING id, vendor_id, amount_usd, kits_qty, group_buy_product_id
       ), stamp AS (
         UPDATE stock_plan_items i
-        SET ordered_at = now(), ordered_by = {{params.actor}}, ordered_value_usd = pay.amount_usd
+        SET ordered_at = now(), ordered_by = {{params.actor}}::text, ordered_value_usd = pay.amount_usd
         FROM pay, itm
         WHERE i.id = itm.id
         RETURNING i.id, i.ordered_value_usd

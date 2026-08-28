@@ -12,7 +12,7 @@ function saveDestination() {
                TRIM({{params.city}}::text), TRIM({{params.state}}::text), TRIM({{params.zip}}::text),
                COALESCE(NULLIF(TRIM({{params.country}}::text), ''), 'US'),
                NULLIF(TRIM({{params.phone}}::text), ''), NULLIF(TRIM({{params.email}}::text), ''),
-               {{params.actor}}
+               {{params.actor}}::text
         WHERE TRIM({{params.label}}::text) <> '' AND TRIM({{params.name}}::text) <> '' AND TRIM({{params.street1}}::text) <> ''
           AND TRIM({{params.city}}::text) <> '' AND TRIM({{params.state}}::text) <> '' AND TRIM({{params.zip}}::text) <> ''
         ON CONFLICT (label) DO UPDATE SET

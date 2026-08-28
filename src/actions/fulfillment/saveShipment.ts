@@ -23,7 +23,7 @@ function saveShipment() {
           label_cost_usd = {{params.label_cost_usd}}::numeric,
           box = NULLIF({{params.box}}::text, ''),
           status = {{params.status}}::shipment_status,
-          shipped_at = CASE WHEN {{params.status}} IN ('shipped','reshipped') AND shipped_at IS NULL THEN now() ELSE shipped_at END,
+          shipped_at = CASE WHEN {{params.status}}::text IN ('shipped','reshipped') AND shipped_at IS NULL THEN now() ELSE shipped_at END,
           note = NULLIF({{params.note}}::text, '')
         WHERE id IN (SELECT id FROM existing)
         RETURNING id
@@ -35,7 +35,7 @@ function saveShipment() {
                {{params.label_cost_usd}}::numeric,
                NULLIF({{params.box}}::text, ''),
                {{params.status}}::shipment_status,
-               CASE WHEN {{params.status}} IN ('shipped','reshipped') THEN now() ELSE NULL END,
+               CASE WHEN {{params.status}}::text IN ('shipped','reshipped') THEN now() ELSE NULL END,
                NULLIF({{params.note}}::text, '')
         WHERE NOT EXISTS (SELECT 1 FROM existing)
           AND (SELECT COUNT(*) FROM lck) >= 0

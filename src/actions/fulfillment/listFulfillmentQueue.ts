@@ -52,14 +52,14 @@ function listFulfillmentQueue() {
       ) s ON true
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND o.status NOT IN ('cancelled','refunded')
-        AND ({{params.stage}} = 'all'
+        AND ({{params.stage}}::text = 'all'
           -- ready requires fully collected (matched — or OVER: an overpaid
           -- order is fully collected and shippable) AND no unresolved
           -- payments: an order can read matched (e.g. via write-off/comp)
           -- while a new hash pends — money evidence must be resolved before
           -- shipping. Fully-direct orders leave the pack list — they are the
           -- 'direct' stage.
-          OR ({{params.stage}} = 'ready' AND COALESCE(s.status::text,'pending') = 'pending' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over') AND r.pending_payment_count = 0
+          OR ({{params.stage}}::text = 'ready' AND COALESCE(s.status::text,'pending') = 'pending' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over') AND r.pending_payment_count = 0
               AND NOT COALESCE(it.all_direct, false)
               -- there must be packable work: an order whose every line was
               -- locally removed (or that somehow has no active items) must
@@ -70,11 +70,11 @@ function listFulfillmentQueue() {
           -- shipped yet. Deliberately NOT gated on the local shipment row —
           -- a mixed order's local half packing/shipping must not hide its
           -- outstanding vendor half. Rows leave via "Mark vendor shipped".
-          OR ({{params.stage}} = 'direct' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over') AND r.pending_payment_count = 0
+          OR ({{params.stage}}::text = 'direct' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over') AND r.pending_payment_count = 0
               AND COALESCE(it.direct_outstanding, false))
-          OR ({{params.stage}} = 'held' AND o.hold_shipping)
-          OR ({{params.stage}} = 'packed' AND s.status = 'packed')
-          OR ({{params.stage}} = 'shipped' AND s.status IN ('shipped','delivered','reshipped')))
+          OR ({{params.stage}}::text = 'held' AND o.hold_shipping)
+          OR ({{params.stage}}::text = 'packed' AND s.status = 'packed')
+          OR ({{params.stage}}::text = 'shipped' AND s.status IN ('shipped','delivered','reshipped')))
       ORDER BY o.order_number
       LIMIT 1000
     `,

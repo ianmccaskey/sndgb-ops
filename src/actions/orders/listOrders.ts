@@ -31,13 +31,13 @@ function listOrders() {
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND ({{params.status}} = 'all' OR o.status::text = {{params.status}})
         AND ({{params.rail}} = 'all' OR o.payment_rail::text = {{params.rail}})
-        AND ({{params.recon}} = 'all' OR COALESCE(r.recon_status, 'awaiting') = {{params.recon}})
+        AND ({{params.recon}}::text = 'all' OR COALESCE(r.recon_status, 'awaiting') = {{params.recon}}::text)
         AND (
-          {{params.search}} = ''
-          OR o.order_number ILIKE '%' || {{params.search}} || '%'
-          OR c.display_name ILIKE '%' || {{params.search}} || '%'
-          OR o.contact_email ILIKE '%' || {{params.search}} || '%'
-          OR o.discord_username ILIKE '%' || {{params.search}} || '%'
+          {{params.search}}::text = ''
+          OR o.order_number ILIKE '%' || {{params.search}}::text || '%'
+          OR c.display_name ILIKE '%' || {{params.search}}::text || '%'
+          OR o.contact_email ILIKE '%' || {{params.search}}::text || '%'
+          OR o.discord_username ILIKE '%' || {{params.search}}::text || '%'
         )
       ORDER BY o.placed_at DESC NULLS LAST, o.order_number DESC
       LIMIT 500
