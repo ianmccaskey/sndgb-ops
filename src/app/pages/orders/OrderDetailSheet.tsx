@@ -16,6 +16,10 @@ import { lookupTxPayment } from '@/lib/verifyPayment';
 import setOrderItemComp from '@/actions/orders/setOrderItemComp';
 import setOrderItemDirectShip from '@/actions/orders/setOrderItemDirectShip';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
+import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
+import getPackableItems from '@/actions/fulfillment/getPackableItems';
+import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
+import { pushShipmentUpstream } from '@/lib/pushShipment';
 import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
 import setOrderFees from '@/actions/orders/setOrderFees';
 import setOrderItemQty from '@/actions/orders/setOrderItemQty';
@@ -97,6 +101,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [rawCredits, , , reloadCredits] = useLoadAction(listOrderCredits, [orderId], { order_id: orderId }, { enabled: open });
   const [rawRefunds, , , reloadRefunds] = useLoadAction(listOrderRefunds, [orderId], { order_id: orderId }, { enabled: open });
   const [rawSheetWallets] = useLoadAction(listWallets, [open], {}, { enabled: open });
+  const [rawShipRows, , , reloadShipRows] = useLoadAction(listOrderShipments, [orderId], { order_id: orderId }, { enabled: open });
+  const [rawShipPackable, , , reloadShipPackable] = useLoadAction(getPackableItems, [orderId], { order_id: orderId }, { enabled: open });
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
   const campaignProducts = rows<{ sku_code: string; gb_price_usd: string; status: string }>(rawCampaignProducts)
@@ -118,6 +124,19 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     .reduce((s, i) => s + (effQty(i) - Number(i.qty)) * Number(i.unit_price_usd)
       - (i.removed_at ? Number(i.split_fee_usd || 0) : 0), 0) * 100) / 100;
   const payments = rows<PaymentRow>(rawPayments);
+  type ShipRow = {
+    id: number; status: string; carrier: string | null; tracking_number: string | null;
+    label_cost_usd: string; label_url: string | null; from_label: string | null;
+    refund_status: string | null; finalized_at: string | null; shipped_at: string | null;
+    b44_pushed_at: string | null; created_by: string | null;
+    items: { order_item_id: number; qty: string; sku_code: string }[];
+  };
+  type ShipPackableRow = {
+    order_item_id: number; product_external_id: string | null; sku_code: string;
+    effective_qty: string; shipped_qty: string; direct_ship: boolean; direct_fulfilled_at: string | null;
+  };
+  const shipRows = rows<ShipRow>(rawShipRows).map(s => ({ ...s, tracking_number: s.tracking_number == null ? null : String(s.tracking_number) }));
+  const shipPackable = rows<ShipPackableRow>(rawShipPackable);
 
   const [doUpdate] = useMutateAction(updateOrderAdmin);
   const [doOverride] = useMutateAction(addOverride);
@@ -125,6 +144,38 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doAddHash] = useMutateAction(addPaymentHash);
   const [doGetTxRefs] = useMutateAction(getOrderTxRefs);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
+  const [doMarkShipPushed] = useMutateAction(markShipmentPushed);
+  const [shipPushMsg, setShipPushMsg] = useState('');
+  const shipPushInFlight = React.useRef(false);
+
+  // retry the ordering-app push for one shipped box (the fulfillment modal
+  // pushes automatically; this covers failed pushes and the direct-line-
+  // last case where no shipment row changed). Fresh packable rows are the
+  // hook's — reloaded on every open — so fully-shipped is current.
+  const pushShipRow = async (s: { id: number; carrier: string | null; tracking_number: string | null; items: { order_item_id: number; qty: string; sku_code: string }[] }) => {
+    if (!o || shipPushInFlight.current) return;
+    shipPushInFlight.current = true;
+    setShipPushMsg('Pushing to the ordering app…');
+    try {
+      const out = await pushShipmentUpstream({
+        cfg: { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' },
+        externalId: o.external_id || '', orderId: o.id, orderNumber: o.order_number,
+        shipmentId: s.id, carrier: s.carrier || '', tracking: s.tracking_number || '',
+        shippedItems: (s.items || []).map(i => ({ sku: i.sku_code, qty: String(i.qty) })),
+        packable: shipPackable.map(l => ({
+          order_item_id: Number(l.order_item_id),
+          product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
+          sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
+          direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at,
+        })),
+        userName, appendNote: doAppendNote, markPushed: doMarkShipPushed,
+      });
+      setShipPushMsg(out.message);
+      reloadShipRows(); reloadShipPackable(); reloadOrder();
+    } finally {
+      shipPushInFlight.current = false;
+    }
+  };
   const [doCashPay] = useMutateAction(addManualPaymentByNumber);
   const [doReopenNetwork] = useMutateAction(reopenPaymentOnNetwork);
   const [doUndoRejection] = useMutateAction(undoPaymentRejection);
@@ -1547,6 +1598,34 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   )}
                   {o.override_usd != null && <div className="flex justify-between text-violet-700"><span>Manual override active</span><span>{fmtUSD(o.override_usd)}</span></div>}
                 </div>
+              </div>
+
+              <div>
+                <h3 className="font-semibold mb-1">Shipments</h3>
+                {shipRows.length === 0 && <p className="text-muted-foreground text-xs">No shipments yet — boxes ship from the Fulfillment page.</p>}
+                {shipRows.map(s => (
+                  <div key={s.id} className={`py-1 border-b last:border-0 text-xs space-y-0.5 ${s.refund_status === 'SUCCESS' ? 'opacity-50' : ''}`}>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusPill value={s.refund_status === 'SUCCESS' ? 'refunded' : (s.finalized_at ? s.status : 'pending')} />
+                      {!s.finalized_at && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Unfinished draft — continue or delete it from the Fulfillment page's Ship dialog">draft</span>}
+                      {s.tracking_number && <span className="font-mono">{(s.carrier || '').toUpperCase()} {s.tracking_number}</span>}
+                      <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${Number(i.qty)}`).join(', ')}</span>
+                      {Number(s.label_cost_usd) > 0 && <span className="text-muted-foreground">{fmtUSD(s.label_cost_usd)}</span>}
+                      {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}
+                      {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">refund {s.refund_status}</span>}
+                      {s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && (
+                        <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The ordering app has not been told about this shipment yet">not pushed</span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {s.label_url && <a className="underline text-muted-foreground" href={s.label_url} target="_blank" rel="noreferrer">label</a>}
+                      {s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && o.external_id && (
+                        <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={saving} onClick={() => pushShipRow(s)}>Push upstream</Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {shipPushMsg && <p className={`text-xs mt-1 ${shipPushMsg.startsWith('Pushed') ? 'text-green-700' : 'text-amber-700'}`}>{shipPushMsg}</p>}
               </div>
 
               <div>
