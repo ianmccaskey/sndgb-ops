@@ -145,7 +145,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       // committed); an unbound attach here is a deliberate operator act
       const res = await doAddShipPhoto({ shipment_id: target, image_data: s.full, thumb_data: s.thumb, actor: s.actor || userName, replay: wasBound }) as unknown[] | null;
       const ok = Array.isArray(res) ? res.length > 0 : !!res;
-      if (ok) { stashRemove(s.key); setStrandedMsg('Photo attached.'); reloadShipPhotos(); }
+      if (ok) {
+        const removed = stashRemove(s.key);
+        // a failed removal (storage unavailable) is harmless: the server's
+        // order-scoped same-content dedupe recognizes a re-offer of this
+        // photo and returns the existing row instead of duplicating
+        setStrandedMsg(removed ? 'Photo attached.' : 'Photo attached. (This device’s storage is unavailable, so it may be re-offered after a reload — re-attaching is harmless; the server recognizes it.)');
+        reloadShipPhotos();
+      }
       else if (wasBound) {
         // the original shipment refuses replay (deleted, voided, quota, or
         // the photo was deliberately removed) — mirror the ship dialog:
