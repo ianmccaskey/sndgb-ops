@@ -80,7 +80,12 @@ const QTY_RE = /^\d+(?:\.\d{1,2})?$/;
 // module-level array — they survive dialog close/reopen but NOT a page
 // reload, and the operator is told exactly that instead of a false
 // "saved on this device".
-type StashedPhoto = CapturedPhoto & { shipment_id: number; order_id: number; ts: number };
+// actor = who CAPTURED the photo: the stash is origin-wide, so on a
+// shared browser a different admin may run the retry — the upload must
+// carry the original capturer, not the retrying session's user, or the
+// audit trail (and the delete tombstones built on created_by) would
+// misattribute evidence provenance.
+type StashedPhoto = CapturedPhoto & { shipment_id: number; order_id: number; ts: number; actor: string };
 const STASH_KEY = 'sndgb.pendingShipPhotos';
 let memStash: StashedPhoto[] = [];
 const readPersisted = (): StashedPhoto[] => {
@@ -195,9 +200,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // failure — the insert MAY have committed; the server's same-content
   // replay (add_shipment_photo md5 short-circuit) makes retrying safe.
   type UploadResult = 'ok' | 'refused' | 'error';
-  const tryUpload = async (shipmentId: number, ph: CapturedPhoto): Promise<UploadResult> => {
+  const tryUpload = async (shipmentId: number, ph: CapturedPhoto, actor: string = userName): Promise<UploadResult> => {
     try {
-      const res = await doAddPhoto({ shipment_id: shipmentId, image_data: ph.full, thumb_data: ph.thumb, actor: userName }) as unknown[] | null;
+      const res = await doAddPhoto({ shipment_id: shipmentId, image_data: ph.full, thumb_data: ph.thumb, actor }) as unknown[] | null;
       return (Array.isArray(res) ? res.length > 0 : !!res) ? 'ok' : 'refused';
     } catch {
       return 'error';
@@ -217,7 +222,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const still: StashedPhoto[] = [...others];
       let recovered = 0, dropped = 0;
       for (const s of mine) {
-        const r = await tryUpload(s.shipment_id, s);
+        const r = await tryUpload(s.shipment_id, s, s.actor || userName);
         if (r === 'ok') recovered += 1;
         else if (r === 'refused') dropped += 1; // permanent: shipment gone or quota full
         else still.push(s);
@@ -257,7 +262,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
               errors.push(`${f.name}: refused — this shipment's photo quota (5 photos / 5MB) is full or the shipment was voided.`);
             } else if (r === 'error') {
               // stash — the camera capture may be the only copy
-              const durable = writeStash([...readStash(), { ...ph, shipment_id: photoTarget.current, order_id: order.id, ts: Date.now() }]);
+              const durable = writeStash([...readStash(), { ...ph, shipment_id: photoTarget.current, order_id: order.id, ts: Date.now(), actor: userName }]);
               errors.push(durable
                 ? `${f.name}: did not attach (transport error) — saved on this device and auto-retried next time this dialog opens.`
                 : `${f.name}: did not attach AND could not be saved to this device (storage unavailable) — it survives only while this page stays open. Retry now or re-take the photo.`);
@@ -293,7 +298,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     const parts: string[] = [];
     if (refused.length > 0) parts.push(`${refused.length} photo(s) refused (quota is 5 photos / 5MB per shipment) — they remain pending.`);
     if (errored.length > 0) {
-      const durable = writeStash([...readStash(), ...errored.map(ph => ({ ...ph, shipment_id: shipmentId, order_id: order.id, ts: Date.now() }))]);
+      const durable = writeStash([...readStash(), ...errored.map(ph => ({ ...ph, shipment_id: shipmentId, order_id: order.id, ts: Date.now(), actor: userName }))]);
       parts.push(durable
         ? `${errored.length} photo(s) did not attach — saved on this device and auto-retried next time this dialog opens.`
         : `${errored.length} photo(s) did not attach AND could not be saved to this device (storage unavailable) — they survive only while this page stays open. Reopen this dialog to retry before closing the app.`);
