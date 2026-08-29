@@ -16,7 +16,7 @@ function listOrderShipments() {
              s.shippo_rate_id, s.shippo_transaction_id,
              s.refund_status, s.refund_requested_at,
              s.purchase_started_at, s.purchase_attempted_at, s.attempt_verified_no_label_at,
-             s.finalized_at, s.shipped_at, s.b44_pushed_at, s.created_by, s.created_at,
+             s.finalized_at, s.shipped_at, s.b44_pushed_at, s.push_epoch, s.created_by, s.created_at,
              COALESCE(si.items, '[]'::jsonb) AS items
       FROM shipments s
       LEFT JOIN LATERAL (

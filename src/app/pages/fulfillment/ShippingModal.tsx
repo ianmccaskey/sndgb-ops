@@ -55,7 +55,7 @@ type ShipmentRow = {
   purchase_started_at: string | null; purchase_attempted_at: string | null;
   attempt_verified_no_label_at: string | null;
   finalized_at: string | null; shipped_at: string | null; b44_pushed_at: string | null;
-  created_at: string;
+  push_epoch: number; created_at: string;
   items: { order_item_id: number; qty: string; sku_code: string; product_id: number; product_external_id: string | null }[];
 };
 
@@ -253,7 +253,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     fin.trackingCollision ? 'WARNING: this tracking number already appears on another recent shipment or transfer — verify at Shippo; one of the two may be a double-record.' : '',
   ].filter(Boolean).join(' ');
 
-  const runPush = async (shipmentId: number, carrier: string, tracking: string, items: { order_item_id: number; qty: string; sku: string }[]) => {
+  const runPush = async (shipmentId: number, pushEpoch: number, carrier: string, tracking: string, items: { order_item_id: number; qty: string; sku: string }[]) => {
     if (pushInFlight.current) return;
     pushInFlight.current = true;
     setPushMsg('Pushing to the ordering app…');
@@ -281,7 +281,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       }
       const out = await pushShipmentUpstream({
         cfg, externalId: order.external_id || '', orderId: order.id, orderNumber: order.order_number,
-        shipmentId, carrier, tracking,
+        shipmentId, pushEpoch, carrier, tracking,
         shippedItems: items.map(i => ({ sku: i.sku, qty: i.qty })),
         packable: freshRows, userName,
         appendNote: doAppendNote, markPushed: doMarkPushed,
@@ -381,7 +381,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       reloadPackable(); reloadShipments(); reload();
       const warn = finWarnings(fin);
       if (warn) setPurchaseMsg(warn);
-      await runPush(draftId, rate.provider, result.trackingNumber || '', shippedItems);
+      // a just-created draft is born at push_epoch 0; a flip that raced
+      // this purchase bumps it and the stamp CAS refuses
+      await runPush(draftId, 0, rate.provider, result.trackingNumber || '', shippedItems);
     } finally {
       purchaseInFlight.current = false;
       setPurchasing(false);
@@ -436,7 +438,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const shippedItems = chosen.map(c => ({ order_item_id: Number(c.line.order_item_id), qty: c.qty, sku: c.line.sku_code }));
       onShipped(chosen.map(c => ({ product_id: Number(c.line.product_id), qty: Number(c.qty) })));
       reloadPackable(); reloadShipments(); reload();
-      await runPush(recordedId, carrier, mTracking.trim().toUpperCase().replace(/\s/g, ''), shippedItems);
+      await runPush(recordedId, 0, carrier, mTracking.trim().toUpperCase().replace(/\s/g, ''), shippedItems);
     } finally {
       manualInFlight.current = false;
       setManualBusy(false);
@@ -451,7 +453,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     const items = (s.items || []).map(i => ({ order_item_id: Number(i.order_item_id), qty: String(i.qty), sku: i.sku_code }));
     onShipped((s.items || []).map(i => ({ product_id: Number(i.product_id), qty: Number(i.qty) })));
     reloadPackable(); reloadShipments(); reload();
-    await runPush(s.id, carrier, tracking, items);
+    await runPush(s.id, Number(s.push_epoch || 0), carrier, tracking, items);
   };
 
   // ---- draft recovery + refund controls (ports of the transfers panel) ----
@@ -628,7 +630,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
 
   const retryPushRow = async (s: ShipmentRow) => {
     // runPush does its own just-in-time packable read
-    await runPush(s.id, s.carrier || '', s.tracking_number || '',
+    await runPush(s.id, Number(s.push_epoch || 0), s.carrier || '', s.tracking_number || '',
       s.items.map(i => ({ order_item_id: i.order_item_id, qty: String(i.qty), sku: i.sku_code })));
   };
 

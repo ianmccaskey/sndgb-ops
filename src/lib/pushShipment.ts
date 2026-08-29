@@ -44,6 +44,9 @@ export type PushShipmentDeps = {
   orderId: number;               // local order id
   orderNumber: string;
   shipmentId: number;
+  // the shipment's push_epoch when this push STARTED — the stamp CASes on
+  // it, so a digital-flip invalidation landing mid-push wins
+  pushEpoch: number;
   carrier: string;
   tracking: string;
   shippedItems: { sku: string; qty: string }[];   // THIS box's contents (note text)
@@ -172,7 +175,7 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
       // (4) verified — stamp; an already-stamped refusal is fine
       try {
         await d.markPushed({
-          shipment_id: d.shipmentId, actor: d.userName,
+          shipment_id: d.shipmentId, actor: d.userName, expected_push_epoch: d.pushEpoch,
           pushed: JSON.stringify({ tracking: d.tracking, carrier: d.carrier, shipped_date_items: datesLanded, status_set: fullyShipped ? 'shipped' : null }),
         });
       } catch { /* stamp failure keeps the retry surface — safe direction */ }

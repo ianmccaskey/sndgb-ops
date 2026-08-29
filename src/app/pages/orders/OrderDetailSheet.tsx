@@ -127,7 +127,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     id: number; status: string; carrier: string | null; tracking_number: string | null;
     label_cost_usd: string; label_url: string | null; from_label: string | null;
     refund_status: string | null; finalized_at: string | null; shipped_at: string | null;
-    b44_pushed_at: string | null; created_by: string | null;
+    b44_pushed_at: string | null; push_epoch: number; created_by: string | null;
     items: { order_item_id: number; qty: string; sku_code: string }[];
   };
   type ShipPackableRow = {
@@ -155,7 +155,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   // last case where no shipment row changed). Packable rows are fetched
   // FRESH here — never from sheet-open hook state — because they decide
   // whether the upstream order advances to 'shipped'.
-  const pushShipRow = async (s: { id: number; carrier: string | null; tracking_number: string | null; items: { order_item_id: number; qty: string; sku_code: string }[] }) => {
+  const pushShipRow = async (s: { id: number; push_epoch: number; carrier: string | null; tracking_number: string | null; items: { order_item_id: number; qty: string; sku_code: string }[] }) => {
     if (!o || shipPushInFlight.current) return;
     shipPushInFlight.current = true;
     setShipPushMsg('Pushing to the ordering app…');
@@ -172,7 +172,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       const out = await pushShipmentUpstream({
         cfg: { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' },
         externalId: o.external_id || '', orderId: o.id, orderNumber: o.order_number,
-        shipmentId: s.id, carrier: s.carrier || '', tracking: s.tracking_number || '',
+        shipmentId: s.id, pushEpoch: Number(s.push_epoch || 0), carrier: s.carrier || '', tracking: s.tracking_number || '',
         shippedItems: (s.items || []).map(i => ({ sku: i.sku_code, qty: String(i.qty) })),
         packable: fresh.map(l => ({
           order_item_id: Number(l.order_item_id),
