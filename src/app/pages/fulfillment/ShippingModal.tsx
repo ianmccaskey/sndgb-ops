@@ -303,7 +303,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   };
 
   const removePhoto = async (photoId: number, shipmentId: number) => {
-    if (!window.confirm('Remove this package photo? The removal is audited.')) return;
+    if (!window.confirm('Remove this package photo? The removal is audited — its thumbnail and fingerprint stay in the audit history.')) return;
     await doDeletePhoto({ photo_id: photoId, shipment_id: shipmentId, actor: userName }).catch(() => null);
     reloadPhotos();
   };

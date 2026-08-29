@@ -12,9 +12,11 @@ import { action } from '@uibakery/data';
  * deleting would orphan the rate id, the only recovery handle for a label
  * that may have been paid. Items snapshot into old_data (CASCADE would
  * erase them silently). Attached package photos also CASCADE away, so
- * each one gets its own shipment_photo_deleted audit row (reason
- * draft_deleted) and the draft's audit row carries their count — evidence
- * never vanishes without a trail. Audited.
+ * each one gets its own shipment_photo_deleted TOMBSTONE audit row
+ * (reason draft_deleted, with the full image's md5 fingerprint and the
+ * complete thumbnail blob) and the draft's audit row carries their count
+ * — deleted evidence stays viewable and provable in audit history.
+ * Audited.
  */
 function deleteShipmentDraft() {
   return action('deleteShipmentDraft', 'SQL', {
@@ -35,7 +37,9 @@ function deleteShipmentDraft() {
           AND (s.purchase_started_at IS NULL OR s.purchase_started_at < now() - interval '10 minutes')
           AND (s.purchase_attempted_at IS NULL OR s.attempt_verified_no_label_at IS NOT NULL)
       ), photos AS (
-        SELECT sp.id, sp.shipment_id, length(sp.image_data) AS bytes, sp.created_by, sp.created_at
+        SELECT sp.id, sp.shipment_id, length(sp.image_data) AS bytes,
+               md5(sp.image_data) AS image_md5, sp.thumb_data,
+               sp.created_by, sp.created_at
         FROM shipment_photos sp, snapshot sn
         WHERE sp.shipment_id = sn.id
       ), del AS (
@@ -47,6 +51,7 @@ function deleteShipmentDraft() {
         INSERT INTO audit_log (table_name, row_pk, action, actor, old_data)
         SELECT 'shipment_photos', p.id::text, 'shipment_photo_deleted', {{params.actor}}::text,
                jsonb_build_object('shipment_id', p.shipment_id, 'bytes', p.bytes,
+                                  'image_md5', p.image_md5, 'thumb_data', p.thumb_data,
                                   'taken_at', p.created_at, 'taken_by', p.created_by,
                                   'reason', 'draft_deleted')
         FROM photos p
