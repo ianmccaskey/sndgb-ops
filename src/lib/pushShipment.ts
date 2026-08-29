@@ -172,13 +172,24 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
     const statusOk = !fullyShipped || String(after.status ?? '') === 'shipped';
 
     if (noteOk && statusOk && datesLanded >= expectDates) {
-      // (4) verified — stamp; an already-stamped refusal is fine
+      // (4) verified — stamp. The stamp is NOT best-effort when this push
+      // set status='shipped': the same statement writes the immutable
+      // audit evidence the digital-reversal guard depends on, so a
+      // refused/failed stamp on a status-setting push must surface as a
+      // retryable failure, never as success (the retry is idempotent —
+      // verification passes again and only the stamp re-runs).
+      let stamped = false;
       try {
-        await d.markPushed({
+        const res = await d.markPushed({
           shipment_id: d.shipmentId, actor: d.userName, expected_push_epoch: d.pushEpoch,
           pushed: JSON.stringify({ tracking: d.tracking, carrier: d.carrier, shipped_date_items: datesLanded, status_set: fullyShipped ? 'shipped' : null }),
-        });
-      } catch { /* stamp failure keeps the retry surface — safe direction */ }
+        }) as unknown[] | null;
+        stamped = Array.isArray(res) ? res.length > 0 : !!res;
+      } catch { stamped = false; }
+      if (!stamped && fullyShipped) {
+        await followUp('PUSH VERIFIED upstream but the local completion record did not save (a concurrent change may have intervened) — push again to finish recording.');
+        return { ok: false, message: "Upstream verified (status 'shipped' landed) but the LOCAL completion record did not save — use \"Push upstream\" once more to finish recording; the retry is idempotent." };
+      }
       return { ok: true, message: `Pushed to the ordering app: tracking noted${intendedDates > 0 ? `, ${intendedDates} item(s) marked shipped` : ''}${fullyShipped ? ", status -> 'shipped'" : ' (status unchanged — partial)'}.` };
     }
     const what = [
