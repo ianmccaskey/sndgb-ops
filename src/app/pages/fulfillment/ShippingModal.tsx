@@ -11,7 +11,11 @@ import finalizeShipment from '@/actions/fulfillment/finalizeShipment';
 import deleteShipmentDraft from '@/actions/fulfillment/deleteShipmentDraft';
 import setShipmentRefund from '@/actions/fulfillment/setShipmentRefund';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
+import addShipmentPhoto from '@/actions/fulfillment/addShipmentPhoto';
+import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
+import deleteShipmentPhoto from '@/actions/fulfillment/deleteShipmentPhoto';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
+import { compressImageToDataUrl } from '@/lib/imageCapture';
 import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
@@ -99,7 +103,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [doDeleteDraft] = useMutateAction(deleteShipmentDraft);
   const [doSetRefund] = useMutateAction(setShipmentRefund);
   const [doMarkPushed] = useMutateAction(markShipmentPushed);
+  const [doAddPhoto] = useMutateAction(addShipmentPhoto);
+  const [doDeletePhoto] = useMutateAction(deleteShipmentPhoto);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
+  const [rawPhotos, , , reloadPhotos] = useLoadAction(listShipmentPhotos, [order.id], { order_id: order.id });
+  const photos = rows<{ id: number; shipment_id: number; image_data: string; created_by: string | null; created_at: string }>(rawPhotos);
   // read action invoked imperatively (getOrderTxRefs precedent): the push's
   // fully-shipped decision needs a JUST-IN-TIME authoritative read, never
   // the modal's hook state
@@ -141,6 +149,73 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [pendingFinalize, setPendingFinalize] = useState<Record<number, PurchaseResult>>({});
   const [recoverTxn, setRecoverTxn] = useState<Record<number, string>>({});
   const [rowMsg, setRowMsg] = useState<Record<number, string>>({});
+  // ---- package photos: captured on the phone BEFORE shipping, held in
+  // memory, and attached to the shipment record the moment it exists ----
+  const [pendingPhotos, setPendingPhotos] = useState<string[]>([]);
+  const [photoMsg, setPhotoMsg] = useState('');
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [viewPhoto, setViewPhoto] = useState<string | null>(null);
+  // where the NEXT captured files go: the pre-ship pending list, or a
+  // direct attach to an existing shipment row
+  const photoTarget = useRef<'pending' | number>('pending');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const capturePhotos = (target: 'pending' | number) => {
+    photoTarget.current = target;
+    fileInputRef.current?.click();
+  };
+
+  const onFilesPicked = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setPhotoBusy(true); setPhotoMsg('');
+    const errors: string[] = [];
+    try {
+      for (const f of Array.from(files)) {
+        try {
+          const url = await compressImageToDataUrl(f);
+          if (photoTarget.current === 'pending') {
+            setPendingPhotos(p => [...p, url]);
+          } else {
+            const res = await doAddPhoto({ shipment_id: photoTarget.current, image_data: url, actor: userName }) as unknown[] | null;
+            if (!(Array.isArray(res) ? res.length > 0 : !!res)) errors.push(`${f.name}: refused (shipment gone/voided, or the image is too large).`);
+          }
+        } catch (e: unknown) {
+          errors.push(e instanceof Error ? e.message : `${f.name}: failed`);
+        }
+      }
+      if (photoTarget.current !== 'pending') reloadPhotos();
+      if (errors.length > 0) setPhotoMsg(errors.join(' '));
+    } finally {
+      setPhotoBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // attach the pre-ship captures to the shipment that just came into
+  // existence; a failed upload keeps its photo in the pending list with a
+  // visible message — never silently dropped, never blocks the shipment
+  const uploadPendingPhotos = async (shipmentId: number) => {
+    if (pendingPhotos.length === 0) return;
+    const failed: string[] = [];
+    for (const url of pendingPhotos) {
+      try {
+        const res = await doAddPhoto({ shipment_id: shipmentId, image_data: url, actor: userName }) as unknown[] | null;
+        if (!(Array.isArray(res) ? res.length > 0 : !!res)) failed.push(url);
+      } catch {
+        failed.push(url);
+      }
+    }
+    setPendingPhotos(failed);
+    if (failed.length > 0) setPhotoMsg(`${failed.length} photo(s) did not attach — use "+ photo" on the shipment below to retry them from your phone, or re-take.`);
+    reloadPhotos();
+  };
+
+  const removePhoto = async (photoId: number) => {
+    if (!window.confirm('Remove this package photo? The removal is audited.')) return;
+    await doDeletePhoto({ photo_id: photoId, actor: userName }).catch(() => null);
+    reloadPhotos();
+  };
+
   // refs, not state: React re-renders lag double-clicks, and these
   // buttons spend REAL money
   const purchaseInFlight = useRef(false);
@@ -343,6 +418,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         reloadPackable(); reloadShipments();
         return;
       }
+      // the pre-ship package photos attach to the draft NOW — before any
+      // money moves, so even a failed purchase leaves the evidence with
+      // its draft (failures stay pending and visible, never blocking)
+      await uploadPendingPhotos(draftId);
       // 2. HEARTBEAT immediately before money moves
       if (claimedAt) {
         const hb = await doClaim({ shipment_id: draftId, prior_claimed_at: claimedAt, actor: userName }) as unknown[] | null;
@@ -434,6 +513,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         reloadPackable(); reloadShipments();
         return;
       }
+      await uploadPendingPhotos(recordedId);
       setManualSuccess(mTracking.trim());
       const shippedItems = chosen.map(c => ({ order_item_id: Number(c.line.order_item_id), qty: c.qty, sku: c.line.sku_code }));
       onShipped(chosen.map(c => ({ product_id: Number(c.line.product_id), qty: Number(c.qty) })));
@@ -734,6 +814,32 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           {!manualMode && missingWeightSkus.length > 0 && (
             <p className="text-[11px] text-amber-700">No catalog weight for {missingWeightSkus.join(', ')} — they count as 0 in the prefill; adjust the weight by hand (set weights on the Products page).</p>
           )}
+          {/* package photos: capture BEFORE shipping; they attach to the
+              shipment record the moment it exists */}
+          <div className="rounded border p-2 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs font-semibold uppercase text-muted-foreground">Package photos</p>
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={photoBusy} onClick={() => capturePhotos('pending')}>
+                {photoBusy ? 'Processing…' : '📷 Take / add photo'}
+              </Button>
+              <span className="text-[11px] text-muted-foreground">photograph the open box contents — saved with the shipment as evidence</span>
+            </div>
+            {pendingPhotos.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {pendingPhotos.map((url, i) => (
+                  <span key={i} className="relative">
+                    <img src={url} alt={`package photo ${i + 1}`} className="h-14 w-14 object-cover rounded border cursor-pointer" onClick={() => setViewPhoto(url)} />
+                    <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove before shipping"
+                      onClick={() => setPendingPhotos(p => p.filter((_, j) => j !== i))}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {photoMsg && <p className="text-[11px] text-amber-700">{photoMsg}</p>}
+          </div>
+          <input ref={fileInputRef} type="file" accept="image/*" capture="environment" multiple className="hidden"
+            onChange={e => onFilesPicked(e.target.files)} />
+
           <Input placeholder="Note (optional)" value={note} onChange={e => setNote(e.target.value)} className="h-9" />
 
           {manualMode ? (
@@ -824,6 +930,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                       <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" onClick={() => deleteDraft(s)}>Delete draft</Button>
                     )}
                   </div>
+                  {photos.filter(ph => Number(ph.shipment_id) === s.id).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {photos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
+                        <span key={ph.id} className="relative">
+                          <img src={ph.image_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => setViewPhoto(ph.image_data)} />
+                          <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
+                            onClick={() => removePhoto(ph.id)}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   {rowMsg[s.id] && <p className="text-red-700">{rowMsg[s.id]}</p>}
                 </div>
               ))}
@@ -838,8 +955,22 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase">refund {s.refund_status}</span>}
                     {!s.b44_pushed_at && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase" title="The ordering app has not been told about this shipment yet">not pushed</span>}
                   </p>
+                  {photos.filter(ph => Number(ph.shipment_id) === s.id).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {photos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
+                        <span key={ph.id} className="relative">
+                          <img src={ph.image_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => setViewPhoto(ph.image_data)} />
+                          <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
+                            onClick={() => removePhoto(ph.id)}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-1">
                     {s.label_url && <a className="underline text-muted-foreground" href={s.label_url} target="_blank" rel="noreferrer">label</a>}
+                    {s.refund_status !== 'SUCCESS' && (
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={photoBusy} onClick={() => capturePhotos(s.id)}>+ photo</Button>
+                    )}
                     {!s.b44_pushed_at && s.refund_status !== 'SUCCESS' && (
                       <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => retryPushRow(s)}>Push upstream</Button>
                     )}
@@ -861,6 +992,14 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           </div>
         </div>
       </DialogContent>
+      {viewPhoto && (
+        <Dialog open onOpenChange={v => { if (!v) setViewPhoto(null); }}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader><DialogTitle>Package photo</DialogTitle></DialogHeader>
+            <img src={viewPhoto} alt="package photo (full size)" className="max-w-full max-h-[70vh] object-contain rounded" />
+          </DialogContent>
+        </Dialog>
+      )}
     </Dialog>
   );
 }

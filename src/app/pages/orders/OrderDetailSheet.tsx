@@ -17,6 +17,7 @@ import setOrderItemComp from '@/actions/orders/setOrderItemComp';
 import setOrderItemDirectShip from '@/actions/orders/setOrderItemDirectShip';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
+import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
@@ -43,6 +44,7 @@ import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -102,6 +104,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [rawRefunds, , , reloadRefunds] = useLoadAction(listOrderRefunds, [orderId], { order_id: orderId }, { enabled: open });
   const [rawSheetWallets] = useLoadAction(listWallets, [open], {}, { enabled: open });
   const [rawShipRows, , , reloadShipRows] = useLoadAction(listOrderShipments, [orderId], { order_id: orderId }, { enabled: open });
+  const [rawShipPhotos] = useLoadAction(listShipmentPhotos, [orderId], { order_id: orderId }, { enabled: open });
+  const shipPhotos = rows<{ id: number; shipment_id: number; image_data: string }>(rawShipPhotos);
+  const [viewShipPhoto, setViewShipPhoto] = useState<string | null>(null);
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
   const campaignProducts = rows<{ sku_code: string; gb_price_usd: string; status: string }>(rawCampaignProducts)
@@ -1629,6 +1634,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The ordering app has not been told about this shipment yet">not pushed</span>
                       )}
                     </div>
+                    {shipPhotos.filter(ph => Number(ph.shipment_id) === s.id).length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {shipPhotos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
+                          <img key={ph.id} src={ph.image_data} alt="package photo" className="h-10 w-10 object-cover rounded border cursor-pointer"
+                            onClick={() => setViewShipPhoto(ph.image_data)} />
+                        ))}
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-1.5">
                       {s.label_url && <a className="underline text-muted-foreground" href={s.label_url} target="_blank" rel="noreferrer">label</a>}
                       {s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && o.external_id && (
@@ -1812,6 +1825,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           </>
         )}
       </SheetContent>
+      {viewShipPhoto && (
+        <Dialog open onOpenChange={v => { if (!v) setViewShipPhoto(null); }}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader><DialogTitle>Package photo</DialogTitle></DialogHeader>
+            <img src={viewShipPhoto} alt="package photo (full size)" className="max-w-full max-h-[70vh] object-contain rounded" />
+          </DialogContent>
+        </Dialog>
+      )}
     </Sheet>
   );
 }
