@@ -246,12 +246,19 @@ export function ProductsPage() {
     }
     setNpError('');
     try {
-      const res = await doSaveProduct({ sku_code: npSku.trim(), name: npName.trim(), mass_label: npMass.trim(), external_id: '', unit_weight_oz: npWeight.trim(), active: true }) as unknown[] | null;
+      const res = await doSaveProduct({ sku_code: npSku.trim(), name: npName.trim(), mass_label: npMass.trim(), external_id: '', unit_weight_oz: npWeight.trim(), active: true }) as { inserted?: boolean }[] | null;
       // zero rows = the server-side weight-format guard refused the insert —
       // keep the form so nothing is silently dropped
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
         setNpError('Not added — the weight was refused server-side (positive oz, max 2 decimals, or blank). The form is unchanged.');
         return;
+      }
+      // an existing SKU is a conflict-UPDATE: name/mass applied, but weight
+      // deliberately did not (curated weights only change via the inline
+      // editor) — say so instead of implying the typed weight was saved
+      const wasInsert = Array.isArray(res) && res[0] && res[0].inserted === true;
+      if (!wasInsert && npWeight.trim() !== '') {
+        setNpError(`${npSku.trim()} already existed — its name/mass were updated, but the weight was NOT changed. Edit the weight in the table above (audited).`);
       }
       setNpSku(''); setNpName(''); setNpMass(''); setNpWeight('');
       reloadProducts();

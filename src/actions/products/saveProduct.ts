@@ -26,7 +26,10 @@ function saveProduct() {
         -- ordering-app sync calls it blind, and an edit here would bypass
         -- the audited editor. All changes go through setProductWeight.
         active = EXCLUDED.active
-      RETURNING id
+      -- (xmax = 0) discriminates a true insert from a conflict-update, so
+      -- the add form can tell the operator when a supplied weight did NOT
+      -- apply (existing SKU keeps its curated weight)
+      RETURNING id, (xmax = 0) AS inserted
     `,
   });
 }
