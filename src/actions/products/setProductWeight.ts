@@ -16,20 +16,22 @@ function setProductWeight() {
       WITH up AS (
         UPDATE products p
         SET unit_weight_oz = NULLIF({{params.unit_weight_oz}}::text, '')::numeric
-        FROM (SELECT id, unit_weight_oz AS old_weight FROM products WHERE id = {{params.product_id}}::bigint) old
-        WHERE p.id = old.id
+        WHERE p.id = {{params.product_id}}::bigint
           -- malformed input refuses instead of Postgres rounding it to scale
           AND ({{params.unit_weight_oz}}::text = ''
                OR {{params.unit_weight_oz}}::text ~ '^[0-9]+(\\.[0-9]{1,2})?$')
-          -- CAS on the value this editor OPENED with: if the other admin
-          -- changed the weight meanwhile, this stale save refuses instead
-          -- of silently clobbering the newer edit
-          AND old.old_weight IS NOT DISTINCT FROM NULLIF({{params.expected_weight}}::text, '')::numeric
-        RETURNING p.id, old.old_weight, p.unit_weight_oz
+          -- CAS DIRECTLY on the target row (not a snapshot subquery, which
+          -- EvalPlanQual would leave stale under a concurrent update): if
+          -- the other admin changed the weight meanwhile, the re-checked
+          -- predicate sees THEIR value and this stale save refuses
+          AND p.unit_weight_oz IS NOT DISTINCT FROM NULLIF({{params.expected_weight}}::text, '')::numeric
+        RETURNING p.id, p.unit_weight_oz
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, old_data, new_data)
+      -- the CAS proved the pre-update value equalled expected_weight, so the
+      -- param IS the old value
       SELECT 'products', up.id::text, 'product_weight_set', {{params.actor}}::text,
-             jsonb_build_object('unit_weight_oz', up.old_weight),
+             jsonb_build_object('unit_weight_oz', NULLIF({{params.expected_weight}}::text, '')::numeric),
              jsonb_build_object('unit_weight_oz', up.unit_weight_oz)
       FROM up
       RETURNING row_pk AS id

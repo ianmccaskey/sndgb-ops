@@ -246,7 +246,13 @@ export function ProductsPage() {
     }
     setNpError('');
     try {
-      await doSaveProduct({ sku_code: npSku.trim(), name: npName.trim(), mass_label: npMass.trim(), external_id: '', unit_weight_oz: npWeight.trim(), active: true });
+      const res = await doSaveProduct({ sku_code: npSku.trim(), name: npName.trim(), mass_label: npMass.trim(), external_id: '', unit_weight_oz: npWeight.trim(), active: true }) as unknown[] | null;
+      // zero rows = the server-side weight-format guard refused the insert —
+      // keep the form so nothing is silently dropped
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+        setNpError('Not added — the weight was refused server-side (positive oz, max 2 decimals, or blank). The form is unchanged.');
+        return;
+      }
       setNpSku(''); setNpName(''); setNpMass(''); setNpWeight('');
       reloadProducts();
     } catch (e: unknown) {
