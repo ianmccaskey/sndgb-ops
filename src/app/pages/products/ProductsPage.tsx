@@ -101,9 +101,12 @@ export function ProductsPage() {
   const [npWeight, setNpWeight] = useState('');
   const [npError, setNpError] = useState('');
 
-  // inline weight edit on the catalog table (one row at a time)
+  // inline weight edit on the catalog table (one row at a time). wExpected
+  // is the value the editor OPENED with — the action CASes on it so a stale
+  // save refuses instead of clobbering the other admin's newer edit.
   const [wEditing, setWEditing] = useState<number | null>(null);
   const [wValue, setWValue] = useState('');
+  const [wExpected, setWExpected] = useState('');
   const [wMsg, setWMsg] = useState('');
 
   const saveWeight = async (p: Product) => {
@@ -113,8 +116,13 @@ export function ProductsPage() {
       return;
     }
     try {
-      const res = await doSetWeight({ product_id: p.id, unit_weight_oz: v, actor: userName }) as unknown[] | null;
-      if (!(Array.isArray(res) ? res.length > 0 : !!res)) { setWMsg('Not saved — reload and retry.'); return; }
+      const res = await doSetWeight({ product_id: p.id, unit_weight_oz: v, expected_weight: wExpected, actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+        setWMsg(`${p.sku_code}: not saved — the weight changed in another session. Reloading; re-check and retry.`);
+        setWEditing(null);
+        reloadProducts();
+        return;
+      }
       setWEditing(null); setWMsg('');
       reloadProducts();
     } catch (e: unknown) {
@@ -686,7 +694,7 @@ export function ProductsPage() {
                       ) : (
                         <button className="text-left hover:underline"
                           title="Per-unit shipping weight — feeds the shipping modal's box-weight prefill. Click to edit."
-                          onClick={() => { setWEditing(p.id); setWValue(p.unit_weight_oz == null ? '' : String(Number(p.unit_weight_oz))); setWMsg(''); }}>
+                          onClick={() => { setWEditing(p.id); const cur = p.unit_weight_oz == null ? '' : String(Number(p.unit_weight_oz)); setWValue(cur); setWExpected(cur); setWMsg(''); }}>
                           {p.unit_weight_oz == null
                             ? <span className="text-amber-700">— none</span>
                             : fmtNum(p.unit_weight_oz)}

@@ -5,22 +5,26 @@ function saveProduct() {
     datasourceName: 'SND GB DB',
     query: `
       INSERT INTO products (sku_code, name, mass_label, external_id, unit_weight_oz, active)
-      VALUES (
+      SELECT
         TRIM({{params.sku_code}}::text),
         {{params.name}}::text,
         NULLIF({{params.mass_label}}::text, ''),
         NULLIF({{params.external_id}}::text, ''),
         NULLIF({{params.unit_weight_oz}}::text, '')::numeric,
         {{params.active}}::boolean
-      )
+      -- a malformed weight refuses the whole insert (zero rows) instead of
+      -- Postgres silently rounding an over-precision value to the column
+      -- scale — the UI regex is a convenience, this is the guard
+      WHERE ({{params.unit_weight_oz}}::text = ''
+             OR {{params.unit_weight_oz}}::text ~ '^[0-9]+(\\.[0-9]{1,2})?$')
       ON CONFLICT (sku_code) DO UPDATE SET
         name = EXCLUDED.name,
         mass_label = EXCLUDED.mass_label,
         external_id = COALESCE(EXCLUDED.external_id, products.external_id),
-        -- set-if-provided: the ordering-app catalog sync knows nothing about
-        -- shipping weight, and a blank must never wipe a curated one — the
-        -- only way to CLEAR a weight is setProductWeight
-        unit_weight_oz = COALESCE(EXCLUDED.unit_weight_oz, products.unit_weight_oz),
+        -- weight applies at INSERT only (the add-product form). An existing
+        -- row's weight NEVER changes through this generic upsert — the
+        -- ordering-app sync calls it blind, and an edit here would bypass
+        -- the audited editor. All changes go through setProductWeight.
         active = EXCLUDED.active
       RETURNING id
     `,
