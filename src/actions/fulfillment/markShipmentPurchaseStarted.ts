@@ -27,13 +27,18 @@ function markShipmentPurchaseStarted() {
         FROM shipments s
         WHERE s.id = {{params.shipment_id}}::bigint
       ),
-      -- LAST server gate before money moves, on the LATEST committed order
-      -- row (FOR UPDATE): every draft-time gate must still hold
+      -- LAST server gate before money moves, on the LATEST committed rows
+      -- (FOR UPDATE): every draft-time gate must still hold — including the
+      -- SHIP-FROM: the draft's stored origin snapshot must still equal the
+      -- live, still-active receive address (an origin corrected or archived
+      -- after draft time must force a re-quote, not a label with a stale
+      -- sender)
       eligible AS (
         SELECT o.id
         FROM lck
         JOIN shipments s ON s.id = lck.sid
         JOIN orders o ON o.id = s.order_id
+        JOIN receive_addresses ra ON ra.id = s.ship_from_address_id
         LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
         WHERE o.status NOT IN ('cancelled', 'refunded')
           AND NOT o.hold_shipping
@@ -44,7 +49,12 @@ function markShipmentPurchaseStarted() {
           AND COALESCE(s.destination->>'city', '')    = COALESCE(o.city, '')
           AND COALESCE(s.destination->>'state', '')   = COALESCE(o.state_code, '')
           AND COALESCE(s.destination->>'zip', '')     = COALESCE(o.postal_code, '')
-        FOR UPDATE OF o
+          AND ra.active
+          AND jsonb_build_object('name', ra.name, 'street1', ra.street1, 'street2', ra.street2,
+                                 'city', ra.city, 'state', ra.state, 'zip', ra.zip,
+                                 'country', ra.country, 'phone', ra.phone, 'email', ra.email)
+              = s.from_address
+        FOR UPDATE OF o, ra
       ),
       up AS (
         UPDATE shipments s

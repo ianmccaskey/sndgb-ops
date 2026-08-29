@@ -59,6 +59,7 @@ export function SettingsPage() {
   const [shippoKey, setShippoKey] = useState('');
   const [shippoMsg, setShippoMsg] = useState('');
   const [shippoTesting, setShippoTesting] = useState(false);
+  const [boxTare, setBoxTare] = useState('');
   const shippoHttp = useShippoHttp();
 
   // campaign form
@@ -95,12 +96,18 @@ export function SettingsPage() {
 
   useEffect(() => {
     setShippoKey(settings.shippo_api_key || '');
-  }, [settings.shippo_api_key]);
+    setBoxTare(settings.default_box_tare_oz || '');
+  }, [settings.shippo_api_key, settings.default_box_tare_oz]);
 
   const saveShippo = async () => {
     setShippoMsg('');
+    if (boxTare.trim() !== '' && !/^\d+(?:\.\d{1,2})?$/.test(boxTare.trim())) {
+      setShippoMsg('Box tare must be a positive number in oz (max 2 decimals), or blank.');
+      return;
+    }
     try {
       await doSaveSetting({ key: 'shippo_api_key', value: shippoKey.trim() });
+      await doSaveSetting({ key: 'default_box_tare_oz', value: boxTare.trim() });
       reloadSettings();
       setShippoMsg('Saved.');
     } catch (e: unknown) {
@@ -308,7 +315,11 @@ export function SettingsPage() {
         <CardContent className="space-y-3">
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="Shippo API token" value={shippoKey} onChange={setShippoKey} type="password" placeholder="shippo_live_… or shippo_test_…" />
+            <Field label="Default box tare (oz)" value={boxTare} onChange={setBoxTare} placeholder="e.g. 6" />
           </div>
+          <p className="text-xs text-muted-foreground -mt-1">
+            Tare = empty box + packaging weight, added to the shipping modal's auto-calculated weight (product weights come from the Products page). Always adjustable per shipment.
+          </p>
           {shippoKey.trim().toLowerCase().startsWith('shippo_test') && (
             <p className="text-xs rounded border border-amber-300 bg-amber-50 text-amber-900 p-2">
               TEST token — tracking data on the Receiving page will be simulated and auto-receive is disabled; labels purchased are test labels.

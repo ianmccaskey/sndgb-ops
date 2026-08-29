@@ -45,13 +45,18 @@ function finalizeShipment() {
           AND s.finalized_at IS NULL
           AND TRIM({{params.transaction_id}}::text) <> ''
           AND TRIM({{params.label_url}}::text) <> ''
+          -- tracking is REQUIRED (normalized non-empty): a QUEUED Shippo
+          -- transaction may briefly lack one — refusing here is safe
+          -- because every recovery path re-fetches the transaction, which
+          -- carries the number once the label is ready
+          AND regexp_replace(UPPER(TRIM({{params.tracking_number}}::text)), '\\s', '', 'g') <> ''
           AND s.shippo_rate_id = TRIM({{params.rate_id}}::text)
         FOR UPDATE OF s
       ),
       up AS (
         UPDATE shipments s
         SET shippo_transaction_id = TRIM({{params.transaction_id}}::text),
-            tracking_number = NULLIF({{params.tracking_number}}::text, ''),
+            tracking_number = regexp_replace(UPPER(TRIM({{params.tracking_number}}::text)), '\\s', '', 'g'),
             label_url = {{params.label_url}}::text,
             label_cost_usd = COALESCE(s.rate_amount, s.label_cost_usd),
             status = 'shipped',
@@ -79,9 +84,32 @@ function finalizeShipment() {
                                       OR COALESCE(up.destination->>'city', '')    <> COALESCE(o.city, '')
                                       OR COALESCE(up.destination->>'state', '')   <> COALESCE(o.state_code, '')
                                       OR COALESCE(up.destination->>'zip', '')     <> COALESCE(o.postal_code, ''))
+                                ),
+                                -- a paid label is recorded no matter what, but a
+                                -- same-fingerprint finalized row within the
+                                -- recycling window is surfaced LOUDLY (run under
+                                -- the held 42006 lock, so a racing manual record
+                                -- of this number is serialized either way)
+                                'tracking_collision', EXISTS (
+                                  SELECT 1 FROM shipments s4
+                                  WHERE s4.id <> up.id
+                                    AND s4.finalized_at IS NOT NULL
+                                    AND s4.finalized_at > now() - interval '120 days'
+                                    AND s4.tracking_number IS NOT NULL
+                                    AND COALESCE(s4.refund_status, '') <> 'SUCCESS'
+                                    AND regexp_replace(UPPER(s4.tracking_number), '[^A-Z0-9]', '', 'g')
+                                        = regexp_replace(UPPER(up.tracking_number), '[^A-Z0-9]', '', 'g')
+                                ) OR EXISTS (
+                                  SELECT 1 FROM transfers t4
+                                  WHERE t4.finalized_at IS NOT NULL
+                                    AND t4.finalized_at > now() - interval '120 days'
+                                    AND t4.tracking_number IS NOT NULL
+                                    AND regexp_replace(UPPER(t4.tracking_number), '[^A-Z0-9]', '', 'g')
+                                        = regexp_replace(UPPER(up.tracking_number), '[^A-Z0-9]', '', 'g')
                                 ))
       FROM up
-      RETURNING row_pk AS id, (new_data->>'address_drift') AS address_drift
+      RETURNING row_pk AS id, (new_data->>'address_drift') AS address_drift,
+                (new_data->>'tracking_collision') AS tracking_collision
     `,
   });
 }

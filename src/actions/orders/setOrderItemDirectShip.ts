@@ -15,7 +15,7 @@ function setOrderItemDirectShip() {
     datasourceName: 'SND GB DB',
     query: `
       WITH lck AS (
-        -- 42001: not for money — for the pack-flow gate below. saveShipment
+        -- 42001: not for money — for the pack-flow gate below. Shipment writers
         -- serializes status transitions under this lock, so reading the
         -- latest shipment status without it could race a concurrent pack.
         SELECT pg_advisory_xact_lock(42001, ({{params.order_id}})::int) AS locked
