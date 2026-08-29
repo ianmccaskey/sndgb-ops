@@ -47,9 +47,19 @@ function finalizeTransfer() {
                END AS locked
         FROM pre
       ),
+      -- shared cross-path tracking lock (42006 'track_'), held to commit:
+      -- serializes this finalize against any concurrent MANUAL record of
+      -- the same number (shipment or transfer), whose 120-day window check
+      -- then sees this row committed instead of racing past it
+      tlck AS (
+        SELECT pg_advisory_xact_lock(hashtextextended(
+                 'track_' || regexp_replace(UPPER(COALESCE({{params.tracking_number}}::text, '')), '[^A-Z0-9]', '', 'g'),
+                 42006)) AS locked
+        FROM lck
+      ),
       sel AS (
         SELECT t.id, t.rate_amount, t.carrier, t.direct_order_item_id, t.destination, t.direct_link_reclaimed_at
-        FROM transfers t, lck
+        FROM transfers t, lck, tlck
         WHERE t.id = {{params.transfer_id}}::bigint
           AND t.finalized_at IS NULL
           AND TRIM({{params.transaction_id}}::text) <> ''

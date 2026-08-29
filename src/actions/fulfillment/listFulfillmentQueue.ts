@@ -16,10 +16,12 @@ import { action } from '@uibakery/data';
  * shipped order stays here (badged) until its last box is drafted.
  *
  * Product filters: product_ids is a CSV of product ids ('' = off);
- * filter_mode 'contains' = order has at least one active packable line in
- * the set (other items allowed); 'only' = additionally NO active packable
- * line outside the set. Both deliberately consider PACKABLE lines only —
- * vendor-direct lines are not in your box and never disqualify an order.
+ * filter_mode 'contains' = order has REMAINING packable work on at least
+ * one product in the set (other items allowed); 'only' = additionally no
+ * remaining packable work OUTSIDE the set. Both key on remaining (not
+ * line existence): the filters exist to batch PACKING work, so a line
+ * already fully shipped/reserved neither qualifies an order nor
+ * disqualifies it. Vendor-direct lines never count — not in your box.
  */
 function listFulfillmentQueue() {
   return action('listFulfillmentQueue', 'SQL', {
@@ -128,19 +130,32 @@ function listFulfillmentQueue() {
       ) s ON true
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND o.status NOT IN ('cancelled','refunded')
-        -- product filters (both modes look at active PACKABLE lines only)
+        -- product filters: a line counts only while it has REMAINING
+        -- packable work (effective - attributed over non-voided shipments,
+        -- drafts included) — a fully shipped/reserved line neither
+        -- qualifies (contains) nor disqualifies (only) an order
         AND (COALESCE({{params.product_ids}}::text, '') = ''
           OR (EXISTS (
                 SELECT 1 FROM order_items foi
                 JOIN group_buy_products fg ON fg.id = foi.group_buy_product_id
                 WHERE foi.order_id = o.id AND foi.removed_at IS NULL AND NOT foi.direct_ship
-                  AND fg.product_id IN (SELECT pid FROM sel))
+                  AND fg.product_id IN (SELECT pid FROM sel)
+                  AND COALESCE(foi.qty_override, foi.qty) - COALESCE((
+                        SELECT sum(si.qty) FROM shipment_items si
+                        JOIN shipments fsh ON fsh.id = si.shipment_id
+                        WHERE si.order_item_id = foi.id
+                          AND COALESCE(fsh.refund_status, '') <> 'SUCCESS'), 0) > 0)
               AND ({{params.filter_mode}}::text <> 'only'
                 OR NOT EXISTS (
                     SELECT 1 FROM order_items foi2
                     JOIN group_buy_products fg2 ON fg2.id = foi2.group_buy_product_id
                     WHERE foi2.order_id = o.id AND foi2.removed_at IS NULL AND NOT foi2.direct_ship
-                      AND fg2.product_id NOT IN (SELECT pid FROM sel)))))
+                      AND fg2.product_id NOT IN (SELECT pid FROM sel)
+                      AND COALESCE(foi2.qty_override, foi2.qty) - COALESCE((
+                            SELECT sum(si2.qty) FROM shipment_items si2
+                            JOIN shipments fsh2 ON fsh2.id = si2.shipment_id
+                            WHERE si2.order_item_id = foi2.id
+                              AND COALESCE(fsh2.refund_status, '') <> 'SUCCESS'), 0) > 0))))
         AND ({{params.stage}}::text = 'all'
           -- ready requires fully collected (matched — or OVER: an overpaid
           -- order is fully collected and shippable) AND no unresolved
