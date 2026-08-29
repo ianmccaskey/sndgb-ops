@@ -13,7 +13,8 @@ import { action } from '@uibakery/data';
  * refuses until a proof-of-absence walk stamped
  * attempt_verified_no_label_at. Items snapshot into old_data, and every
  * cascading package photo leaves a TOMBSTONE audit row (reason
- * draft_deleted, with md5 fingerprint + full thumbnail blob + creator) —
+ * draft_deleted, with SHA-256 fingerprint + full thumbnail blob +
+ * creator) —
  * the post-lock snapshot means even a photo attached concurrently with
  * the delete gets its tombstone. Refusals return zero rows. Audited.
  */

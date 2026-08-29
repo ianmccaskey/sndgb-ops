@@ -98,27 +98,43 @@ const QTY_RE = /^\d+(?:\.\d{1,2})?$/;
 //   actor = who CAPTURED the photo: a different admin may run the retry
 //     on a shared browser; uploads carry the original capturer or the
 //     audit trail would misattribute evidence provenance.
-// When persistence itself fails (private mode, origin quota full),
-// entries fall back to the module-level memStash — surviving dialog
-// close/reopen but NOT a page reload — and the operator is told exactly
-// that instead of a false "saved on this device".
+// When persistence itself fails (private mode, origin quota full), the
+// module keeps the DELTA against what localStorage actually holds: an
+// override map (newest version of every key that differs) plus removal
+// tombstones (keys deleted but still persisted). readStash merges the
+// persisted snapshot through that delta, so updates AND removals of
+// already-persisted entries survive a failed write — a photo the UI
+// moved, removed, or approved cannot snap back to its stale persisted
+// state. The delta lives only for the page's lifetime, and the operator
+// is told exactly that instead of a false "saved on this device".
 type StashedPhoto = CapturedPhoto & { shipment_id: number | null; order_id: number; ts: number; actor: string; key: string; recovered?: boolean };
 const STASH_KEY = 'sndgb.pendingShipPhotos';
 const newStashKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-let memStash: StashedPhoto[] = [];
+let memOverrides = new Map<string, StashedPhoto>();
+let memRemovals = new Set<string>();
 const readPersisted = (): StashedPhoto[] => {
   try { return JSON.parse(localStorage.getItem(STASH_KEY) || '[]') as StashedPhoto[]; } catch { return []; }
 };
-const readStash = (): StashedPhoto[] => [...readPersisted(), ...memStash];
+const readStash = (): StashedPhoto[] => {
+  const merged = new Map<string, StashedPhoto>();
+  for (const p of readPersisted()) if (!memRemovals.has(p.key)) merged.set(p.key, p);
+  for (const [k, v] of memOverrides) merged.set(k, v);
+  return [...merged.values()];
+};
 // low-level commit; true = every entry durably persisted
 const commitStash = (items: StashedPhoto[]): boolean => {
   try {
     localStorage.setItem(STASH_KEY, JSON.stringify(items));
-    memStash = [];
+    memOverrides = new Map();
+    memRemovals = new Set();
     return true;
   } catch {
-    const persisted = readPersisted();
-    memStash = items.filter(i => !persisted.some(p => p.key === i.key));
+    // record the full desired state as the delta vs the persisted
+    // snapshot: every desired entry overrides, every persisted key not
+    // desired is a removal tombstone
+    const itemKeys = new Set(items.map(i => i.key));
+    memOverrides = new Map(items.map(i => [i.key, i]));
+    memRemovals = new Set(readPersisted().map(p => p.key).filter(k => !itemKeys.has(k)));
     return false;
   }
 };
@@ -225,7 +241,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // 'refused' = the server said no (quota full, shipment voided or gone) —
   // retrying the same payload cannot succeed. 'error' = ambiguous transport
   // failure — the insert MAY have committed; the server's same-content
-  // replay (add_shipment_photo md5 short-circuit) makes retrying safe.
+  // replay (add_shipment_photo SHA-256 short-circuit) makes retrying safe.
   type UploadResult = 'ok' | 'refused' | 'error';
   const tryUpload = async (shipmentId: number, ph: CapturedPhoto, actor: string = userName, replay = false): Promise<UploadResult> => {
     try {
