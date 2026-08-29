@@ -13,9 +13,11 @@ import setShipmentRefund from '@/actions/fulfillment/setShipmentRefund';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
 import addShipmentPhoto from '@/actions/fulfillment/addShipmentPhoto';
 import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
+import getShipmentPhoto from '@/actions/fulfillment/getShipmentPhoto';
 import deleteShipmentPhoto from '@/actions/fulfillment/deleteShipmentPhoto';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { compressImageToDataUrl } from '@/lib/imageCapture';
+import type { CapturedPhoto } from '@/lib/imageCapture';
 import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
@@ -105,9 +107,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [doMarkPushed] = useMutateAction(markShipmentPushed);
   const [doAddPhoto] = useMutateAction(addShipmentPhoto);
   const [doDeletePhoto] = useMutateAction(deleteShipmentPhoto);
+  const [doGetPhoto] = useMutateAction(getShipmentPhoto);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [rawPhotos, , , reloadPhotos] = useLoadAction(listShipmentPhotos, [order.id], { order_id: order.id });
-  const photos = rows<{ id: number; shipment_id: number; image_data: string; created_by: string | null; created_at: string }>(rawPhotos);
+  const photos = rows<{ id: number; shipment_id: number; thumb_data: string; created_by: string | null; created_at: string }>(rawPhotos);
   // read action invoked imperatively (getOrderTxRefs precedent): the push's
   // fully-shipped decision needs a JUST-IN-TIME authoritative read, never
   // the modal's hook state
@@ -150,15 +153,56 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [recoverTxn, setRecoverTxn] = useState<Record<number, string>>({});
   const [rowMsg, setRowMsg] = useState<Record<number, string>>({});
   // ---- package photos: captured on the phone BEFORE shipping, held in
-  // memory, and attached to the shipment record the moment it exists ----
-  const [pendingPhotos, setPendingPhotos] = useState<string[]>([]);
+  // memory, attached to the shipment record the moment it exists. Failed
+  // uploads STASH durably in localStorage (camera captures are ephemeral
+  // File objects — a closed modal must not lose the only copy) and are
+  // auto-retried when the modal reopens. ----
+  const [pendingPhotos, setPendingPhotos] = useState<CapturedPhoto[]>([]);
   const [photoMsg, setPhotoMsg] = useState('');
   const [photoBusy, setPhotoBusy] = useState(false);
   const [viewPhoto, setViewPhoto] = useState<string | null>(null);
-  // where the NEXT captured files go: the pre-ship pending list, or a
-  // direct attach to an existing shipment row
   const photoTarget = useRef<'pending' | number>('pending');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  type StashedPhoto = CapturedPhoto & { shipment_id: number; order_id: number; ts: number };
+  const STASH_KEY = 'sndgb.pendingShipPhotos';
+  const readStash = (): StashedPhoto[] => {
+    try { return JSON.parse(localStorage.getItem(STASH_KEY) || '[]') as StashedPhoto[]; } catch { return []; }
+  };
+  const writeStash = (items: StashedPhoto[]) => {
+    try { localStorage.setItem(STASH_KEY, JSON.stringify(items)); } catch { /* quota — the visible message still tells the operator to re-take */ }
+  };
+
+  const tryUpload = async (shipmentId: number, ph: CapturedPhoto): Promise<boolean> => {
+    try {
+      const res = await doAddPhoto({ shipment_id: shipmentId, image_data: ph.full, thumb_data: ph.thumb, actor: userName }) as unknown[] | null;
+      return Array.isArray(res) ? res.length > 0 : !!res;
+    } catch {
+      return false;
+    }
+  };
+
+  // auto-retry any stashed failures for this order's shipments on open
+  const stashRetried = useRef(false);
+  useEffect(() => {
+    if (stashRetried.current) return;
+    stashRetried.current = true;
+    (async () => {
+      const stash = readStash();
+      const mine = stash.filter(s => s.order_id === order.id);
+      if (mine.length === 0) return;
+      const still: StashedPhoto[] = stash.filter(s => s.order_id !== order.id);
+      let recovered = 0;
+      for (const s of mine) {
+        if (await tryUpload(s.shipment_id, s)) recovered += 1;
+        else still.push(s);
+      }
+      writeStash(still);
+      if (recovered > 0) { setPhotoMsg(`${recovered} previously failed photo(s) attached.`); reloadPhotos(); }
+      else if (mine.length > 0) setPhotoMsg(`${mine.length} saved photo(s) still could not attach — they stay saved on this device; retry by reopening this dialog.`);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order.id]);
 
   const capturePhotos = (target: 'pending' | number) => {
     photoTarget.current = target;
@@ -172,12 +216,16 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     try {
       for (const f of Array.from(files)) {
         try {
-          const url = await compressImageToDataUrl(f);
+          const ph = await compressImageToDataUrl(f);
           if (photoTarget.current === 'pending') {
-            setPendingPhotos(p => [...p, url]);
+            setPendingPhotos(p => [...p, ph]);
           } else {
-            const res = await doAddPhoto({ shipment_id: photoTarget.current, image_data: url, actor: userName }) as unknown[] | null;
-            if (!(Array.isArray(res) ? res.length > 0 : !!res)) errors.push(`${f.name}: refused (shipment gone/voided, or the image is too large).`);
+            const ok = await tryUpload(photoTarget.current, ph);
+            if (!ok) {
+              // durable stash — the camera capture may be the only copy
+              writeStash([...readStash(), { ...ph, shipment_id: photoTarget.current, order_id: order.id, ts: Date.now() }]);
+              errors.push(`${f.name}: did not attach (quota reached, shipment voided, or a transport error) — saved on this device and auto-retried next time this dialog opens.`);
+            }
           }
         } catch (e: unknown) {
           errors.push(e instanceof Error ? e.message : `${f.name}: failed`);
@@ -192,28 +240,38 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   };
 
   // attach the pre-ship captures to the shipment that just came into
-  // existence; a failed upload keeps its photo in the pending list with a
-  // visible message — never silently dropped, never blocks the shipment
+  // existence; failures stash durably and are auto-retried — never
+  // silently dropped, never blocking the shipment
   const uploadPendingPhotos = async (shipmentId: number) => {
     if (pendingPhotos.length === 0) return;
-    const failed: string[] = [];
-    for (const url of pendingPhotos) {
-      try {
-        const res = await doAddPhoto({ shipment_id: shipmentId, image_data: url, actor: userName }) as unknown[] | null;
-        if (!(Array.isArray(res) ? res.length > 0 : !!res)) failed.push(url);
-      } catch {
-        failed.push(url);
-      }
+    const failed: CapturedPhoto[] = [];
+    for (const ph of pendingPhotos) {
+      if (!(await tryUpload(shipmentId, ph))) failed.push(ph);
     }
-    setPendingPhotos(failed);
-    if (failed.length > 0) setPhotoMsg(`${failed.length} photo(s) did not attach — use "+ photo" on the shipment below to retry them from your phone, or re-take.`);
+    setPendingPhotos([]);
+    if (failed.length > 0) {
+      writeStash([...readStash(), ...failed.map(ph => ({ ...ph, shipment_id: shipmentId, order_id: order.id, ts: Date.now() }))]);
+      setPhotoMsg(`${failed.length} photo(s) did not attach — saved on this device and auto-retried next time this dialog opens.`);
+    }
     reloadPhotos();
   };
 
-  const removePhoto = async (photoId: number) => {
+  const removePhoto = async (photoId: number, shipmentId: number) => {
     if (!window.confirm('Remove this package photo? The removal is audited.')) return;
-    await doDeletePhoto({ photo_id: photoId, actor: userName }).catch(() => null);
+    await doDeletePhoto({ photo_id: photoId, shipment_id: shipmentId, actor: userName }).catch(() => null);
     reloadPhotos();
+  };
+
+  // the full image loads on demand — list rows carry only thumbnails
+  const enlargePhoto = async (photoId: number) => {
+    try {
+      const res = await doGetPhoto({ photo_id: photoId }) as { image_data?: string }[] | null;
+      const row = Array.isArray(res) && res.length > 0 ? res[0] : null;
+      if (row?.image_data) setViewPhoto(String(row.image_data));
+      else setPhotoMsg('Could not load the full photo — it may have been removed.');
+    } catch {
+      setPhotoMsg('Could not load the full photo — retry.');
+    }
   };
 
   // refs, not state: React re-renders lag double-clicks, and these
@@ -826,9 +884,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             </div>
             {pendingPhotos.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
-                {pendingPhotos.map((url, i) => (
+                {pendingPhotos.map((ph, i) => (
                   <span key={i} className="relative">
-                    <img src={url} alt={`package photo ${i + 1}`} className="h-14 w-14 object-cover rounded border cursor-pointer" onClick={() => setViewPhoto(url)} />
+                    <img src={ph.thumb} alt={`package photo ${i + 1}`} className="h-14 w-14 object-cover rounded border cursor-pointer" onClick={() => setViewPhoto(ph.full)} />
                     <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove before shipping"
                       onClick={() => setPendingPhotos(p => p.filter((_, j) => j !== i))}>×</button>
                   </span>
@@ -934,9 +992,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     <div className="flex flex-wrap gap-1.5">
                       {photos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
                         <span key={ph.id} className="relative">
-                          <img src={ph.image_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => setViewPhoto(ph.image_data)} />
+                          <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id)} />
                           <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
-                            onClick={() => removePhoto(ph.id)}>×</button>
+                            onClick={() => removePhoto(ph.id, s.id)}>×</button>
                         </span>
                       ))}
                     </div>
@@ -959,9 +1017,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     <div className="flex flex-wrap gap-1.5">
                       {photos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
                         <span key={ph.id} className="relative">
-                          <img src={ph.image_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => setViewPhoto(ph.image_data)} />
+                          <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id)} />
                           <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
-                            onClick={() => removePhoto(ph.id)}>×</button>
+                            onClick={() => removePhoto(ph.id, s.id)}>×</button>
                         </span>
                       ))}
                     </div>

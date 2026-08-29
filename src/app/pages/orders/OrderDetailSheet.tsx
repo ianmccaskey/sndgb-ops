@@ -18,6 +18,7 @@ import setOrderItemDirectShip from '@/actions/orders/setOrderItemDirectShip';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
 import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
+import getShipmentPhoto from '@/actions/fulfillment/getShipmentPhoto';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
@@ -105,8 +106,17 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [rawSheetWallets] = useLoadAction(listWallets, [open], {}, { enabled: open });
   const [rawShipRows, , , reloadShipRows] = useLoadAction(listOrderShipments, [orderId], { order_id: orderId }, { enabled: open });
   const [rawShipPhotos] = useLoadAction(listShipmentPhotos, [orderId], { order_id: orderId }, { enabled: open });
-  const shipPhotos = rows<{ id: number; shipment_id: number; image_data: string }>(rawShipPhotos);
+  const shipPhotos = rows<{ id: number; shipment_id: number; thumb_data: string }>(rawShipPhotos);
   const [viewShipPhoto, setViewShipPhoto] = useState<string | null>(null);
+  const [doGetShipPhoto] = useMutateAction(getShipmentPhoto);
+  // list rows carry thumbnails only; the full image loads on demand
+  const enlargeShipPhoto = async (photoId: number) => {
+    try {
+      const res = await doGetShipPhoto({ photo_id: photoId }) as { image_data?: string }[] | null;
+      const row = Array.isArray(res) && res.length > 0 ? res[0] : null;
+      if (row?.image_data) setViewShipPhoto(String(row.image_data));
+    } catch { /* thumbnail stays; nothing to show */ }
+  };
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
   const campaignProducts = rows<{ sku_code: string; gb_price_usd: string; status: string }>(rawCampaignProducts)
@@ -1637,8 +1647,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     {shipPhotos.filter(ph => Number(ph.shipment_id) === s.id).length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {shipPhotos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
-                          <img key={ph.id} src={ph.image_data} alt="package photo" className="h-10 w-10 object-cover rounded border cursor-pointer"
-                            onClick={() => setViewShipPhoto(ph.image_data)} />
+                          <img key={ph.id} src={ph.thumb_data} alt="package photo" className="h-10 w-10 object-cover rounded border cursor-pointer"
+                            onClick={() => enlargeShipPhoto(ph.id)} />
                         ))}
                       </div>
                     )}

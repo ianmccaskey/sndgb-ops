@@ -7,31 +7,40 @@
  * rare — a 1600px JPEG at quality 0.5 is far smaller).
  */
 const MAX_EDGE = 1600;
+const THUMB_EDGE = 240;
 const TARGET_BYTES = 900_000;         // data-URL length target (~675KB binary)
 const QUALITIES = [0.8, 0.7, 0.6, 0.5];
 
-export async function compressImageToDataUrl(file: File): Promise<string> {
+export type CapturedPhoto = { full: string; thumb: string };
+
+const drawScaled = (bitmap: ImageBitmap, maxEdge: number): HTMLCanvasElement => {
+  const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Image processing is unavailable in this browser.');
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return canvas;
+};
+
+export async function compressImageToDataUrl(file: File): Promise<CapturedPhoto> {
   if (!file.type.startsWith('image/')) {
     throw new Error(`"${file.name}" is not an image.`);
   }
   const bitmap = await createImageBitmap(file).catch(() => null);
   if (!bitmap) throw new Error(`Could not read "${file.name}" as an image.`);
   try {
-    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
-    const w = Math.max(1, Math.round(bitmap.width * scale));
-    const h = Math.max(1, Math.round(bitmap.height * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Image processing is unavailable in this browser.');
-    ctx.drawImage(bitmap, 0, 0, w, h);
+    const canvas = drawScaled(bitmap, MAX_EDGE);
+    // the small thumbnail rides in list views; the full image loads only
+    // on demand when enlarged
+    const thumb = drawScaled(bitmap, THUMB_EDGE).toDataURL('image/jpeg', 0.7);
     for (const q of QUALITIES) {
       const url = canvas.toDataURL('image/jpeg', q);
-      if (url.length <= TARGET_BYTES) return url;
+      if (url.length <= TARGET_BYTES) return { full: url, thumb };
     }
     const last = canvas.toDataURL('image/jpeg', 0.4);
-    if (last.length <= 1_400_000) return last;
+    if (last.length <= 1_400_000) return { full: last, thumb };
     throw new Error(`"${file.name}" would not compress small enough — try a closer, simpler shot.`);
   } finally {
     bitmap.close();
