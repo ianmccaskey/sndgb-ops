@@ -188,7 +188,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // uploads STASH durably in localStorage (camera captures are ephemeral
   // File objects — a closed modal must not lose the only copy) and are
   // auto-retried when the modal reopens. ----
-  const [pendingPhotos, setPendingPhotos] = useState<CapturedPhoto[]>([]);
+  // pending entries may carry the CAPTURING admin (photos recovered from
+  // the stash keep their original actor through a later attach)
+  const [pendingPhotos, setPendingPhotos] = useState<(CapturedPhoto & { actor?: string })[]>([]);
   const [photoMsg, setPhotoMsg] = useState('');
   const [photoBusy, setPhotoBusy] = useState(false);
   const [viewPhoto, setViewPhoto] = useState<string | null>(null);
@@ -200,9 +202,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // failure — the insert MAY have committed; the server's same-content
   // replay (add_shipment_photo md5 short-circuit) makes retrying safe.
   type UploadResult = 'ok' | 'refused' | 'error';
-  const tryUpload = async (shipmentId: number, ph: CapturedPhoto, actor: string = userName): Promise<UploadResult> => {
+  const tryUpload = async (shipmentId: number, ph: CapturedPhoto, actor: string = userName, replay = false): Promise<UploadResult> => {
     try {
-      const res = await doAddPhoto({ shipment_id: shipmentId, image_data: ph.full, thumb_data: ph.thumb, actor }) as unknown[] | null;
+      const res = await doAddPhoto({ shipment_id: shipmentId, image_data: ph.full, thumb_data: ph.thumb, actor, replay }) as unknown[] | null;
       return (Array.isArray(res) ? res.length > 0 : !!res) ? 'ok' : 'refused';
     } catch {
       return 'error';
@@ -220,18 +222,26 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (mine.length === 0) return;
       const others = stash.filter(s => s.order_id !== order.id);
       const still: StashedPhoto[] = [...others];
-      let recovered = 0, dropped = 0;
+      let recovered = 0, moved = 0;
       for (const s of mine) {
-        const r = await tryUpload(s.shipment_id, s, s.actor || userName);
+        // replay=true: the server refuses to resurrect an image the
+        // operator explicitly deleted from that shipment
+        const r = await tryUpload(s.shipment_id, s, s.actor || userName, true);
         if (r === 'ok') recovered += 1;
-        else if (r === 'refused') dropped += 1; // permanent: shipment gone or quota full
-        else still.push(s);
+        else if (r === 'refused') {
+          // shipment gone (draft recreated?), quota full, or deliberately
+          // deleted — never silently dropped: the photo moves to the
+          // visible pending list, where the operator attaches it to a
+          // current shipment or removes it explicitly
+          moved += 1;
+          setPendingPhotos(p => [...p, { full: s.full, thumb: s.thumb, actor: s.actor || userName }]);
+        } else still.push(s);
       }
       const durable = writeStash(still);
       const kept = still.length - others.length;
       const parts: string[] = [];
       if (recovered > 0) parts.push(`${recovered} previously failed photo(s) attached.`);
-      if (dropped > 0) parts.push(`${dropped} saved photo(s) were refused (shipment deleted or quota full) and removed from the retry queue.`);
+      if (moved > 0) parts.push(`${moved} saved photo(s) could not attach to their original shipment (deleted, quota full, or previously removed) — moved to the pending list below: they will ride the next shipment, or remove them.`);
       if (kept > 0) parts.push(durable
         ? `${kept} saved photo(s) still could not attach — they stay saved on this device; retry by reopening this dialog.`
         : `${kept} photo(s) still could not attach AND this device's storage is unavailable — they survive only while this page stays open. Keep the app open and retry, or re-take them.`);
@@ -285,10 +295,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // silently dropped, never blocking the shipment
   const uploadPendingPhotos = async (shipmentId: number) => {
     if (pendingPhotos.length === 0) return;
-    const errored: CapturedPhoto[] = [];
-    const refused: CapturedPhoto[] = [];
+    const errored: (CapturedPhoto & { actor?: string })[] = [];
+    const refused: (CapturedPhoto & { actor?: string })[] = [];
     for (const ph of pendingPhotos) {
-      const r = await tryUpload(shipmentId, ph);
+      const r = await tryUpload(shipmentId, ph, ph.actor ?? userName);
       if (r === 'error') errored.push(ph);
       else if (r === 'refused') refused.push(ph);
     }
@@ -298,7 +308,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     const parts: string[] = [];
     if (refused.length > 0) parts.push(`${refused.length} photo(s) refused (quota is 5 photos / 5MB per shipment) — they remain pending.`);
     if (errored.length > 0) {
-      const durable = writeStash([...readStash(), ...errored.map(ph => ({ ...ph, shipment_id: shipmentId, order_id: order.id, ts: Date.now(), actor: userName }))]);
+      const durable = writeStash([...readStash(), ...errored.map(ph => ({ ...ph, shipment_id: shipmentId, order_id: order.id, ts: Date.now(), actor: ph.actor ?? userName }))]);
       parts.push(durable
         ? `${errored.length} photo(s) did not attach — saved on this device and auto-retried next time this dialog opens.`
         : `${errored.length} photo(s) did not attach AND could not be saved to this device (storage unavailable) — they survive only while this page stays open. Reopen this dialog to retry before closing the app.`);

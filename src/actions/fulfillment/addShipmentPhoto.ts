@@ -10,7 +10,11 @@ import { action } from '@uibakery/data';
  * shipment exists and not refund-voided, both payloads are image data
  * URLs within their size caps, and the POST-insert totals stay within
  * the quota (5 photos / 5MB aggregate per shipment — the incoming
- * photo counts). Refusals return zero rows. Audited with the byte
+ * photo counts). replay=true marks the AUTOMATIC retry path: a replay
+ * whose exact image bytes were explicitly deleted from this shipment
+ * (per the audit tombstones) refuses instead of resurrecting removed
+ * evidence; a deliberate operator add passes replay=false and may
+ * always re-attach. Refusals return zero rows. Audited with the byte
  * length, never the image.
  */
 function addShipmentPhoto() {
@@ -21,7 +25,8 @@ function addShipmentPhoto() {
         {{params.shipment_id}}::bigint,
         {{params.image_data}}::text,
         {{params.thumb_data}}::text,
-        {{params.actor}}::text
+        {{params.actor}}::text,
+        {{params.replay}}::boolean
       )
     `,
   });
