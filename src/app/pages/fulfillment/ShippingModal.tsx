@@ -82,8 +82,13 @@ const QTY_RE = /^\d+(?:\.\d{1,2})?$/;
 // explicit operator removal.
 //   shipment_id = number: a failed upload bound to that shipment,
 //     auto-replayed (replay=true) when the dialog reopens.
-//   shipment_id = null: order-scoped pending (fresh capture or a refused
-//     retry) — rides the next shipment the operator creates.
+//   shipment_id = null: order-scoped pending. Fresh captures (the box
+//     being packed right now) auto-attach to the shipment the operator
+//     creates. Entries with recovered=true — photos refused by the
+//     shipment they were CAPTURED FOR (deleted draft, quota, void) —
+//     NEVER auto-attach: evidence must not migrate to a different box
+//     silently, so each one requires an explicit per-photo operator
+//     choice ("use" for the next shipment, or remove).
 //   key: unique per entry; every stash mutation is a SYNCHRONOUS fresh
 //     read -> mutate -> write keyed by it, so overlapping async flows in
 //     this tab can never clobber each other with stale snapshots
@@ -97,7 +102,7 @@ const QTY_RE = /^\d+(?:\.\d{1,2})?$/;
 // entries fall back to the module-level memStash — surviving dialog
 // close/reopen but NOT a page reload — and the operator is told exactly
 // that instead of a false "saved on this device".
-type StashedPhoto = CapturedPhoto & { shipment_id: number | null; order_id: number; ts: number; actor: string; key: string };
+type StashedPhoto = CapturedPhoto & { shipment_id: number | null; order_id: number; ts: number; actor: string; key: string; recovered?: boolean };
 const STASH_KEY = 'sndgb.pendingShipPhotos';
 const newStashKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 let memStash: StashedPhoto[] = [];
@@ -252,16 +257,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           if (!stashRemove(s.key)) allDurable = false;
         } else if (r === 'refused') {
           // shipment gone (draft recreated?), quota full, or deliberately
-          // deleted — the entry STAYS DURABLE, just unbound: it becomes a
-          // visible pending photo the operator reattaches or removes
+          // deleted — the entry STAYS DURABLE, unbound and marked
+          // recovered: visible, but it will not ride another box unless
+          // the operator explicitly says so
           moved += 1;
-          if (!stashUpsert({ ...s, shipment_id: null })) allDurable = false;
+          if (!stashUpsert({ ...s, shipment_id: null, recovered: true })) allDurable = false;
         } else kept += 1; // stays bound in the stash; retried on next open
       }
       refreshPendingView();
       const parts: string[] = [];
       if (recovered > 0) parts.push(`${recovered} previously failed photo(s) attached.`);
-      if (moved > 0) parts.push(`${moved} saved photo(s) could not attach to their original shipment (deleted, quota full, or previously removed) — now in the pending list below: they will ride the next shipment, or remove them.`);
+      if (moved > 0) parts.push(`${moved} saved photo(s) could not attach to their original shipment (deleted, quota full, or previously removed) — now in the pending list below marked "recovered". They will NOT attach automatically: press "use" on each to allow it onto the next shipment, or remove it.`);
       if (kept > 0) parts.push(`${kept} saved photo(s) still could not attach — they stay saved on this device and retry when this dialog reopens.`);
       if (!allDurable) parts.push(`Warning: this device's storage is unavailable — unattached photos survive only while this page stays open.`);
       if (parts.length > 0) setPhotoMsg(parts.join(' '));
@@ -295,11 +301,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             if (r === 'ok') {
               // attached and verified — nothing to keep
             } else if (r === 'refused') {
-              // stays durable and unbound: visible in the pending list for
-              // explicit reattach or removal
-              const durable = stashUpsert(entry);
+              // stays durable, unbound and RECOVERED: visible, never
+              // auto-attached to a different box
+              const durable = stashUpsert({ ...entry, recovered: true });
               refreshPendingView();
-              errors.push(`${f.name}: refused — this shipment's photo quota (5 photos / 5MB) is full or the shipment was voided. Moved to the pending list${durable ? '' : ' (storage unavailable — it survives only while this page stays open)'}: it will ride the next shipment, or remove it.`);
+              errors.push(`${f.name}: refused — this shipment's photo quota (5 photos / 5MB) is full or the shipment was voided. Kept in the pending list marked "recovered"${durable ? '' : ' (storage unavailable — it survives only while this page stays open)'}: press "use" to allow it onto the next shipment, or remove it.`);
             } else {
               const durable = stashUpsert({ ...entry, shipment_id: shipmentId });
               errors.push(durable
@@ -325,7 +331,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // ambiguous error re-binds it to this shipment for auto-retry — never
   // silently dropped, never blocking the shipment
   const uploadPendingPhotos = async (shipmentId: number) => {
-    const mine = readStash().filter(s => s.order_id === order.id && s.shipment_id === null);
+    // recovered entries are excluded: evidence never migrates to a
+    // different box without the operator's explicit per-photo "use"
+    const mine = readStash().filter(s => s.order_id === order.id && s.shipment_id === null && !s.recovered);
     if (mine.length === 0) return;
     let refused = 0, errored = 0, attached = 0, allDurable = true;
     for (const s of mine) {
@@ -333,15 +341,19 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (r === 'ok') {
         attached += 1;
         if (!stashRemove(s.key)) allDurable = false;
-      } else if (r === 'refused') refused += 1; // stays unbound + visible
-      else {
+      } else if (r === 'refused') {
+        // refused by the very shipment it was meant for — it becomes a
+        // recovered entry, visible and never auto-consumed again
+        refused += 1;
+        if (!stashUpsert({ ...s, recovered: true })) allDurable = false;
+      } else {
         errored += 1;
         if (!stashUpsert({ ...s, shipment_id: shipmentId })) allDurable = false;
       }
     }
     refreshPendingView();
     const parts: string[] = [];
-    if (refused > 0) parts.push(`${refused} photo(s) refused (quota is 5 photos / 5MB per shipment) — they remain pending.`);
+    if (refused > 0) parts.push(`${refused} photo(s) refused (quota is 5 photos / 5MB per shipment) — kept pending, marked "recovered"; press "use" to allow one onto the next shipment.`);
     if (errored > 0) parts.push(`${errored} photo(s) did not attach — saved on this device and auto-retried next time this dialog opens.`);
     if (!allDurable) parts.push(`Warning: this device's storage is unavailable — unattached photos survive only while this page stays open.`);
     if (parts.length > 0) setPhotoMsg(parts.join(' '));
@@ -978,7 +990,14 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
               <div className="flex flex-wrap gap-1.5">
                 {pendingPhotos.map((ph, i) => (
                   <span key={ph.key} className="relative">
-                    <img src={ph.thumb} alt={`package photo ${i + 1}`} className="h-14 w-14 object-cover rounded border cursor-pointer" onClick={() => setViewPhoto(ph.full)} />
+                    <img src={ph.thumb} alt={`package photo ${i + 1}`}
+                      className={`h-14 w-14 object-cover rounded border cursor-pointer ${ph.recovered ? 'ring-2 ring-amber-400' : ''}`}
+                      title={ph.recovered ? 'Recovered from a failed or removed shipment — will NOT attach automatically' : undefined}
+                      onClick={() => setViewPhoto(ph.full)} />
+                    {ph.recovered && (
+                      <button className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-amber-100 text-amber-900 border border-amber-400 px-1.5 text-[9px] leading-tight" title="Allow this photo to attach to the next shipment you create"
+                        onClick={() => { stashUpsert({ ...ph, recovered: false }); refreshPendingView(); }}>use</button>
+                    )}
                     <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove before shipping"
                       onClick={() => { stashRemove(ph.key); refreshPendingView(); }}>×</button>
                   </span>
