@@ -54,7 +54,10 @@ export type PushShipmentDeps = {
 
 export type PushOutcome = { ok: boolean; message: string };
 
-const today = () => new Date().toISOString().slice(0, 10);
+// the operator's LOCAL calendar date (en-CA renders YYYY-MM-DD): an
+// evening shipment must not be stamped with tomorrow's UTC date in the
+// ordering app or the note trail
+const today = () => new Date().toLocaleDateString('en-CA');
 
 export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOutcome> {
   if (!d.cfg.token) return { ok: false, message: 'Ordering-app push skipped — no Base44 token in Settings. The shipment is saved; use "Push upstream" once the token is set.' };

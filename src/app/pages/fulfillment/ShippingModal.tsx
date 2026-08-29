@@ -433,6 +433,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     }
   };
 
+  // EVERY successful finalize — primary, retry, recovery — converges here:
+  // session pool decrement, reloads, and the automatic Base44 push. A
+  // recovered shipment must reach the same postconditions as a happy-path
+  // one, or Base44 silently lacks its tracking until someone notices.
+  const shipmentLanded = async (s: ShipmentRow, carrier: string, tracking: string) => {
+    const items = (s.items || []).map(i => ({ order_item_id: Number(i.order_item_id), qty: String(i.qty), sku: i.sku_code }));
+    onShipped((s.items || []).map(i => ({ product_id: Number(i.product_id), qty: Number(i.qty) })));
+    reloadPackable(); reloadShipments(); reload();
+    await runPush(s.id, carrier, tracking, items, packableAfter(items));
+  };
+
   // ---- draft recovery + refund controls (ports of the transfers panel) ----
   const retryFinalize = async (s: ShipmentRow) => {
     const pending = pendingFinalize[s.id];
@@ -441,7 +452,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (fin.ok) {
       setPendingFinalize(m => { const n = { ...m }; delete n[s.id]; return n; });
       setRowMsg(m => ({ ...m, [s.id]: finWarnings(fin) || 'Saved.' }));
-      reloadPackable(); reloadShipments(); reload();
+      await shipmentLanded(s, s.carrier || '', pending.trackingNumber || '');
     } else setRowMsg(m => ({ ...m, [s.id]: 'Save failed again — the label URL is preserved here; keep retrying.' }));
   };
 
@@ -456,7 +467,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         return;
       }
       const fin = await persistFinalize(s.id, result, result.rateId || '');
-      if (fin.ok) { setRowMsg(m => ({ ...m, [s.id]: 'Recovered and saved.' })); reloadPackable(); reloadShipments(); reload(); }
+      if (fin.ok) { setRowMsg(m => ({ ...m, [s.id]: finWarnings(fin) || 'Recovered and saved.' })); await shipmentLanded(s, s.carrier || '', result.trackingNumber || ''); }
       else setRowMsg(m => ({ ...m, [s.id]: 'Transaction found but saving failed — retry.' }));
     } catch (e: unknown) {
       setRowMsg(m => ({ ...m, [s.id]: e instanceof Error ? e.message : 'Recovery failed' }));
@@ -476,7 +487,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       }
       if (existing) {
         const fin0 = await persistFinalize(s.id, existing, s.shippo_rate_id);
-        if (fin0.ok) { setRowMsg(m => ({ ...m, [s.id]: 'An existing label was found and recovered.' })); reloadPackable(); reloadShipments(); reload(); }
+        if (fin0.ok) { setRowMsg(m => ({ ...m, [s.id]: finWarnings(fin0) || 'An existing label was found and recovered.' })); await shipmentLanded(s, s.carrier || '', existing.trackingNumber || ''); }
         else setRowMsg(m => ({ ...m, [s.id]: `An existing label was found (${existing.transactionId}) but saving failed — retry.` }));
         return;
       }
@@ -501,7 +512,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         throw e;
       }
       const fin = await persistFinalize(s.id, result, s.shippo_rate_id);
-      if (fin.ok) { setRowMsg(m => ({ ...m, [s.id]: 'Purchased and saved.' })); reloadPackable(); reloadShipments(); reload(); }
+      if (fin.ok) { setRowMsg(m => ({ ...m, [s.id]: finWarnings(fin) || 'Purchased and saved.' })); await shipmentLanded(s, s.carrier || '', result.trackingNumber || ''); }
       else {
         setPendingFinalize(m => ({ ...m, [s.id]: result }));
         setRowMsg(m => ({ ...m, [s.id]: `Label purchased (${result.transactionId}) but saving failed — ${result.labelUrl} — use Retry save.` }));
@@ -524,9 +535,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (existing) {
         const fin = await persistFinalize(s.id, existing, s.shippo_rate_id);
         setRowMsg(m => ({ ...m, [s.id]: fin.ok
-          ? 'A PURCHASED label exists for this draft — recovered instead of deleting.'
+          ? (finWarnings(fin) || 'A PURCHASED label exists for this draft — recovered instead of deleting.')
           : `A PURCHASED label exists (${existing.transactionId}) — recovery save failed, retry.` }));
-        reloadPackable(); reloadShipments(); reload();
+        if (fin.ok) await shipmentLanded(s, s.carrier || '', existing.trackingNumber || '');
+        else { reloadPackable(); reloadShipments(); reload(); }
         return;
       }
     } catch (e: unknown) {
