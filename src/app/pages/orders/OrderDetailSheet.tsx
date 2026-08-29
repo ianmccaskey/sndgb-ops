@@ -20,7 +20,7 @@ import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
 import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
 import getShipmentPhoto from '@/actions/fulfillment/getShipmentPhoto';
 import addShipmentPhoto from '@/actions/fulfillment/addShipmentPhoto';
-import { readStash, stashRemove } from '@/lib/photoStash';
+import { readStash, stashRemove, stashUpsert } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
@@ -141,7 +141,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       const res = await doAddShipPhoto({ shipment_id: target, image_data: s.full, thumb_data: s.thumb, actor: s.actor || userName, replay: s.shipment_id != null }) as unknown[] | null;
       const ok = Array.isArray(res) ? res.length > 0 : !!res;
       if (ok) { stashRemove(s.key); setStrandedMsg('Photo attached.'); reloadShipPhotos(); }
-      else setStrandedMsg('The shipment refused this photo (deleted, quota full, or it was previously removed on purpose) — remove it here if it is no longer needed.');
+      else if (s.shipment_id != null) {
+        // the original shipment refuses replay (deleted, voided, quota, or
+        // the photo was deliberately removed) — mirror the ship dialog:
+        // the entry becomes unbound + recovered, so "Attach" to a live
+        // shipment is offered instead of retrying a dead one forever
+        stashUpsert({ ...s, shipment_id: null, recovered: true });
+        setStrandedMsg('Its original shipment refused this photo (deleted, voided, quota full, or it was removed on purpose) — it is now attachable: use "Attach" to put it on the newest live shipment, or discard it.');
+      } else setStrandedMsg('The shipment refused this photo (quota full, voided, or it was previously removed on purpose) — remove it here if it is no longer needed.');
     } catch { setStrandedMsg('Upload failed — the photo stays saved on this device; retry.'); }
     refreshStranded();
   };
