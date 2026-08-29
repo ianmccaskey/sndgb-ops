@@ -76,7 +76,9 @@ export function ProductsPage() {
     try {
       const res = await doSetDigital({ product_id: p.id, digital: !p.digital, expected_digital: p.digital, actor: userName }) as unknown[] | null;
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
-        setWMsg(`${p.sku_code}: not changed — the flag was flipped in another session. Reloading.`);
+        setWMsg(!p.digital
+          ? `${p.sku_code}: not changed — either the flag was flipped in another session, or a shipment/draft box already holds attributed quantity of this product (hiding it mid-flight would strand packed work — void/refund those shipments first).`
+          : `${p.sku_code}: not changed — the flag was flipped in another session. Reloading.`);
       }
       reloadProducts();
     } catch (e: unknown) {

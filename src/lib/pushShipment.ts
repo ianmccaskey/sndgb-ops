@@ -75,8 +75,14 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   // shipped status, and never receive an upstream shipped_date from here.
   const packableLines = d.packable.filter(l => !l.direct_ship && !l.digital && Number(l.effective_qty) > 0);
   const directLines = d.packable.filter(l => l.direct_ship && !l.digital);
+  // zero-PHYSICAL orders are vacuously fully shipped (the order must have
+  // at least one line of any kind): an order whose only lines are digital
+  // has nothing left for fulfillment to withhold status on. In practice a
+  // push only runs after a shipment, which requires a physical line — the
+  // vacuous branch covers mid-life transitions (e.g. the last physical
+  // line removed after an earlier box).
   const fullyShipped =
-    (packableLines.length + directLines.length) > 0
+    d.packable.length > 0
     && packableLines.every(l => Number(l.shipped_qty) >= Number(l.effective_qty))
     && directLines.every(l => l.direct_fulfilled_at != null);
 
