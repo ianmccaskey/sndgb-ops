@@ -219,11 +219,20 @@ export function FulfillmentPage() {
                 <p className="font-medium">{r.order_number} {r.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 text-amber-600" />}</p>
                 <p className="text-sm truncate">{r.customer_name}</p>
               </div>
-              {stage === 'direct' ? (
-                <Button size="sm" className="h-7 text-xs shrink-0" disabled={saving} onClick={() => markDirect(r, true)}>Vendor shipped</Button>
-              ) : (
-                <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={() => setShipping(r)}>Ship</Button>
-              )}
+              <span className="flex gap-1 shrink-0">
+                {stage === 'direct' ? (
+                  <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => markDirect(r, true)}>Vendor shipped</Button>
+                ) : (
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShipping(r)}>Ship</Button>
+                )}
+                {stage !== 'direct' && r.direct_items_summary && !r.direct_outstanding && (
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" disabled={saving}
+                    title="Put the vendor-shipped items back in the Direct ship tab"
+                    onClick={() => markDirect(r, false)}>
+                    Undo direct
+                  </Button>
+                )}
+              </span>
             </div>
             <p className="text-xs text-muted-foreground">
               {r.address_line1}{r.address_line2 ? `, ${r.address_line2}` : ''} · {r.city}, {r.state_code} {r.postal_code}

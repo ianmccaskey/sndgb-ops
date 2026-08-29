@@ -63,6 +63,11 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   if (!d.cfg.token) return { ok: false, message: 'Ordering-app push skipped — no Base44 token in Settings. The shipment is saved; use "Push upstream" once the token is set.' };
   if (!d.externalId) return { ok: false, message: 'Ordering-app push skipped — this order has no ordering-app id (added locally?). The shipment is saved.' };
 
+  // ONE ship date per invocation: awaited network calls sit between the
+  // note writes and the shipped_date merge, and a push crossing local
+  // midnight must not record contradictory dates for the same shipment
+  const shipDate = today();
+
   // fully-shipped is computed from the FRESH packable rows the caller just
   // loaded — never from stale modal props
   const packableLines = d.packable.filter(l => !l.direct_ship && Number(l.effective_qty) > 0);
@@ -73,7 +78,7 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
     && directLines.every(l => l.direct_fulfilled_at != null);
 
   const contents = d.shippedItems.map(i => `${i.sku} x ${i.qty}`).join(', ');
-  const trackLine = `Shipped ${d.carrier.toUpperCase()} ${d.tracking}${contents ? ` — ${contents}` : ''} (${today()})`;
+  const trackLine = `Shipped ${d.carrier.toUpperCase()} ${d.tracking}${contents ? ` — ${contents}` : ''} (${shipDate})`;
 
   // the external product ids whose local lines are NOW fully shipped —
   // these upstream items get shipped_date
@@ -87,7 +92,7 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   try {
     await d.appendNote({
       order_id: d.orderId,
-      note: `[${today()}] ${d.userName} pushed shipment upstream: ${d.carrier.toUpperCase()} ${d.tracking}; items ${contents || '(none listed)'}; upstream status ${fullyShipped ? "-> 'shipped'" : 'unchanged (partial)'}.`,
+      note: `[${shipDate}] ${d.userName} pushed shipment upstream: ${d.carrier.toUpperCase()} ${d.tracking}; items ${contents || '(none listed)'}; upstream status ${fullyShipped ? "-> 'shipped'" : 'unchanged (partial)'}.`,
       detail: JSON.stringify({ shipment_id: d.shipmentId, tracking: d.tracking, fully_shipped: fullyShipped }),
       actor: d.userName,
     });
@@ -97,7 +102,7 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
 
   const followUp = async (line: string) => {
     try {
-      await d.appendNote({ order_id: d.orderId, note: `[${today()}] ${line}`, detail: JSON.stringify({ shipment_id: d.shipmentId }), actor: d.userName });
+      await d.appendNote({ order_id: d.orderId, note: `[${shipDate}] ${line}`, detail: JSON.stringify({ shipment_id: d.shipmentId }), actor: d.userName });
     } catch { /* the primary outcome message still reaches the operator */ }
   };
 
@@ -115,7 +120,7 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   const mergedItems: B44OrderItem[] = upstreamItems.map(it => {
     const pid = String(it.product_id ?? '');
     if (pid && shipExternalIds.has(pid) && !it.shipped_date) {
-      return { ...it, shipped_date: today() };
+      return { ...it, shipped_date: shipDate };
     }
     return it;
   });
