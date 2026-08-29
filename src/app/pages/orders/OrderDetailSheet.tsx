@@ -19,6 +19,9 @@ import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfi
 import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
 import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
 import getShipmentPhoto from '@/actions/fulfillment/getShipmentPhoto';
+import addShipmentPhoto from '@/actions/fulfillment/addShipmentPhoto';
+import { readStash, stashRemove } from '@/lib/photoStash';
+import type { StashedPhoto } from '@/lib/photoStash';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
@@ -105,7 +108,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [rawRefunds, , , reloadRefunds] = useLoadAction(listOrderRefunds, [orderId], { order_id: orderId }, { enabled: open });
   const [rawSheetWallets] = useLoadAction(listWallets, [open], {}, { enabled: open });
   const [rawShipRows, , , reloadShipRows] = useLoadAction(listOrderShipments, [orderId], { order_id: orderId }, { enabled: open });
-  const [rawShipPhotos] = useLoadAction(listShipmentPhotos, [orderId], { order_id: orderId }, { enabled: open });
+  const [rawShipPhotos, , , reloadShipPhotos] = useLoadAction(listShipmentPhotos, [orderId], { order_id: orderId }, { enabled: open });
   const shipPhotos = rows<{ id: number; shipment_id: number; thumb_data: string }>(rawShipPhotos);
   const [viewShipPhoto, setViewShipPhoto] = useState<string | null>(null);
   const [doGetShipPhoto] = useMutateAction(getShipmentPhoto);
@@ -116,6 +119,31 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       const row = Array.isArray(res) && res.length > 0 ? res[0] : null;
       if (row?.image_data) setViewShipPhoto(String(row.image_data));
     } catch { /* thumbnail stays; nothing to show */ }
+  };
+  // stranded-photo recovery: package captures saved on THIS DEVICE whose
+  // upload never verified. The ship dialog auto-replays them, but a fully
+  // shipped order may never open that dialog again — this sheet is
+  // reachable forever, so the recovery surface lives here too. Bound
+  // entries replay against their original shipment; unbound (recovered)
+  // ones attach to the newest live shipment on explicit click.
+  const [doAddShipPhoto] = useMutateAction(addShipmentPhoto);
+  const [stranded, setStranded] = useState<StashedPhoto[]>([]);
+  const [strandedMsg, setStrandedMsg] = useState('');
+  const refreshStranded = () => setStranded(readStash().filter(s => s.order_id === orderId));
+  useEffect(() => { if (open) { setStrandedMsg(''); refreshStranded(); } // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, orderId]);
+  const retryStranded = async (s: StashedPhoto, fallbackShipmentId: number | null) => {
+    const target = s.shipment_id ?? fallbackShipmentId;
+    if (target == null) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
+    try {
+      // a bound entry is an automatic replay (the insert may have already
+      // committed); an unbound attach here is a deliberate operator act
+      const res = await doAddShipPhoto({ shipment_id: target, image_data: s.full, thumb_data: s.thumb, actor: s.actor || userName, replay: s.shipment_id != null }) as unknown[] | null;
+      const ok = Array.isArray(res) ? res.length > 0 : !!res;
+      if (ok) { stashRemove(s.key); setStrandedMsg('Photo attached.'); reloadShipPhotos(); }
+      else setStrandedMsg('The shipment refused this photo (deleted, quota full, or it was previously removed on purpose) — remove it here if it is no longer needed.');
+    } catch { setStrandedMsg('Upload failed — the photo stays saved on this device; retry.'); }
+    refreshStranded();
   };
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
@@ -1661,6 +1689,32 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   </div>
                 ))}
                 {shipPushMsg && <p className={`text-xs mt-1 ${shipPushMsg.startsWith('Pushed') ? 'text-green-700' : 'text-amber-700'}`}>{shipPushMsg}</p>}
+                {stranded.length > 0 && (
+                  <div className="mt-2 rounded border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-2 space-y-1.5">
+                    <p className="text-xs font-medium text-amber-900 dark:text-amber-200">
+                      {stranded.length} package photo(s) saved on this device never finished uploading.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {stranded.map(s => {
+                        const fallback = shipRows.filter(r => r.refund_status !== 'SUCCESS').reduce<number | null>((acc, r) => (acc == null || r.id > acc ? r.id : acc), null);
+                        return (
+                          <span key={s.key} className="relative flex flex-col items-center gap-1">
+                            <img src={s.thumb} alt="stranded package photo" className="h-12 w-12 object-cover rounded border cursor-pointer"
+                              title={s.shipment_id != null ? `Failed upload for shipment #${s.shipment_id}` : 'Pending photo not attached to any shipment'}
+                              onClick={() => setViewShipPhoto(s.full)} />
+                            <Button size="sm" variant="outline" className="h-5 px-1.5 text-[10px]" disabled={saving}
+                              onClick={() => retryStranded(s, fallback)}>
+                              {s.shipment_id != null ? 'Retry' : 'Attach'}
+                            </Button>
+                            <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Discard this saved photo"
+                              onClick={() => { if (window.confirm('Discard this saved photo? It has not been uploaded anywhere.')) { stashRemove(s.key); refreshStranded(); } }}>×</button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                    {strandedMsg && <p className="text-[11px] text-amber-800 dark:text-amber-300">{strandedMsg}</p>}
+                  </div>
+                )}
               </div>
 
               <div>
