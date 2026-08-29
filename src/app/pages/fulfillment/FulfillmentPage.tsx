@@ -14,12 +14,16 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { fmtNum } from '@/lib/fmt';
 import { StatusPill } from '@/components/StatusPill';
 import { productChipClass } from '@/app/pages/receiving/shared';
 import type { RxAddress } from '@/app/pages/receiving/shared';
 import { ShippingModal } from './ShippingModal';
 import type { QueueOrder } from './ShippingModal';
-import { Truck, PauseCircle } from 'lucide-react';
+import { Truck, PauseCircle, Filter, Check, X } from 'lucide-react';
 
 type QueueRow = QueueOrder & {
   hold_shipping: boolean; admin_note: string | null;
@@ -65,13 +69,27 @@ export function FulfillmentPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  const [filterOpen, setFilterOpen] = useState(false);
+
   // ---- shipment session: on-hand quantities typed by the operator; the
   // queue splits into fully / partially packable and the pool counts DOWN
   // as boxes ship (onShipped) ----
   const [sessionOpen, setSessionOpen] = useState(false);
   const [pool, setPool] = useState<Record<number, string>>({});
+  const [sAddProduct, setSAddProduct] = useState('');
+  const [sAddQty, setSAddQty] = useState('');
+  const poolEntries = Object.entries(pool);
+  const poolUnitsLeft = poolEntries.reduce((s, [, v]) => s + Math.max(0, Number(v) || 0), 0);
+  const addToPool = () => {
+    if (!sAddProduct || !(Number(sAddQty) > 0)) return;
+    setPool(m => ({ ...m, [Number(sAddProduct)]: sAddQty.trim() }));
+    setSAddProduct(''); setSAddQty('');
+  };
   const poolNum = (pid: number) => Number((pool[pid] ?? '').trim() || 0);
-  const sessionActive = sessionOpen && Object.values(pool).some(v => Number(v) > 0);
+  // active whenever the pool holds stock — hiding the card is a display
+  // choice, not a session end (the toolbar button shows the loaded state;
+  // Reset ends the session)
+  const sessionActive = Object.values(pool).some(v => Number(v) > 0);
   const packability = (r: QueueRow): 'full' | 'partial' | 'none' => {
     const lines = (r.packable_json || []).map(l => ({ pid: Number(l.product_id), remaining: Number(l.remaining) }));
     if (lines.length === 0) return 'none';
@@ -158,57 +176,114 @@ export function FulfillmentPage() {
         </TabsList>
       </Tabs>
 
-      {/* product filters — match REMAINING packable work */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        {products.map(p => (
-          <button key={p.id}
-            className={`rounded text-[11px] font-semibold px-1.5 py-0.5 border ${filterIds.has(p.id) ? productChipClass(p.id) + ' border-transparent ring-2 ring-violet-400' : 'bg-muted text-muted-foreground border-transparent opacity-70'}`}
-            onClick={() => toggleFilter(p.id)}>
-            {p.sku_code}
-          </button>
-        ))}
+      {/* toolbar: product filter (searchable multi-select) + session toggle */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Popover open={filterOpen} onOpenChange={setFilterOpen}>
+          <PopoverTrigger asChild>
+            <Button size="sm" variant="outline" className="h-8">
+              <Filter className="w-3.5 h-3.5 mr-1.5" />
+              Filter products{filterIds.size > 0 ? ` (${filterIds.size})` : ''}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="p-0 w-72" align="start">
+            <Command>
+              <CommandInput placeholder="Search products…" />
+              <CommandList>
+                <CommandEmpty>No product matches.</CommandEmpty>
+                {products.map(p => (
+                  <CommandItem key={p.id} value={p.sku_code} onSelect={() => toggleFilter(p.id)}>
+                    <Check className={`w-3.5 h-3.5 mr-2 ${filterIds.has(p.id) ? 'opacity-100' : 'opacity-0'}`} />
+                    <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${productChipClass(p.id)}`}>{p.sku_code}</span>
+                  </CommandItem>
+                ))}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
         {filterIds.size > 0 && (
           <>
-            <span className="inline-flex rounded border overflow-hidden text-[11px]">
-              <button className={`px-2 py-0.5 ${filterMode === 'contains' ? 'bg-violet-600 text-white' : 'bg-background'}`}
+            <span className="inline-flex rounded-md border overflow-hidden text-xs h-8">
+              <button className={`px-2.5 ${filterMode === 'contains' ? 'bg-violet-600 text-white' : 'bg-background text-muted-foreground'}`}
                 title="Orders with remaining work on ANY selected product (other items allowed)"
                 onClick={() => setFilterMode('contains')}>contains</button>
-              <button className={`px-2 py-0.5 ${filterMode === 'only' ? 'bg-violet-600 text-white' : 'bg-background'}`}
+              <button className={`px-2.5 border-l ${filterMode === 'only' ? 'bg-violet-600 text-white' : 'bg-background text-muted-foreground'}`}
                 title="Orders whose ENTIRE remaining work is within the selected products (vendor-direct lines ignored)"
                 onClick={() => setFilterMode('only')}>only</button>
             </span>
-            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setFilterIds(new Set())}>clear</Button>
+            {products.filter(p => filterIds.has(p.id)).map(p => (
+              <button key={p.id}
+                className={`rounded text-[11px] font-semibold pl-1.5 pr-1 py-0.5 inline-flex items-center gap-1 ${productChipClass(p.id)}`}
+                title="Remove from filter"
+                onClick={() => toggleFilter(p.id)}>
+                {p.sku_code}
+                <X className="w-3 h-3 opacity-60" />
+              </button>
+            ))}
+            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => setFilterIds(new Set())}>Clear</Button>
           </>
         )}
+        <Button size="sm" variant={sessionActive ? 'default' : 'outline'} className="h-8 ml-auto" onClick={() => setSessionOpen(o => !o)}>
+          Shipment session{poolEntries.length > 0 ? ` · ${poolEntries.length} product${poolEntries.length > 1 ? 's' : ''}` : ''}
+        </Button>
       </div>
 
-      {/* shipment session */}
-      <Card>
-        <CardHeader className="pb-2 cursor-pointer" onClick={() => setSessionOpen(o => !o)}>
-          <CardTitle className="text-base flex items-center justify-between">
-            <span>Shipment session {sessionActive && <span className="ml-1 text-xs font-normal text-muted-foreground">(active — pool counts down as you ship)</span>}</span>
-            <span className="text-xs font-normal text-muted-foreground">{sessionOpen ? 'hide' : 'show'}</span>
-          </CardTitle>
-        </CardHeader>
-        {sessionOpen && (
-          <CardContent className="space-y-2">
-            <p className="text-xs text-muted-foreground">
-              Enter what you have on hand; orders in "Ready" sort and badge by what this pool can pack ("packable" = every remaining item covered; "part-packable" = a partial box is possible). Shipping a box deducts it live.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {products.map(p => (
-                <label key={p.id} className="flex items-center gap-1 text-xs">
-                  <span className={`rounded px-1.5 py-0.5 font-semibold ${productChipClass(p.id)}`}>{p.sku_code}</span>
-                  <Input value={pool[p.id] ?? ''} onChange={e => setPool(m => ({ ...m, [p.id]: e.target.value }))} className="h-7 w-16 text-xs" placeholder="0" />
-                </label>
-              ))}
+      {/* shipment session: only the products you SAY you have, as a tidy list */}
+      {sessionOpen && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex flex-wrap items-center gap-2">
+              <span>Shipment session</span>
+              {sessionActive && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  {poolEntries.length} product{poolEntries.length > 1 ? 's' : ''} · {fmtNum(poolUnitsLeft)} units left — counts down as you ship
+                </span>
+              )}
+              <span className="ml-auto flex gap-1">
+                {sessionActive && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPool({})}>Reset</Button>}
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSessionOpen(false)}>Hide</Button>
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={sAddProduct} onValueChange={setSAddProduct}>
+                <SelectTrigger className="h-8 w-64"><SelectValue placeholder="Add a product you have on hand…" /></SelectTrigger>
+                <SelectContent>
+                  {products.filter(p => !(p.id in pool)).map(p => (
+                    <SelectItem key={p.id} value={String(p.id)}>{p.sku_code}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input placeholder="Qty" value={sAddQty} onChange={e => setSAddQty(e.target.value)} className="h-8 w-20"
+                onKeyDown={e => { if (e.key === 'Enter') addToPool(); }} />
+              <Button size="sm" className="h-8" disabled={!sAddProduct || !(Number(sAddQty) > 0)} onClick={addToPool}>Add</Button>
             </div>
-            {sessionActive && (
-              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPool({})}>Reset pool</Button>
+            {poolEntries.length > 0 && (
+              <div className="border rounded-lg divide-y max-w-md">
+                {poolEntries.map(([pid, qty]) => {
+                  const p = products.find(x => x.id === Number(pid));
+                  return (
+                    <div key={pid} className="flex items-center gap-2 px-2 py-1.5">
+                      <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${productChipClass(Number(pid))}`}>{p?.sku_code || pid}</span>
+                      <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+                        left:
+                        <Input value={qty} onChange={e => setPool(m => ({ ...m, [Number(pid)]: e.target.value }))} className="h-7 w-20 text-xs text-right" />
+                        <button className="p-0.5 opacity-60 hover:opacity-100" title="Remove from pool"
+                          onClick={() => setPool(m => { const n = { ...m }; delete n[Number(pid)]; return n; })}>
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             )}
+            <p className="text-xs text-muted-foreground">
+              Orders in "Ready" sort and badge against this pool — <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1 py-0.5 uppercase">packable</span> = every remaining item covered, <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5 uppercase">part-packable</span> = a partial box is possible.
+            </p>
           </CardContent>
-        )}
-      </Card>
+        </Card>
+      )}
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
