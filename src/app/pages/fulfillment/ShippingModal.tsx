@@ -98,6 +98,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [doSetRefund] = useMutateAction(setShipmentRefund);
   const [doMarkPushed] = useMutateAction(markShipmentPushed);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
+  // read action invoked imperatively (getOrderTxRefs precedent): the push's
+  // fully-shipped decision needs a JUST-IN-TIME authoritative read, never
+  // the modal's hook state
+  const [fetchPackable] = useMutateAction(getPackableItems);
 
   // per-line box quantities, keyed by order_item_id; seeded to remaining
   const [qtys, setQtys] = useState<Record<number, string>>({});
@@ -247,33 +251,37 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     fin.trackingCollision ? 'WARNING: this tracking number already appears on another recent shipment or transfer — verify at Shippo; one of the two may be a double-record.' : '',
   ].filter(Boolean).join(' ');
 
-  // packable rows with THIS box's quantities applied — the push's
-  // fully-shipped math must see the shipment that just landed, and the
-  // hook's rows predate it. (Retry pushes from the list use freshly
-  // reloaded rows instead.) Idempotent verification upstream tolerates the
-  // narrow both-admins-shipping race.
-  const packableAfter = (items: { order_item_id: number; qty: string }[]): PushPackableLine[] =>
-    packable.map(l => {
-      const add = items.find(i => Number(i.order_item_id) === Number(l.order_item_id));
-      const q = add ? Number(add.qty) : 0;
-      return {
-        order_item_id: Number(l.order_item_id), product_external_id: l.product_external_id,
-        sku_code: l.sku_code, effective_qty: l.effective_qty,
-        shipped_qty: String(Number(l.shipped_qty) + q),
-        direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at,
-      };
-    });
-
-  const runPush = async (shipmentId: number, carrier: string, tracking: string, items: { order_item_id: number; qty: string; sku: string }[], packableRows: PushPackableLine[]) => {
+  const runPush = async (shipmentId: number, carrier: string, tracking: string, items: { order_item_id: number; qty: string; sku: string }[]) => {
     if (pushInFlight.current) return;
     pushInFlight.current = true;
     setPushMsg('Pushing to the ordering app…');
     try {
+      // JUST-IN-TIME authoritative read: the fully-shipped decision (which
+      // can advance the upstream order to 'shipped') must reflect what the
+      // DB says NOW — after this finalize, and after anything another
+      // session did meanwhile — never this modal's stale hook rows
+      let freshRows: PushPackableLine[];
+      try {
+        const res = await fetchPackable({ order_id: order.id }) as unknown[] | null;
+        freshRows = (Array.isArray(res) ? res : []).map(r => {
+          const l = r as PackableLine;
+          return {
+            order_item_id: Number(l.order_item_id),
+            product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
+            sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
+            direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at,
+          };
+        });
+        if (freshRows.length === 0) throw new Error('empty read');
+      } catch {
+        setPushMsg('Push not sent — could not re-read the order\'s packing state (needed to decide the upstream status). The shipment is saved; use "Push upstream" to retry.');
+        return;
+      }
       const out = await pushShipmentUpstream({
         cfg, externalId: order.external_id || '', orderId: order.id, orderNumber: order.order_number,
         shipmentId, carrier, tracking,
         shippedItems: items.map(i => ({ sku: i.sku, qty: i.qty })),
-        packable: packableRows, userName,
+        packable: freshRows, userName,
         appendNote: doAppendNote, markPushed: doMarkPushed,
       });
       setPushMsg(out.message);
@@ -371,7 +379,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       reloadPackable(); reloadShipments(); reload();
       const warn = finWarnings(fin);
       if (warn) setPurchaseMsg(warn);
-      await runPush(draftId, rate.provider, result.trackingNumber || '', shippedItems, packableAfter(shippedItems));
+      await runPush(draftId, rate.provider, result.trackingNumber || '', shippedItems);
     } finally {
       purchaseInFlight.current = false;
       setPurchasing(false);
@@ -426,7 +434,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const shippedItems = chosen.map(c => ({ order_item_id: Number(c.line.order_item_id), qty: c.qty, sku: c.line.sku_code }));
       onShipped(chosen.map(c => ({ product_id: Number(c.line.product_id), qty: Number(c.qty) })));
       reloadPackable(); reloadShipments(); reload();
-      await runPush(recordedId, carrier, mTracking.trim().toUpperCase().replace(/\s/g, ''), shippedItems, packableAfter(shippedItems));
+      await runPush(recordedId, carrier, mTracking.trim().toUpperCase().replace(/\s/g, ''), shippedItems);
     } finally {
       manualInFlight.current = false;
       setManualBusy(false);
@@ -441,7 +449,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     const items = (s.items || []).map(i => ({ order_item_id: Number(i.order_item_id), qty: String(i.qty), sku: i.sku_code }));
     onShipped((s.items || []).map(i => ({ product_id: Number(i.product_id), qty: Number(i.qty) })));
     reloadPackable(); reloadShipments(); reload();
-    await runPush(s.id, carrier, tracking, items, packableAfter(items));
+    await runPush(s.id, carrier, tracking, items);
   };
 
   // ---- draft recovery + refund controls (ports of the transfers panel) ----
@@ -617,15 +625,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   };
 
   const retryPushRow = async (s: ShipmentRow) => {
-    // the hook rows were reloaded after this shipment finalized, so they
-    // already include it — push straight from them
+    // runPush does its own just-in-time packable read
     await runPush(s.id, s.carrier || '', s.tracking_number || '',
-      s.items.map(i => ({ order_item_id: i.order_item_id, qty: String(i.qty), sku: i.sku_code })),
-      packable.map(l => ({
-        order_item_id: Number(l.order_item_id), product_external_id: l.product_external_id,
-        sku_code: l.sku_code, effective_qty: l.effective_qty, shipped_qty: l.shipped_qty,
-        direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at,
-      })));
+      s.items.map(i => ({ order_item_id: i.order_item_id, qty: String(i.qty), sku: i.sku_code })));
   };
 
   const drafts = shipments.filter(s => !s.finalized_at);

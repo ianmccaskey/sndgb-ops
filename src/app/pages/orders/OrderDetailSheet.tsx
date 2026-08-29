@@ -102,7 +102,6 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [rawRefunds, , , reloadRefunds] = useLoadAction(listOrderRefunds, [orderId], { order_id: orderId }, { enabled: open });
   const [rawSheetWallets] = useLoadAction(listWallets, [open], {}, { enabled: open });
   const [rawShipRows, , , reloadShipRows] = useLoadAction(listOrderShipments, [orderId], { order_id: orderId }, { enabled: open });
-  const [rawShipPackable, , , reloadShipPackable] = useLoadAction(getPackableItems, [orderId], { order_id: orderId }, { enabled: open });
   const o = firstRow<OrderRow>(rawOrder);
   const items = rows<ItemRow>(rawItems);
   const campaignProducts = rows<{ sku_code: string; gb_price_usd: string; status: string }>(rawCampaignProducts)
@@ -136,7 +135,6 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     effective_qty: string; shipped_qty: string; direct_ship: boolean; direct_fulfilled_at: string | null;
   };
   const shipRows = rows<ShipRow>(rawShipRows).map(s => ({ ...s, tracking_number: s.tracking_number == null ? null : String(s.tracking_number) }));
-  const shipPackable = rows<ShipPackableRow>(rawShipPackable);
 
   const [doUpdate] = useMutateAction(updateOrderAdmin);
   const [doOverride] = useMutateAction(addOverride);
@@ -145,24 +143,37 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doGetTxRefs] = useMutateAction(getOrderTxRefs);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doMarkShipPushed] = useMutateAction(markShipmentPushed);
+  // read action invoked imperatively (getOrderTxRefs precedent): the push's
+  // fully-shipped decision needs a JUST-IN-TIME authoritative read
+  const [doFetchShipPackable] = useMutateAction(getPackableItems);
   const [shipPushMsg, setShipPushMsg] = useState('');
   const shipPushInFlight = React.useRef(false);
 
   // retry the ordering-app push for one shipped box (the fulfillment modal
   // pushes automatically; this covers failed pushes and the direct-line-
-  // last case where no shipment row changed). Fresh packable rows are the
-  // hook's — reloaded on every open — so fully-shipped is current.
+  // last case where no shipment row changed). Packable rows are fetched
+  // FRESH here — never from sheet-open hook state — because they decide
+  // whether the upstream order advances to 'shipped'.
   const pushShipRow = async (s: { id: number; carrier: string | null; tracking_number: string | null; items: { order_item_id: number; qty: string; sku_code: string }[] }) => {
     if (!o || shipPushInFlight.current) return;
     shipPushInFlight.current = true;
     setShipPushMsg('Pushing to the ordering app…');
     try {
+      let fresh: ShipPackableRow[];
+      try {
+        const res = await doFetchShipPackable({ order_id: o.id }) as unknown[] | null;
+        fresh = (Array.isArray(res) ? res : []) as ShipPackableRow[];
+        if (fresh.length === 0) throw new Error('empty read');
+      } catch {
+        setShipPushMsg('Push not sent — could not re-read the order\'s packing state. Retry.');
+        return;
+      }
       const out = await pushShipmentUpstream({
         cfg: { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' },
         externalId: o.external_id || '', orderId: o.id, orderNumber: o.order_number,
         shipmentId: s.id, carrier: s.carrier || '', tracking: s.tracking_number || '',
         shippedItems: (s.items || []).map(i => ({ sku: i.sku_code, qty: String(i.qty) })),
-        packable: shipPackable.map(l => ({
+        packable: fresh.map(l => ({
           order_item_id: Number(l.order_item_id),
           product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
           sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
@@ -171,7 +182,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         userName, appendNote: doAppendNote, markPushed: doMarkShipPushed,
       });
       setShipPushMsg(out.message);
-      reloadShipRows(); reloadShipPackable(); reloadOrder();
+      reloadShipRows(); reloadOrder();
     } finally {
       shipPushInFlight.current = false;
     }
