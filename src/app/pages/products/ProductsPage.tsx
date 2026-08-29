@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listProducts from '@/actions/products/listProducts';
 import saveProduct from '@/actions/products/saveProduct';
+import setProductWeight from '@/actions/products/setProductWeight';
 import listVendors from '@/actions/vendors/listVendors';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import upsertCampaignProduct from '@/actions/campaign/upsertCampaignProduct';
@@ -27,7 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Package, CheckCircle2 } from 'lucide-react';
 
-type Product = { id: number; external_id: string | null; sku_code: string; name: string; mass_label: string | null; active: boolean };
+type Product = { id: number; external_id: string | null; sku_code: string; name: string; mass_label: string | null; unit_weight_oz: string | null; active: boolean };
 type Vendor = { id: number; code: string; active: boolean };
 type CampaignProduct = {
   group_buy_product_id: number; sku_code: string; product_name: string; vendor_code: string;
@@ -64,6 +65,7 @@ export function ProductsPage() {
   const adjustments = rows<Adjustment>(rawAdj);
 
   const [doSaveProduct] = useMutateAction(saveProduct);
+  const [doSetWeight] = useMutateAction(setProductWeight);
   const [doUpsertCampaign] = useMutateAction(upsertCampaignProduct);
   const [doMarkOrdered] = useMutateAction(markOrderedFromVendor);
   const [doAddAdj] = useMutateAction(addAdjustment);
@@ -96,7 +98,29 @@ export function ProductsPage() {
   const [npSku, setNpSku] = useState('');
   const [npName, setNpName] = useState('');
   const [npMass, setNpMass] = useState('');
+  const [npWeight, setNpWeight] = useState('');
   const [npError, setNpError] = useState('');
+
+  // inline weight edit on the catalog table (one row at a time)
+  const [wEditing, setWEditing] = useState<number | null>(null);
+  const [wValue, setWValue] = useState('');
+  const [wMsg, setWMsg] = useState('');
+
+  const saveWeight = async (p: Product) => {
+    const v = wValue.trim();
+    if (v !== '' && !/^\d+(?:\.\d{1,2})?$/.test(v)) {
+      setWMsg('Weight must be a positive number in oz (max 2 decimals), or blank to clear.');
+      return;
+    }
+    try {
+      const res = await doSetWeight({ product_id: p.id, unit_weight_oz: v, actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) { setWMsg('Not saved — reload and retry.'); return; }
+      setWEditing(null); setWMsg('');
+      reloadProducts();
+    } catch (e: unknown) {
+      setWMsg(e instanceof Error ? e.message : 'Failed to save weight');
+    }
+  };
 
   // removing a PRE-ORDERED at-cost row: the kits are already bought, so the
   // operator chooses — delete only, or reallocate the kits to the group buy
@@ -208,10 +232,14 @@ export function ProductsPage() {
 
   const addProduct = async () => {
     if (!npSku.trim() || !npName.trim()) { setNpError('SKU and name required.'); return; }
+    if (npWeight.trim() !== '' && !/^\d+(?:\.\d{1,2})?$/.test(npWeight.trim())) {
+      setNpError('Weight must be a positive number in oz (max 2 decimals), or blank.');
+      return;
+    }
     setNpError('');
     try {
-      await doSaveProduct({ sku_code: npSku.trim(), name: npName.trim(), mass_label: npMass.trim(), external_id: '', active: true });
-      setNpSku(''); setNpName(''); setNpMass('');
+      await doSaveProduct({ sku_code: npSku.trim(), name: npName.trim(), mass_label: npMass.trim(), external_id: '', unit_weight_oz: npWeight.trim(), active: true });
+      setNpSku(''); setNpName(''); setNpMass(''); setNpWeight('');
       reloadProducts();
     } catch (e: unknown) {
       setNpError(e instanceof Error ? e.message : 'Failed to add product');
@@ -635,6 +663,7 @@ export function ProductsPage() {
                   <TableHead>SKU</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Mass</TableHead>
+                  <TableHead>Weight (oz)</TableHead>
                   <TableHead>Ordering-app ID</TableHead>
                   <TableHead>Active</TableHead>
                 </TableRow>
@@ -645,6 +674,25 @@ export function ProductsPage() {
                     <TableCell className="font-medium">{p.sku_code}</TableCell>
                     <TableCell>{p.name}</TableCell>
                     <TableCell>{p.mass_label || '—'}</TableCell>
+                    <TableCell>
+                      {wEditing === p.id ? (
+                        <span className="flex items-center gap-1">
+                          <Input value={wValue} onChange={e => setWValue(e.target.value)} className="h-7 w-20 text-xs"
+                            placeholder="oz" autoFocus
+                            onKeyDown={e => { if (e.key === 'Enter') saveWeight(p); if (e.key === 'Escape') { setWEditing(null); setWMsg(''); } }} />
+                          <Button size="sm" className="h-7 text-xs" onClick={() => saveWeight(p)}>Save</Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setWEditing(null); setWMsg(''); }}>✕</Button>
+                        </span>
+                      ) : (
+                        <button className="text-left hover:underline"
+                          title="Per-unit shipping weight — feeds the shipping modal's box-weight prefill. Click to edit."
+                          onClick={() => { setWEditing(p.id); setWValue(p.unit_weight_oz == null ? '' : String(Number(p.unit_weight_oz))); setWMsg(''); }}>
+                          {p.unit_weight_oz == null
+                            ? <span className="text-amber-700">— none</span>
+                            : fmtNum(p.unit_weight_oz)}
+                        </button>
+                      )}
+                    </TableCell>
                     <TableCell className="font-mono text-xs">{p.external_id || '—'}</TableCell>
                     <TableCell>{p.active ? 'yes' : 'no'}</TableCell>
                   </TableRow>
@@ -652,6 +700,7 @@ export function ProductsPage() {
               </TableBody>
             </Table>
           </div>
+          {wMsg && <p className="text-sm text-red-600">{wMsg}</p>}
           <Card className="max-w-2xl">
             <CardHeader className="pb-2"><CardTitle className="text-base">Add product</CardTitle></CardHeader>
             <CardContent className="space-y-2">
@@ -659,10 +708,11 @@ export function ProductsPage() {
                 <Input placeholder="SKU (matches import 'Items')" value={npSku} onChange={e => setNpSku(e.target.value)} className="h-9 w-48" />
                 <Input placeholder="Name" value={npName} onChange={e => setNpName(e.target.value)} className="h-9 flex-1" />
                 <Input placeholder="Mass (60mg)" value={npMass} onChange={e => setNpMass(e.target.value)} className="h-9 w-28" />
+                <Input placeholder="Weight oz" value={npWeight} onChange={e => setNpWeight(e.target.value)} className="h-9 w-24" title="Per-unit shipping weight in ounces — feeds the shipping modal's box-weight prefill" />
                 <Button size="sm" onClick={addProduct}>Add</Button>
               </div>
               {npError && <p className="text-sm text-red-600">{npError}</p>}
-              <p className="text-xs text-muted-foreground">The SKU must match exactly how the ordering app writes it in the Items column.</p>
+              <p className="text-xs text-muted-foreground">The SKU must match exactly how the ordering app writes it in the Items column. A missing weight (amber "— none" in the table) counts as 0 in shipping-weight prefills.</p>
             </CardContent>
           </Card>
         </TabsContent>

@@ -128,6 +128,8 @@ export function OrderingAppSync({ products, onImported }: {
           name,
           mass_label: '',
           external_id: row.b44.id,
+          // blank = keep any curated weight (saveProduct is set-if-provided)
+          unit_weight_oz: '',
           active: true,
         });
         if (row.match) updated++; else created++;
