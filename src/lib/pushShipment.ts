@@ -35,6 +35,7 @@ export type PushPackableLine = {
   shipped_qty: string;
   direct_ship: boolean;
   direct_fulfilled_at: string | null;
+  digital: boolean;
 };
 
 export type PushShipmentDeps = {
@@ -69,9 +70,11 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   const shipDate = today();
 
   // fully-shipped is computed from the FRESH packable rows the caller just
-  // loaded — never from stale modal props
-  const packableLines = d.packable.filter(l => !l.direct_ship && Number(l.effective_qty) > 0);
-  const directLines = d.packable.filter(l => l.direct_ship);
+  // loaded — never from stale modal props. DIGITAL lines (COA certificates)
+  // are excluded entirely: they deliver digitally, never gate the order's
+  // shipped status, and never receive an upstream shipped_date from here.
+  const packableLines = d.packable.filter(l => !l.direct_ship && !l.digital && Number(l.effective_qty) > 0);
+  const directLines = d.packable.filter(l => l.direct_ship && !l.digital);
   const fullyShipped =
     (packableLines.length + directLines.length) > 0
     && packableLines.every(l => Number(l.shipped_qty) >= Number(l.effective_qty))

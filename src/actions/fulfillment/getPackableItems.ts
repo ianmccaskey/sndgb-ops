@@ -15,7 +15,7 @@ function getPackableItems() {
     query: `
       SELECT oi.id AS order_item_id,
              p.id AS product_id, p.sku_code, p.name AS product_name,
-             p.external_id AS product_external_id, p.unit_weight_oz,
+             p.external_id AS product_external_id, p.unit_weight_oz, p.digital,
              CASE WHEN oi.removed_at IS NULL THEN COALESCE(oi.qty_override, oi.qty) ELSE 0 END AS effective_qty,
              COALESCE(att.attributed, 0) AS attributed_qty,
              COALESCE(att.shipped, 0) AS shipped_qty,

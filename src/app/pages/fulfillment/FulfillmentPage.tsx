@@ -33,7 +33,7 @@ type QueueRow = QueueOrder & {
   has_draft: boolean; draft_needs_recovery: boolean; push_outstanding: boolean;
   tracking_numbers: string; label_cost_total: string;
 };
-type CatalogProduct = { id: number; sku_code: string; active: boolean };
+type CatalogProduct = { id: number; sku_code: string; digital: boolean; active: boolean };
 
 export function FulfillmentPage() {
   const { groupBuyId, userName, settings } = useApp();
@@ -56,7 +56,9 @@ export function FulfillmentPage() {
   const [rawAddresses] = useLoadAction(listReceiveAddresses, [], {});
   const addresses = rows<RxAddress>(rawAddresses);
   const [rawProducts] = useLoadAction(listProducts, [], {});
-  const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active), [rawProducts]);
+  // digital products (COA certificates) are never packed — they don't
+  // belong in the filter chips or the session pool
+  const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active && !p.digital), [rawProducts]);
   const [doMarkDirect] = useMutateAction(markOrderDirectFulfilled);
 
   const [shipping, setShipping] = useState<QueueRow | null>(null);

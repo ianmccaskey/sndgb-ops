@@ -133,6 +133,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   type ShipPackableRow = {
     order_item_id: number; product_external_id: string | null; sku_code: string;
     effective_qty: string; shipped_qty: string; direct_ship: boolean; direct_fulfilled_at: string | null;
+    digital: boolean;
   };
   const shipRows = rows<ShipRow>(rawShipRows).map(s => ({ ...s, tracking_number: s.tracking_number == null ? null : String(s.tracking_number) }));
 
@@ -177,7 +178,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           order_item_id: Number(l.order_item_id),
           product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
           sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
-          direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at,
+          direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at, digital: l.digital,
         })),
         userName, appendNote: doAppendNote, markPushed: doMarkShipPushed,
       });

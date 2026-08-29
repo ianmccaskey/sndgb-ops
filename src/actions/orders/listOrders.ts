@@ -46,7 +46,10 @@ function listOrders() {
                               WHERE si.order_item_id = oi.id AND s2.finalized_at IS NOT NULL
                                 AND COALESCE(s2.refund_status, '') <> 'SUCCESS') AS shipped
                       FROM order_items oi
-                      WHERE oi.order_id = o.id AND NOT oi.direct_ship AND oi.removed_at IS NULL) a) AS shipped_packable_qty,
+                      JOIN group_buy_products g ON g.id = oi.group_buy_product_id
+                      JOIN products p2 ON p2.id = g.product_id
+                      WHERE oi.order_id = o.id AND NOT oi.direct_ship AND oi.removed_at IS NULL
+                        AND NOT p2.digital) a) AS shipped_packable_qty,
                (SELECT COALESCE(sum(GREATEST(a.eff - a.attributed, 0)), 0)
                 FROM (SELECT CASE WHEN oi.removed_at IS NULL THEN COALESCE(oi.qty_override, oi.qty) ELSE 0 END AS eff,
                              (SELECT COALESCE(sum(si.qty), 0) FROM shipment_items si
@@ -54,7 +57,10 @@ function listOrders() {
                               WHERE si.order_item_id = oi.id
                                 AND COALESCE(s2.refund_status, '') <> 'SUCCESS') AS attributed
                       FROM order_items oi
-                      WHERE oi.order_id = o.id AND NOT oi.direct_ship AND oi.removed_at IS NULL) a) AS remaining_packable_qty
+                      JOIN group_buy_products g ON g.id = oi.group_buy_product_id
+                      JOIN products p2 ON p2.id = g.product_id
+                      WHERE oi.order_id = o.id AND NOT oi.direct_ship AND oi.removed_at IS NULL
+                        AND NOT p2.digital) a) AS remaining_packable_qty
         FROM shipments sh
         WHERE sh.order_id = o.id AND COALESCE(sh.refund_status, '') <> 'SUCCESS'
       ) s ON true

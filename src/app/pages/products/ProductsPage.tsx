@@ -3,6 +3,7 @@ import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listProducts from '@/actions/products/listProducts';
 import saveProduct from '@/actions/products/saveProduct';
 import setProductWeight from '@/actions/products/setProductWeight';
+import setProductDigital from '@/actions/products/setProductDigital';
 import listVendors from '@/actions/vendors/listVendors';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import upsertCampaignProduct from '@/actions/campaign/upsertCampaignProduct';
@@ -28,7 +29,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Package, CheckCircle2 } from 'lucide-react';
 
-type Product = { id: number; external_id: string | null; sku_code: string; name: string; mass_label: string | null; unit_weight_oz: string | null; active: boolean };
+type Product = { id: number; external_id: string | null; sku_code: string; name: string; mass_label: string | null; unit_weight_oz: string | null; digital: boolean; active: boolean };
 type Vendor = { id: number; code: string; active: boolean };
 type CampaignProduct = {
   group_buy_product_id: number; sku_code: string; product_name: string; vendor_code: string;
@@ -66,6 +67,22 @@ export function ProductsPage() {
 
   const [doSaveProduct] = useMutateAction(saveProduct);
   const [doSetWeight] = useMutateAction(setProductWeight);
+  const [doSetDigital] = useMutateAction(setProductDigital);
+
+  const toggleDigital = async (p: Product) => {
+    if (!window.confirm(p.digital
+      ? `${p.sku_code}: mark as a PHYSICAL product? It will re-enter fulfillment packing math (queues, session pool, shipping modal).`
+      : `${p.sku_code}: mark as DIGITAL (e.g. a COA certificate)? It will be excluded from ALL fulfillment packing math — never packed, never blocks an order from reading fully shipped.`)) return;
+    try {
+      const res = await doSetDigital({ product_id: p.id, digital: !p.digital, expected_digital: p.digital, actor: userName }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+        setWMsg(`${p.sku_code}: not changed — the flag was flipped in another session. Reloading.`);
+      }
+      reloadProducts();
+    } catch (e: unknown) {
+      setWMsg(e instanceof Error ? e.message : 'Failed to update digital flag');
+    }
+  };
   const [doUpsertCampaign] = useMutateAction(upsertCampaignProduct);
   const [doMarkOrdered] = useMutateAction(markOrderedFromVendor);
   const [doAddAdj] = useMutateAction(addAdjustment);
@@ -688,6 +705,7 @@ export function ProductsPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Mass</TableHead>
                   <TableHead>Weight (oz)</TableHead>
+                  <TableHead>Digital</TableHead>
                   <TableHead>Ordering-app ID</TableHead>
                   <TableHead>Active</TableHead>
                 </TableRow>
@@ -716,6 +734,15 @@ export function ProductsPage() {
                             : fmtNum(p.unit_weight_oz)}
                         </button>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <button className="text-left hover:underline"
+                        title="Digital products (COA certificates) are billed but never packed — excluded from all fulfillment math. Click to flip."
+                        onClick={() => toggleDigital(p)}>
+                        {p.digital
+                          ? <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">digital</span>
+                          : <span className="text-muted-foreground text-xs">physical</span>}
+                      </button>
                     </TableCell>
                     <TableCell className="font-mono text-xs">{p.external_id || '—'}</TableCell>
                     <TableCell>{p.active ? 'yes' : 'no'}</TableCell>

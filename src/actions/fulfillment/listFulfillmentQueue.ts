@@ -65,24 +65,26 @@ function listFulfillmentQueue() {
       JOIN customers c ON c.id = o.customer_id
       LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
       LEFT JOIN (
-        -- all packing math uses the EFFECTIVE quantity, and locally-removed
-        -- lines vanish from fulfillment entirely
+        -- all packing math uses the EFFECTIVE quantity; locally-removed
+        -- lines vanish from fulfillment entirely, and DIGITAL products
+        -- (COA certificates) never enter packing math at all — they are
+        -- delivered digitally, not boxed
         SELECT oi.order_id,
                string_agg(p.sku_code || ' (' || COALESCE(oi.qty_override, oi.qty) || ')', '; ' ORDER BY p.sku_code)
-                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL) AS items_summary,
-               COALESCE(SUM(COALESCE(oi.qty_override, oi.qty)) FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL), 0) AS item_count,
+                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital) AS items_summary,
+               COALESCE(SUM(COALESCE(oi.qty_override, oi.qty)) FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital), 0) AS item_count,
                -- what is STILL to pack after existing shipments/drafts
                string_agg(p.sku_code || ' (' || GREATEST(COALESCE(oi.qty_override, oi.qty) - att.attributed, 0) || ')', '; ' ORDER BY p.sku_code)
-                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL
+                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital
                          AND COALESCE(oi.qty_override, oi.qty) - att.attributed > 0) AS remaining_summary,
                COALESCE(SUM(GREATEST(COALESCE(oi.qty_override, oi.qty) - att.attributed, 0))
-                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL), 0) AS remaining_packable_qty,
+                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital), 0) AS remaining_packable_qty,
                COALESCE(SUM(LEAST(att.shipped, COALESCE(oi.qty_override, oi.qty)))
-                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL), 0) AS shipped_packable_qty,
+                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital), 0) AS shipped_packable_qty,
                -- per-product remaining for the client-side session pool
                jsonb_agg(jsonb_build_object('product_id', p.id, 'sku', p.sku_code,
                                             'remaining', GREATEST(COALESCE(oi.qty_override, oi.qty) - att.attributed, 0)))
-                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL
+                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital
                          AND COALESCE(oi.qty_override, oi.qty) - att.attributed > 0) AS packable_json,
                string_agg(p.sku_code || ' (' || COALESCE(oi.qty_override, oi.qty) || ')', '; ' ORDER BY p.sku_code)
                  FILTER (WHERE oi.direct_ship AND oi.removed_at IS NULL) AS direct_items_summary,
@@ -95,7 +97,8 @@ function listFulfillmentQueue() {
                -- back so the stamp is anchored to exactly what was confirmed
                string_agg(oi.id::text, ',' ORDER BY oi.id)
                  FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL) AS direct_outstanding_ids,
-               bool_and(oi.direct_ship) FILTER (WHERE oi.removed_at IS NULL) AS all_direct,
+               -- digital lines are neutral for the all-direct classification
+               bool_and(oi.direct_ship) FILTER (WHERE oi.removed_at IS NULL AND NOT p.digital) AS all_direct,
                bool_or(oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL) AS direct_outstanding
         FROM order_items oi
         JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
@@ -138,7 +141,9 @@ function listFulfillmentQueue() {
           OR (EXISTS (
                 SELECT 1 FROM order_items foi
                 JOIN group_buy_products fg ON fg.id = foi.group_buy_product_id
+                JOIN products fp ON fp.id = fg.product_id
                 WHERE foi.order_id = o.id AND foi.removed_at IS NULL AND NOT foi.direct_ship
+                  AND NOT fp.digital
                   AND fg.product_id IN (SELECT pid FROM sel)
                   AND COALESCE(foi.qty_override, foi.qty) - COALESCE((
                         SELECT sum(si.qty) FROM shipment_items si
@@ -149,7 +154,9 @@ function listFulfillmentQueue() {
                 OR NOT EXISTS (
                     SELECT 1 FROM order_items foi2
                     JOIN group_buy_products fg2 ON fg2.id = foi2.group_buy_product_id
+                    JOIN products fp2 ON fp2.id = fg2.product_id
                     WHERE foi2.order_id = o.id AND foi2.removed_at IS NULL AND NOT foi2.direct_ship
+                      AND NOT fp2.digital
                       AND fg2.product_id NOT IN (SELECT pid FROM sel)
                       AND COALESCE(foi2.qty_override, foi2.qty) - COALESCE((
                             SELECT sum(si2.qty) FROM shipment_items si2

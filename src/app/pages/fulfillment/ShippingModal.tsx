@@ -42,7 +42,7 @@ import type { RxAddress } from '@/app/pages/receiving/shared';
 
 type PackableLine = {
   order_item_id: number; product_id: number; sku_code: string; product_name: string;
-  product_external_id: string | null; unit_weight_oz: string | null;
+  product_external_id: string | null; unit_weight_oz: string | null; digital: boolean;
   effective_qty: string; attributed_qty: string; shipped_qty: string; remaining_qty: string;
   direct_ship: boolean; direct_fulfilled_at: string | null;
 };
@@ -85,8 +85,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const shipments = useMemo(() => rows<ShipmentRow>(rawShipments).map(s => ({
     ...s, tracking_number: s.tracking_number == null ? null : String(s.tracking_number),
   })), [rawShipments]);
-  const packLines = packable.filter(l => !l.direct_ship);
-  const directLines = packable.filter(l => l.direct_ship);
+  // digital products (COA certificates) never go in the box — read-only
+  const packLines = packable.filter(l => !l.direct_ship && !l.digital);
+  const directLines = packable.filter(l => l.direct_ship && !l.digital);
+  const digitalLines = packable.filter(l => l.digital);
 
   const [doCreateDraft] = useMutateAction(createShipmentDraft);
   const [doRecordManual] = useMutateAction(recordManualShipment);
@@ -269,7 +271,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             order_item_id: Number(l.order_item_id),
             product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
             sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
-            direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at,
+            direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at, digital: l.digital,
           };
         });
         if (freshRows.length === 0) throw new Error('empty read');
@@ -682,6 +684,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     <TableCell className="text-xs"><span className="font-medium">{l.sku_code}</span> <span className="rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">direct</span></TableCell>
                     <TableCell className="text-right">{fmtNum(l.effective_qty)}</TableCell>
                     <TableCell className="text-right text-xs" colSpan={3}>{l.direct_fulfilled_at ? 'vendor shipped' : 'vendor ships this line'}</TableCell>
+                  </TableRow>
+                ))}
+                {digitalLines.map(l => (
+                  <TableRow key={l.order_item_id} className="opacity-60">
+                    <TableCell className="text-xs"><span className="font-medium">{l.sku_code}</span> <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">digital</span></TableCell>
+                    <TableCell className="text-right">{fmtNum(l.effective_qty)}</TableCell>
+                    <TableCell className="text-right text-xs" colSpan={3}>delivered digitally — not packed</TableCell>
                   </TableRow>
                 ))}
                 {packLines.length === 0 && (
