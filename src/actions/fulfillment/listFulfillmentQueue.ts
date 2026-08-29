@@ -86,20 +86,24 @@ function listFulfillmentQueue() {
                                             'remaining', GREATEST(COALESCE(oi.qty_override, oi.qty) - att.attributed, 0)))
                  FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital
                          AND COALESCE(oi.qty_override, oi.qty) - att.attributed > 0) AS packable_json,
+               -- digital lines are excluded from the DIRECT side too: even a
+               -- (mis)flagged digital+direct combination is not vendor
+               -- shipping work and must not enter the direct queue or the
+               -- bulk-stamp id list
                string_agg(p.sku_code || ' (' || COALESCE(oi.qty_override, oi.qty) || ')', '; ' ORDER BY p.sku_code)
-                 FILTER (WHERE oi.direct_ship AND oi.removed_at IS NULL) AS direct_items_summary,
+                 FILTER (WHERE oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital) AS direct_items_summary,
                -- what the vendor STILL owes — the direct tab's row text and
                -- the bulk button's confirm show this, so the confirmation
                -- lists exactly the lines the bulk action will stamp
                string_agg(p.sku_code || ' (' || COALESCE(oi.qty_override, oi.qty) || ')', '; ' ORDER BY p.sku_code)
-                 FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL) AS direct_outstanding_summary,
+                 FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL AND NOT p.digital) AS direct_outstanding_summary,
                -- the ids behind that summary — the bulk button passes them
                -- back so the stamp is anchored to exactly what was confirmed
                string_agg(oi.id::text, ',' ORDER BY oi.id)
-                 FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL) AS direct_outstanding_ids,
+                 FILTER (WHERE oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL AND NOT p.digital) AS direct_outstanding_ids,
                -- digital lines are neutral for the all-direct classification
                bool_and(oi.direct_ship) FILTER (WHERE oi.removed_at IS NULL AND NOT p.digital) AS all_direct,
-               bool_or(oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL) AS direct_outstanding
+               bool_or(oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL AND NOT p.digital) AS direct_outstanding
         FROM order_items oi
         JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
         JOIN products p ON p.id = gbp.product_id
