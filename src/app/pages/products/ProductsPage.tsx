@@ -255,8 +255,11 @@ export function ProductsPage() {
       }
       // an existing SKU is a conflict-UPDATE: name/mass applied, but weight
       // deliberately did not (curated weights only change via the inline
-      // editor) — say so instead of implying the typed weight was saved
-      const wasInsert = Array.isArray(res) && res[0] && res[0].inserted === true;
+      // editor) — say so instead of implying the typed weight was saved.
+      // Mutate results can be an array of rows or a singleton object —
+      // normalize before reading inserted (same caveat as ImportPage).
+      const row = Array.isArray(res) ? res[0] : res;
+      const wasInsert = !!row && row.inserted === true;
       if (!wasInsert && npWeight.trim() !== '') {
         setNpError(`${npSku.trim()} already existed — its name/mass were updated, but the weight was NOT changed. Edit the weight in the table above (audited).`);
       }
