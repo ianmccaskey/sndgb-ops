@@ -133,15 +133,20 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   useEffect(() => { if (open) { setStrandedMsg(''); refreshStranded(); } // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, orderId]);
   const retryStranded = async (s: StashedPhoto, fallbackShipmentId: number | null) => {
+    const wasBound = s.shipment_id != null;
     const target = s.shipment_id ?? fallbackShipmentId;
     if (target == null) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
     try {
+      // bind FIRST, synchronously: a committed insert with a lost response
+      // must replay against THIS shipment later, never migrate to a
+      // different "newest" box (same durable-attach contract as the modal)
+      stashUpsert({ ...s, shipment_id: target });
       // a bound entry is an automatic replay (the insert may have already
       // committed); an unbound attach here is a deliberate operator act
-      const res = await doAddShipPhoto({ shipment_id: target, image_data: s.full, thumb_data: s.thumb, actor: s.actor || userName, replay: s.shipment_id != null }) as unknown[] | null;
+      const res = await doAddShipPhoto({ shipment_id: target, image_data: s.full, thumb_data: s.thumb, actor: s.actor || userName, replay: wasBound }) as unknown[] | null;
       const ok = Array.isArray(res) ? res.length > 0 : !!res;
       if (ok) { stashRemove(s.key); setStrandedMsg('Photo attached.'); reloadShipPhotos(); }
-      else if (s.shipment_id != null) {
+      else if (wasBound) {
         // the original shipment refuses replay (deleted, voided, quota, or
         // the photo was deliberately removed) — mirror the ship dialog:
         // the entry becomes unbound + recovered, so "Attach" to a live

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
@@ -44,7 +44,7 @@ import type { RxAddress } from '@/app/pages/receiving/shared';
  * stored BEFORE the POST), heartbeat lease CAS, single purchaseLabel,
  * retryable finalize, pendingFinalize + proof-walk recovery. After a
  * shipment lands, the Base44 push runs automatically and its outcome is
- * shown with a Retry â€” a failed push never blocks or rolls back the
+ * shown with a Retry — a failed push never blocks or rolls back the
  * local shipment.
  */
 
@@ -87,7 +87,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
 }) {
   const [rawPackable, , , reloadPackable] = useLoadAction(getPackableItems, [order.id], { order_id: order.id });
   const [rawShipments, , , reloadShipments] = useLoadAction(listOrderShipments, [order.id], { order_id: order.id });
-  // row boundary: the transport re-types digit-only text â€” re-string
+  // row boundary: the transport re-types digit-only text — re-string
   const packable = useMemo(() => rows<PackableLine>(rawPackable).map(l => ({
     ...l,
     effective_qty: String(l.effective_qty ?? '0'), attributed_qty: String(l.attributed_qty ?? '0'),
@@ -97,7 +97,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const shipments = useMemo(() => rows<ShipmentRow>(rawShipments).map(s => ({
     ...s, tracking_number: s.tracking_number == null ? null : String(s.tracking_number),
   })), [rawShipments]);
-  // digital products (COA certificates) never go in the box â€” read-only
+  // digital products (COA certificates) never go in the box — read-only
   const packLines = packable.filter(l => !l.direct_ship && !l.digital);
   const directLines = packable.filter(l => l.direct_ship && !l.digital);
   const digitalLines = packable.filter(l => l.digital);
@@ -161,7 +161,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // ---- package photos: captured on the phone BEFORE shipping. Every
   // capture goes STRAIGHT into the durable stash (see StashedPhoto above);
   // pendingPhotos is only the visible VIEW of this order's unbound
-  // (shipment_id null) entries â€” closing/unmounting the dialog loses
+  // (shipment_id null) entries — closing/unmounting the dialog loses
   // nothing. Entries leave the stash only on a verified attach or an
   // explicit operator removal. ----
   const [pendingPhotos, setPendingPhotos] = useState<StashedPhoto[]>([]);
@@ -173,9 +173,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const photoTarget = useRef<'pending' | number>('pending');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 'refused' = the server said no (quota full, shipment voided or gone) â€”
+  // 'refused' = the server said no (quota full, shipment voided or gone) —
   // retrying the same payload cannot succeed. 'error' = ambiguous transport
-  // failure â€” the insert MAY have committed; the server's same-content
+  // failure — the insert MAY have committed; the server's same-content
   // replay (add_shipment_photo SHA-256 short-circuit) makes retrying safe.
   type UploadResult = 'ok' | 'refused' | 'error';
   const tryUpload = async (shipmentId: number, ph: CapturedPhoto, actor: string = userName, replay = false): Promise<UploadResult> => {
@@ -189,7 +189,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
 
   // on open: show this order's pending entries, then auto-replay any
   // shipment-bound failures. Each stash mutation is a synchronous
-  // per-entry op keyed by s.key â€” no stale-snapshot bulk write.
+  // per-entry op keyed by s.key — no stale-snapshot bulk write.
   const stashRetried = useRef(false);
   useEffect(() => {
     if (stashRetried.current) return;
@@ -208,7 +208,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           if (!stashRemove(s.key)) allDurable = false;
         } else if (r === 'refused') {
           // shipment gone (draft recreated?), quota full, or deliberately
-          // deleted â€” the entry STAYS DURABLE, unbound and marked
+          // deleted — the entry STAYS DURABLE, unbound and marked
           // recovered: visible, but it will not ride another box unless
           // the operator explicitly says so
           moved += 1;
@@ -218,9 +218,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       refreshPendingView();
       const parts: string[] = [];
       if (recovered > 0) parts.push(`${recovered} previously failed photo(s) attached.`);
-      if (moved > 0) parts.push(`${moved} saved photo(s) could not attach to their original shipment (deleted, quota full, or previously removed) â€” now in the pending list below marked "recovered". They will NOT attach automatically: press "use" on each to allow it onto the next shipment, or remove it.`);
-      if (kept > 0) parts.push(`${kept} saved photo(s) still could not attach â€” they stay saved on this device and retry when this dialog reopens.`);
-      if (!allDurable) parts.push(`Warning: this device's storage is unavailable â€” unattached photos survive only while this page stays open.`);
+      if (moved > 0) parts.push(`${moved} saved photo(s) could not attach to their original shipment (deleted, quota full, or previously removed) — now in the pending list below marked "recovered". They will NOT attach automatically: press "use" on each to allow it onto the next shipment, or remove it.`);
+      if (kept > 0) parts.push(`${kept} saved photo(s) still could not attach — they stay saved on this device and retry when this dialog reopens.`);
+      if (!allDurable) parts.push(`Warning: this device's storage is unavailable — unattached photos survive only while this page stays open.`);
       if (parts.length > 0) setPhotoMsg(parts.join(' '));
       if (recovered > 0) reloadPhotos();
     })();
@@ -240,36 +240,36 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       for (const f of Array.from(files)) {
         try {
           const ph = await compressImageToDataUrl(f);
-          // the capture is the only copy â€” it enters the DURABLE stash
+          // the capture is the only copy — it enters the DURABLE stash
           // before anything else is attempted
           const entry: StashedPhoto = { ...ph, shipment_id: null, order_id: order.id, ts: Date.now(), actor: userName, key: newStashKey() };
           if (photoTarget.current === 'pending') {
-            if (!stashUpsert(entry)) errors.push(`${f.name}: kept for this shipment, but this device's storage is unavailable â€” it survives only while this page stays open.`);
+            if (!stashUpsert(entry)) errors.push(`${f.name}: kept for this shipment, but this device's storage is unavailable — it survives only while this page stays open.`);
             refreshPendingView();
           } else {
             const shipmentId = photoTarget.current;
             // durability FIRST: the entry is stashed, bound to its target
-            // shipment, before any network work â€” a crash or reload
+            // shipment, before any network work — a crash or reload
             // mid-upload leaves a bound entry that auto-replays on reopen
             // (the server's same-content replay dedupes a committed one)
             if (!stashUpsert({ ...entry, shipment_id: shipmentId })) {
-              errors.push(`${f.name}: this device's storage is unavailable â€” the photo survives only while this page stays open.`);
+              errors.push(`${f.name}: this device's storage is unavailable — the photo survives only while this page stays open.`);
             }
             const r = await tryUpload(shipmentId, ph);
             if (r === 'ok') {
-              // attached and verified â€” release the stashed copy
+              // attached and verified — release the stashed copy
               stashRemove(entry.key);
             } else if (r === 'refused') {
               // stays durable, unbound and RECOVERED: visible, never
               // auto-attached to a different box
               const durable = stashUpsert({ ...entry, shipment_id: null, recovered: true });
               refreshPendingView();
-              errors.push(`${f.name}: refused â€” this shipment's photo quota (5 photos / 5MB) is full or the shipment was voided. Kept in the pending list marked "recovered"${durable ? '' : ' (storage unavailable â€” it survives only while this page stays open)'}: press "use" to allow it onto the next shipment, or remove it.`);
+              errors.push(`${f.name}: refused — this shipment's photo quota (5 photos / 5MB) is full or the shipment was voided. Kept in the pending list marked "recovered"${durable ? '' : ' (storage unavailable — it survives only while this page stays open)'}: press "use" to allow it onto the next shipment, or remove it.`);
             } else {
               const durable = stashUpsert({ ...entry, shipment_id: shipmentId });
               errors.push(durable
-                ? `${f.name}: did not attach (transport error) â€” saved on this device and auto-retried next time this dialog opens.`
-                : `${f.name}: did not attach AND could not be saved to this device (storage unavailable) â€” it survives only while this page stays open. Retry now or re-take the photo.`);
+                ? `${f.name}: did not attach (transport error) — saved on this device and auto-retried next time this dialog opens.`
+                : `${f.name}: did not attach AND could not be saved to this device (storage unavailable) — it survives only while this page stays open. Retry now or re-take the photo.`);
             }
           }
         } catch (e: unknown) {
@@ -287,7 +287,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // attach the pre-ship captures to the shipment that just came into
   // existence. The stash stays the backing store throughout: a verified
   // attach removes its entry, a refusal leaves it unbound and visible, an
-  // ambiguous error re-binds it to this shipment for auto-retry â€” never
+  // ambiguous error re-binds it to this shipment for auto-retry — never
   // silently dropped, never blocking the shipment
   const uploadPendingPhotos = async (shipmentId: number) => {
     // recovered entries are excluded: evidence never migrates to a
@@ -296,44 +296,48 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (mine.length === 0) return;
     let refused = 0, errored = 0, attached = 0, allDurable = true;
     for (const s of mine) {
+      // bind FIRST, synchronously: if the insert commits but the tab dies
+      // before we hear back, the entry replays against THIS shipment on
+      // reopen (deduped server-side) instead of riding a later box as an
+      // ordinary pending photo — cross-shipment migration is impossible
+      if (!stashUpsert({ ...s, shipment_id: shipmentId })) allDurable = false;
       const r = await tryUpload(shipmentId, s, s.actor || userName);
       if (r === 'ok') {
         attached += 1;
         if (!stashRemove(s.key)) allDurable = false;
       } else if (r === 'refused') {
-        // refused by the very shipment it was meant for â€” it becomes a
+        // refused by the very shipment it was meant for — it becomes a
         // recovered entry, visible and never auto-consumed again
         refused += 1;
-        if (!stashUpsert({ ...s, recovered: true })) allDurable = false;
+        if (!stashUpsert({ ...s, shipment_id: null, recovered: true })) allDurable = false;
       } else {
-        errored += 1;
-        if (!stashUpsert({ ...s, shipment_id: shipmentId })) allDurable = false;
+        errored += 1; // stays bound to this shipment for safe replay
       }
     }
     refreshPendingView();
     const parts: string[] = [];
-    if (refused > 0) parts.push(`${refused} photo(s) refused (quota is 5 photos / 5MB per shipment) â€” kept pending, marked "recovered"; press "use" to allow one onto the next shipment.`);
-    if (errored > 0) parts.push(`${errored} photo(s) did not attach â€” saved on this device and auto-retried next time this dialog opens.`);
-    if (!allDurable) parts.push(`Warning: this device's storage is unavailable â€” unattached photos survive only while this page stays open.`);
+    if (refused > 0) parts.push(`${refused} photo(s) refused (quota is 5 photos / 5MB per shipment) — kept pending, marked "recovered"; press "use" to allow one onto the next shipment.`);
+    if (errored > 0) parts.push(`${errored} photo(s) did not attach — saved on this device and auto-retried next time this dialog opens.`);
+    if (!allDurable) parts.push(`Warning: this device's storage is unavailable — unattached photos survive only while this page stays open.`);
     if (parts.length > 0) setPhotoMsg(parts.join(' '));
     if (attached > 0 || refused > 0 || errored > 0) reloadPhotos();
   };
 
   const removePhoto = async (photoId: number, shipmentId: number) => {
-    if (!window.confirm('Remove this package photo? The removal is audited â€” its thumbnail and fingerprint stay in the audit history.')) return;
+    if (!window.confirm('Remove this package photo? The removal is audited — its thumbnail and fingerprint stay in the audit history.')) return;
     await doDeletePhoto({ photo_id: photoId, shipment_id: shipmentId, actor: userName }).catch(() => null);
     reloadPhotos();
   };
 
-  // the full image loads on demand â€” list rows carry only thumbnails
+  // the full image loads on demand — list rows carry only thumbnails
   const enlargePhoto = async (photoId: number, shipmentId: number) => {
     try {
       const res = await doGetPhoto({ photo_id: photoId, shipment_id: shipmentId }) as { image_data?: string }[] | null;
       const row = Array.isArray(res) && res.length > 0 ? res[0] : null;
       if (row?.image_data) setViewPhoto(String(row.image_data));
-      else setPhotoMsg('Could not load the full photo â€” it may have been removed.');
+      else setPhotoMsg('Could not load the full photo — it may have been removed.');
     } catch {
-      setPhotoMsg('Could not load the full photo â€” retry.');
+      setPhotoMsg('Could not load the full photo — retry.');
     }
   };
 
@@ -353,7 +357,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   }) || packLines.some(l => Number(l.shipped_qty) > 0 || Number(l.attributed_qty) > 0);
 
   const validateChosen = (): string | null => {
-    if (chosen.length === 0) return 'Enter a quantity on at least one line â€” a box must contain something.';
+    if (chosen.length === 0) return 'Enter a quantity on at least one line — a box must contain something.';
     for (const c of chosen) {
       if (!QTY_RE.test(c.qty)) return `${c.line.sku_code}: quantity must be a positive number (max 2 decimals).`;
       if (Number(c.qty) > Number(c.line.remaining_qty)) return `${c.line.sku_code}: only ${fmtNum(c.line.remaining_qty)} remaining to pack (the rest is already in another shipment or draft).`;
@@ -398,7 +402,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     setMsg(''); setRatesResult(null); setPickedRate('');
     if (!shippoKey) { setMsg('Add your Shippo API token in Settings first.'); return; }
     if (!fromRow) { setMsg('Pick the ship-from address.'); return; }
-    if (!shipTo) { setMsg('This order has no street address â€” fix it in the order sheet first.'); return; }
+    if (!shipTo) { setMsg('This order has no street address — fix it in the order sheet first.'); return; }
     const lineError = validateChosen();
     if (lineError) { setMsg(lineError); return; }
     for (const k of ['length', 'width', 'height'] as const) {
@@ -445,19 +449,19 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     }
   };
   const finWarnings = (fin: { addressDrift: boolean; trackingCollision: boolean }) => [
-    fin.addressDrift ? 'WARNING: the order\'s address changed since this label was quoted â€” the label may carry a STALE destination. Verify before shipping the box (refund/re-buy if wrong).' : '',
-    fin.trackingCollision ? 'WARNING: this tracking number already appears on another recent shipment or transfer â€” verify at Shippo; one of the two may be a double-record.' : '',
+    fin.addressDrift ? 'WARNING: the order\'s address changed since this label was quoted — the label may carry a STALE destination. Verify before shipping the box (refund/re-buy if wrong).' : '',
+    fin.trackingCollision ? 'WARNING: this tracking number already appears on another recent shipment or transfer — verify at Shippo; one of the two may be a double-record.' : '',
   ].filter(Boolean).join(' ');
 
   const runPush = async (shipmentId: number, pushEpoch: number, carrier: string, tracking: string, items: { order_item_id: number; qty: string; sku: string }[]) => {
     if (pushInFlight.current) return;
     pushInFlight.current = true;
-    setPushMsg('Pushing to the ordering appâ€¦');
+    setPushMsg('Pushing to the ordering app…');
     try {
       // JUST-IN-TIME authoritative read: the fully-shipped decision (which
       // can advance the upstream order to 'shipped') must reflect what the
-      // DB says NOW â€” after this finalize, and after anything another
-      // session did meanwhile â€” never this modal's stale hook rows
+      // DB says NOW — after this finalize, and after anything another
+      // session did meanwhile — never this modal's stale hook rows
       let freshRows: PushPackableLine[];
       try {
         const res = await fetchPackable({ order_id: order.id }) as unknown[] | null;
@@ -472,7 +476,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         });
         if (freshRows.length === 0) throw new Error('empty read');
       } catch {
-        setPushMsg('Push not sent â€” could not re-read the order\'s packing state (needed to decide the upstream status). The shipment is saved; use "Push upstream" to retry.');
+        setPushMsg('Push not sent — could not re-read the order\'s packing state (needed to decide the upstream status). The shipment is saved; use "Push upstream" to retry.');
         return;
       }
       const out = await pushShipmentUpstream({
@@ -498,7 +502,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (!rate || !shipTo || !fromRow) { setPurchaseMsg('Pick a rate first.'); return; }
       // belt for races the invalidation effect can't win
       if (ratesResult!.sig !== quoteSig) {
-        setPurchaseMsg('The shipment details changed after these rates were fetched â€” re-fetch rates.');
+        setPurchaseMsg('The shipment details changed after these rates were fetched — re-fetch rates.');
         setRatesResult(null); setPickedRate('');
         return;
       }
@@ -509,7 +513,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         city: fromRow.city, state: fromRow.state, zip: fromRow.zip,
         country: fromRow.country, phone: fromRow.phone, email: fromRow.email,
       };
-      // 1. DRAFT FIRST, atomic with its attribution â€” the server re-proves
+      // 1. DRAFT FIRST, atomic with its attribution — the server re-proves
       //    every gate row-locked (remaining, money, ship-to, ship-from)
       let draftId: number | null = null;
       let claimedAt = '';
@@ -530,16 +534,16 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       } catch (e: unknown) {
         const m = e instanceof Error ? e.message : '';
         setPurchaseMsg(m.includes('shipments_rate_unique')
-          ? 'This exact rate was already purchased (double-click?) â€” check the shipments below before buying again.'
+          ? 'This exact rate was already purchased (double-click?) — check the shipments below before buying again.'
           : (m || 'Failed to save the shipment draft.') + ' Nothing was saved or purchased.');
         return;
       }
       if (!draftId) {
-        setPurchaseMsg('Draft not saved â€” nothing was purchased. Possible causes: a quantity exceeds what remains to pack (another box may have just taken it), the order went on hold / its payment state changed, its ship-to address was corrected since the quote, or the ship-from address was edited or archived â€” reload and re-quote.');
+        setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a quantity exceeds what remains to pack (another box may have just taken it), the order went on hold / its payment state changed, its ship-to address was corrected since the quote, or the ship-from address was edited or archived — reload and re-quote.');
         reloadPackable(); reloadShipments();
         return;
       }
-      // the pre-ship package photos attach to the draft NOW â€” before any
+      // the pre-ship package photos attach to the draft NOW — before any
       // money moves, so even a failed purchase leaves the evidence with
       // its draft (failures stay pending and visible, never blocking)
       await uploadPendingPhotos(draftId);
@@ -548,7 +552,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         const hb = await doClaim({ shipment_id: draftId, prior_claimed_at: claimedAt, actor: userName }) as unknown[] | null;
         const hbRow = Array.isArray(hb) && hb.length > 0 ? hb[0] as { claimed_at?: string } : null;
         if (!hbRow) {
-          setPurchaseMsg('Not purchased â€” this draft was deleted or claimed by another session while this page was idle, or the order\'s address/hold/payment state changed. Nothing was charged; reload and re-quote.');
+          setPurchaseMsg('Not purchased — this draft was deleted or claimed by another session while this page was idle, or the order\'s address/hold/payment state changed. Nothing was charged; reload and re-quote.');
           reloadShipments();
           return;
         }
@@ -562,15 +566,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         if (e instanceof ShippoPurchaseRefusedError && claimedAt) {
           await doClearLease({ shipment_id: draftId, claimed_at: claimedAt, actor: userName }).catch(() => null);
         }
-        setPurchaseMsg((e instanceof Error ? e.message : 'Purchase failed') + ' â€” the draft is saved below; retry or delete it there.');
+        setPurchaseMsg((e instanceof Error ? e.message : 'Purchase failed') + ' — the draft is saved below; retry or delete it there.');
         reloadShipments();
         return;
       }
-      // 4. persist â€” retryable from memory if this write fails or THROWS
+      // 4. persist — retryable from memory if this write fails or THROWS
       const fin = await persistFinalize(draftId, result, rate.object_id);
       if (!fin.ok) {
         setPendingFinalize(m => ({ ...m, [draftId!]: result }));
-        setPurchaseMsg(`LABEL PURCHASED (transaction ${result.transactionId}) but saving failed â€” label: ${result.labelUrl} â€” use "Retry save" on the shipment below; do NOT purchase again.`);
+        setPurchaseMsg(`LABEL PURCHASED (transaction ${result.transactionId}) but saving failed — label: ${result.labelUrl} — use "Retry save" on the shipment below; do NOT purchase again.`);
         reloadShipments();
         return;
       }
@@ -598,8 +602,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const carrier = mCarrier === 'other' ? mCarrierOther.trim() : mCarrier;
       if (!carrier) { setMsg('Pick or type the carrier.'); return; }
       // tracking stays a string end-to-end; a re-typed JS number past safe
-      // range would be silently rounded â€” fail closed (platform precedent)
-      if (typeof (mTracking as unknown) === 'number' && !Number.isSafeInteger(mTracking as unknown as number)) { setMsg('Tracking number unreadable â€” re-enter it.'); return; }
+      // range would be silently rounded — fail closed (platform precedent)
+      if (typeof (mTracking as unknown) === 'number' && !Number.isSafeInteger(mTracking as unknown as number)) { setMsg('Tracking number unreadable — re-enter it.'); return; }
       if (!mTracking.trim()) { setMsg('Enter the tracking number from the label.'); return; }
       if (mCost.trim() !== '' && (!QTY_RE.test(mCost.trim()) || !(Number(mCost) > 0))) { setMsg('Cost must be a positive number, or blank.'); return; }
       const lineError = validateChosen();
@@ -624,13 +628,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         recordedId = row ? Number(row.id) : null;
       } catch (e: unknown) {
         // a born-finalized insert may have committed before an error
-        // surfaced â€” say so honestly instead of "nothing was recorded"
-        setMsg((e instanceof Error ? e.message : 'Recording failed') + ' â€” the record may or may not have saved; check the shipments list below before re-entering.');
+        // surfaced — say so honestly instead of "nothing was recorded"
+        setMsg((e instanceof Error ? e.message : 'Recording failed') + ' — the record may or may not have saved; check the shipments list below before re-entering.');
         reloadShipments();
         return;
       }
       if (!recordedId) {
-        setMsg('Not recorded â€” possible causes: a quantity exceeds remaining, this tracking number is already on a shipment or transfer from the last 120 days (retyped a label that\'s already recorded?), the order\'s hold/payment/address state changed, or the ship-from address was edited. Nothing was saved.');
+        setMsg('Not recorded — possible causes: a quantity exceeds remaining, this tracking number is already on a shipment or transfer from the last 120 days (retyped a label that\'s already recorded?), the order\'s hold/payment/address state changed, or the ship-from address was edited. Nothing was saved.');
         reloadPackable(); reloadShipments();
         return;
       }
@@ -646,7 +650,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     }
   };
 
-  // EVERY successful finalize â€” primary, retry, recovery â€” converges here:
+  // EVERY successful finalize — primary, retry, recovery — converges here:
   // session pool decrement, reloads, and the automatic Base44 push. A
   // recovered shipment must reach the same postconditions as a happy-path
   // one, or Base44 silently lacks its tracking until someone notices.
@@ -666,7 +670,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       setPendingFinalize(m => { const n = { ...m }; delete n[s.id]; return n; });
       setRowMsg(m => ({ ...m, [s.id]: finWarnings(fin) || 'Saved.' }));
       await shipmentLanded(s, s.carrier || '', pending.trackingNumber || '');
-    } else setRowMsg(m => ({ ...m, [s.id]: 'Save failed again â€” the label URL is preserved here; keep retrying.' }));
+    } else setRowMsg(m => ({ ...m, [s.id]: 'Save failed again — the label URL is preserved here; keep retrying.' }));
   };
 
   const recoverByTxn = async (s: ShipmentRow) => {
@@ -676,12 +680,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const result = await getTransaction(shippoHttp, shippoKey, txn);
       // RATE-BOUND: the draft's stored rate is the proof of ownership
       if (!s.shippo_rate_id || result.rateId !== s.shippo_rate_id) {
-        setRowMsg(m => ({ ...m, [s.id]: `That transaction was purchased against a different rate than this draft (transaction rate ${result.rateId || 'unknown'}, draft rate ${s.shippo_rate_id || 'missing'}) â€” refusing to attach it.` }));
+        setRowMsg(m => ({ ...m, [s.id]: `That transaction was purchased against a different rate than this draft (transaction rate ${result.rateId || 'unknown'}, draft rate ${s.shippo_rate_id || 'missing'}) — refusing to attach it.` }));
         return;
       }
       const fin = await persistFinalize(s.id, result, result.rateId || '');
       if (fin.ok) { setRowMsg(m => ({ ...m, [s.id]: finWarnings(fin) || 'Recovered and saved.' })); await shipmentLanded(s, s.carrier || '', result.trackingNumber || ''); }
-      else setRowMsg(m => ({ ...m, [s.id]: 'Transaction found but saving failed â€” retry.' }));
+      else setRowMsg(m => ({ ...m, [s.id]: 'Transaction found but saving failed — retry.' }));
     } catch (e: unknown) {
       setRowMsg(m => ({ ...m, [s.id]: e instanceof Error ? e.message : 'Recovery failed' }));
     }
@@ -695,13 +699,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       try {
         existing = await findTransactionByRate(shippoHttp, shippoKey, s.shippo_rate_id, s.created_at);
       } catch (e: unknown) {
-        setRowMsg(m => ({ ...m, [s.id]: e instanceof Error ? e.message : 'Could not verify with Shippo â€” not purchasing.' }));
+        setRowMsg(m => ({ ...m, [s.id]: e instanceof Error ? e.message : 'Could not verify with Shippo — not purchasing.' }));
         return;
       }
       if (existing) {
         const fin0 = await persistFinalize(s.id, existing, s.shippo_rate_id);
         if (fin0.ok) { setRowMsg(m => ({ ...m, [s.id]: finWarnings(fin0) || 'An existing label was found and recovered.' })); await shipmentLanded(s, s.carrier || '', existing.trackingNumber || ''); }
-        else setRowMsg(m => ({ ...m, [s.id]: `An existing label was found (${existing.transactionId}) but saving failed â€” retry.` }));
+        else setRowMsg(m => ({ ...m, [s.id]: `An existing label was found (${existing.transactionId}) but saving failed — retry.` }));
         return;
       }
       if (s.purchase_attempted_at) {
@@ -711,7 +715,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const claim = await doClaim({ shipment_id: s.id, prior_claimed_at: '', actor: userName }) as unknown[] | null;
       const claimRow = Array.isArray(claim) && claim.length > 0 ? claim[0] as { claimed_at?: string } : null;
       if (!claimRow) {
-        setRowMsg(m => ({ ...m, [s.id]: 'Not purchased â€” the draft no longer exists, another purchase attempt is fresh (<10 min), or the order\'s address/hold/payment state changed since the draft. Nothing was charged.' }));
+        setRowMsg(m => ({ ...m, [s.id]: 'Not purchased — the draft no longer exists, another purchase attempt is fresh (<10 min), or the order\'s address/hold/payment state changed since the draft. Nothing was charged.' }));
         reloadShipments();
         return;
       }
@@ -728,7 +732,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (fin.ok) { setRowMsg(m => ({ ...m, [s.id]: finWarnings(fin) || 'Purchased and saved.' })); await shipmentLanded(s, s.carrier || '', result.trackingNumber || ''); }
       else {
         setPendingFinalize(m => ({ ...m, [s.id]: result }));
-        setRowMsg(m => ({ ...m, [s.id]: `Label purchased (${result.transactionId}) but saving failed â€” ${result.labelUrl} â€” use Retry save.` }));
+        setRowMsg(m => ({ ...m, [s.id]: `Label purchased (${result.transactionId}) but saving failed — ${result.labelUrl} — use Retry save.` }));
       }
     } catch (e: unknown) {
       setRowMsg(m => ({ ...m, [s.id]: e instanceof Error ? e.message : 'Purchase failed' }));
@@ -738,24 +742,24 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   };
 
   const deleteDraft = async (s: ShipmentRow) => {
-    // a draft may only be deleted after Shippo PROVES no label exists â€”
+    // a draft may only be deleted after Shippo PROVES no label exists —
     // the rate id is the only recovery handle for a label paid in a lost
     // session. No key = no verification = no delete.
-    if (!shippoKey) { setRowMsg(m => ({ ...m, [s.id]: 'Not deleted â€” no Shippo API token, so it cannot be verified that no label was purchased. Add the token in Settings first.' })); return; }
-    if (!s.shippo_rate_id) { setRowMsg(m => ({ ...m, [s.id]: 'Not deleted â€” this draft has no rate id to verify against Shippo.' })); return; }
+    if (!shippoKey) { setRowMsg(m => ({ ...m, [s.id]: 'Not deleted — no Shippo API token, so it cannot be verified that no label was purchased. Add the token in Settings first.' })); return; }
+    if (!s.shippo_rate_id) { setRowMsg(m => ({ ...m, [s.id]: 'Not deleted — this draft has no rate id to verify against Shippo.' })); return; }
     try {
       const existing = await findTransactionByRate(shippoHttp, shippoKey, s.shippo_rate_id, s.created_at);
       if (existing) {
         const fin = await persistFinalize(s.id, existing, s.shippo_rate_id);
         setRowMsg(m => ({ ...m, [s.id]: fin.ok
-          ? (finWarnings(fin) || 'A PURCHASED label exists for this draft â€” recovered instead of deleting.')
-          : `A PURCHASED label exists (${existing.transactionId}) â€” recovery save failed, retry.` }));
+          ? (finWarnings(fin) || 'A PURCHASED label exists for this draft — recovered instead of deleting.')
+          : `A PURCHASED label exists (${existing.transactionId}) — recovery save failed, retry.` }));
         if (fin.ok) await shipmentLanded(s, s.carrier || '', existing.trackingNumber || '');
         else { reloadPackable(); reloadShipments(); reload(); }
         return;
       }
     } catch (e: unknown) {
-      setRowMsg(m => ({ ...m, [s.id]: e instanceof Error ? e.message : 'Could not verify with Shippo â€” not deleting.' }));
+      setRowMsg(m => ({ ...m, [s.id]: e instanceof Error ? e.message : 'Could not verify with Shippo — not deleting.' }));
       return;
     }
     if (s.purchase_attempted_at) {
@@ -764,28 +768,28 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (!window.confirm('Delete this shipment draft? Shippo confirmed no label was purchased for it; its quantities return to remaining.')) return;
     const del = await doDeleteDraft({ shipment_id: s.id, actor: userName }) as unknown[] | null;
     if (!(Array.isArray(del) ? del.length > 0 : !!del)) {
-      setRowMsg(m => ({ ...m, [s.id]: 'Not deleted â€” a purchase attempt started within the last 10 minutes (possibly the other admin), or it was just finalized. Wait, then retry.' }));
+      setRowMsg(m => ({ ...m, [s.id]: 'Not deleted — a purchase attempt started within the last 10 minutes (possibly the other admin), or it was just finalized. Wait, then retry.' }));
     }
     reloadPackable(); reloadShipments(); reload();
   };
 
   const refund = async (s: ShipmentRow) => {
     if (!s.shippo_transaction_id || refundInFlight.current) return;
-    if (!shippoKey) { setRowMsg(m => ({ ...m, [s.id]: 'No Shippo API token is set (Settings) â€” the refund request cannot be sent.' })); return; }
+    if (!shippoKey) { setRowMsg(m => ({ ...m, [s.id]: 'No Shippo API token is set (Settings) — the refund request cannot be sent.' })); return; }
     if (!window.confirm(`Request a refund for this label (${fmtUSD(s.rate_amount || s.label_cost_usd)})? Carrier refunds settle over days and only succeed for UNUSED labels. When "Re-check" records SUCCESS, this shipment is VOIDED: its quantities return to remaining and the order re-enters the pack queue.`)) return;
     refundInFlight.current = true;
     try {
       const mark = await doSetRefund({ shipment_id: s.id, refund_status: 'REQUESTING', prior_requested_at: '', actor: userName }) as unknown[] | null;
       const markRow = Array.isArray(mark) && mark.length > 0 ? mark[0] as { requested_at?: string } : null;
       if (!markRow) {
-        setRowMsg(m => ({ ...m, [s.id]: 'Not sent â€” a refund for this label was already requested (possibly by the other admin). Use "Re-check".' }));
+        setRowMsg(m => ({ ...m, [s.id]: 'Not sent — a refund for this label was already requested (possibly by the other admin). Use "Re-check".' }));
         reloadShipments();
         return;
       }
       if (markRow.requested_at) {
         const hb = await doSetRefund({ shipment_id: s.id, refund_status: 'REQUESTING', prior_requested_at: markRow.requested_at, actor: userName }) as unknown[] | null;
         if (!(Array.isArray(hb) && hb.length > 0)) {
-          setRowMsg(m => ({ ...m, [s.id]: 'Not sent â€” this request marker was cleared or superseded while the page was idle. Use "Re-check" before requesting again.' }));
+          setRowMsg(m => ({ ...m, [s.id]: 'Not sent — this request marker was cleared or superseded while the page was idle. Use "Re-check" before requesting again.' }));
           reloadShipments();
           return;
         }
@@ -794,7 +798,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         const status = await requestRefund(shippoHttp, shippoKey, s.shippo_transaction_id);
         await doSetRefund({ shipment_id: s.id, refund_status: status, prior_requested_at: '', actor: userName });
       } catch (e: unknown) {
-        setRowMsg(m => ({ ...m, [s.id]: (e instanceof Error ? e.message : 'Refund request failed') + ' The row stays REQUESTING â€” use "Re-check" to reconcile; do not assume it failed.' }));
+        setRowMsg(m => ({ ...m, [s.id]: (e instanceof Error ? e.message : 'Refund request failed') + ' The row stays REQUESTING — use "Re-check" to reconcile; do not assume it failed.' }));
       }
       reloadShipments();
     } finally {
@@ -804,22 +808,22 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
 
   const recheckRefund = async (s: ShipmentRow) => {
     if (!s.shippo_transaction_id || refundInFlight.current) return;
-    if (!shippoKey) { setRowMsg(m => ({ ...m, [s.id]: 'No Shippo API token is set (Settings) â€” cannot check.' })); return; }
+    if (!shippoKey) { setRowMsg(m => ({ ...m, [s.id]: 'No Shippo API token is set (Settings) — cannot check.' })); return; }
     refundInFlight.current = true;
     try {
       const status = await findRefundByTransaction(shippoHttp, shippoKey, s.shippo_transaction_id, s.created_at);
       if (status) {
         await doSetRefund({ shipment_id: s.id, refund_status: status, prior_requested_at: '', actor: userName });
-        setRowMsg(m => ({ ...m, [s.id]: status === 'SUCCESS' ? 'Refund SUCCESS â€” this shipment is voided; its quantities returned to remaining.' : `Refund status: ${status}.` }));
+        setRowMsg(m => ({ ...m, [s.id]: status === 'SUCCESS' ? 'Refund SUCCESS — this shipment is voided; its quantities returned to remaining.' : `Refund status: ${status}.` }));
       } else {
         if (!window.confirm('Shippo\'s FULL refund listing shows no refund for this label. Clear the marker so a refund can be requested again? Only confirm if the original request never reached Shippo.')) {
-          setRowMsg(m => ({ ...m, [s.id]: 'Marker kept â€” Re-check again later.' }));
+          setRowMsg(m => ({ ...m, [s.id]: 'Marker kept — Re-check again later.' }));
           return;
         }
         const cleared = await doSetRefund({ shipment_id: s.id, refund_status: '', prior_requested_at: '', actor: userName }) as unknown[] | null;
         setRowMsg(m => ({ ...m, [s.id]: (Array.isArray(cleared) && cleared.length > 0)
-          ? 'Marker cleared â€” you can request again.'
-          : 'Not cleared â€” the marker is under 10 minutes old; a request may be in flight.' }));
+          ? 'Marker cleared — you can request again.'
+          : 'Not cleared — the marker is under 10 minutes old; a request may be in flight.' }));
       }
       reloadPackable(); reloadShipments(); reload();
     } catch (e: unknown) {
@@ -842,19 +846,19 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Ship â€” {order.order_number} Â· {order.customer_name}{testMode && <span className="ml-2 rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase align-middle">Shippo test mode</span>}</DialogTitle>
+          <DialogTitle>Ship — {order.order_number} · {order.customer_name}{testMode && <span className="ml-2 rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase align-middle">Shippo test mode</span>}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          {/* ship-to, stated clearly â€” this is what goes on the label */}
+          {/* ship-to, stated clearly — this is what goes on the label */}
           <div className="rounded border p-3 text-sm">
             <p className="text-xs font-semibold uppercase text-muted-foreground mb-1">Ship to</p>
             <p className="font-medium">{order.contact_name || order.customer_name}</p>
             <p>{order.address_line1}{order.address_line2 ? `, ${order.address_line2}` : ''}</p>
             <p>{order.city}, {order.state_code} {order.postal_code}</p>
             {(order.contact_phone || order.contact_email) && (
-              <p className="text-xs text-muted-foreground mt-1">{[order.contact_phone, order.contact_email].filter(Boolean).join(' Â· ')}</p>
+              <p className="text-xs text-muted-foreground mt-1">{[order.contact_phone, order.contact_email].filter(Boolean).join(' · ')}</p>
             )}
-            {order.customer_note && <p className="text-xs text-amber-700 mt-1">â€œ{order.customer_note}â€</p>}
+            {order.customer_note && <p className="text-xs text-amber-700 mt-1">“{order.customer_note}”</p>}
           </div>
 
           {/* items in the box */}
@@ -893,7 +897,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   <TableRow key={l.order_item_id} className="opacity-60">
                     <TableCell className="text-xs"><span className="font-medium">{l.sku_code}</span> <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">digital</span></TableCell>
                     <TableCell className="text-right">{fmtNum(l.effective_qty)}</TableCell>
-                    <TableCell className="text-right text-xs" colSpan={3}>delivered digitally â€” not packed</TableCell>
+                    <TableCell className="text-right text-xs" colSpan={3}>delivered digitally — not packed</TableCell>
                   </TableRow>
                 ))}
                 {packLines.length === 0 && (
@@ -904,13 +908,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           </div>
           <p className="text-xs text-muted-foreground -mt-2">
             {isPartial ? <span className="rounded bg-blue-100 text-blue-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase mr-1">partial</span> : <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase mr-1">full</span>}
-            Defaults ship everything remaining; lower a quantity to split the order across boxes â€” the rest stays in the ready queue.
+            Defaults ship everything remaining; lower a quantity to split the order across boxes — the rest stays in the ready queue.
           </p>
 
           {/* box + ship-from */}
           <div className="flex flex-wrap gap-2 items-center">
             <Select value={shipFrom} onValueChange={setShipFrom}>
-              <SelectTrigger className="h-9 w-56"><SelectValue placeholder="Ship fromâ€¦" /></SelectTrigger>
+              <SelectTrigger className="h-9 w-56"><SelectValue placeholder="Ship from…" /></SelectTrigger>
               <SelectContent>
                 {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}</SelectItem>)}
               </SelectContent>
@@ -933,7 +937,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             </label>
           </div>
           {!manualMode && missingWeightSkus.length > 0 && (
-            <p className="text-[11px] text-amber-700">No catalog weight for {missingWeightSkus.join(', ')} â€” they count as 0 in the prefill; adjust the weight by hand (set weights on the Products page).</p>
+            <p className="text-[11px] text-amber-700">No catalog weight for {missingWeightSkus.join(', ')} — they count as 0 in the prefill; adjust the weight by hand (set weights on the Products page).</p>
           )}
           {/* package photos: capture BEFORE shipping; they attach to the
               shipment record the moment it exists */}
@@ -941,9 +945,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-xs font-semibold uppercase text-muted-foreground">Package photos</p>
               <Button size="sm" variant="outline" className="h-7 text-xs" disabled={photoBusy} onClick={() => capturePhotos('pending')}>
-                {photoBusy ? 'Processingâ€¦' : 'ðŸ“· Take / add photo'}
+                {photoBusy ? 'Processing…' : '📷 Take / add photo'}
               </Button>
-              <span className="text-[11px] text-muted-foreground">photograph the open box contents â€” saved with the shipment as evidence</span>
+              <span className="text-[11px] text-muted-foreground">photograph the open box contents — saved with the shipment as evidence</span>
             </div>
             {pendingPhotos.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
@@ -951,14 +955,14 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   <span key={ph.key} className="relative">
                     <img src={ph.thumb} alt={`package photo ${i + 1}`}
                       className={`h-14 w-14 object-cover rounded border cursor-pointer ${ph.recovered ? 'ring-2 ring-amber-400' : ''}`}
-                      title={ph.recovered ? 'Recovered from a failed or removed shipment â€” will NOT attach automatically' : undefined}
+                      title={ph.recovered ? 'Recovered from a failed or removed shipment — will NOT attach automatically' : undefined}
                       onClick={() => setViewPhoto(ph.full)} />
                     {ph.recovered && (
                       <button className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-amber-100 text-amber-900 border border-amber-400 px-1.5 text-[9px] leading-tight" title="Allow this photo to attach to the next shipment you create"
                         onClick={() => { stashUpsert({ ...ph, recovered: false }); refreshPendingView(); }}>use</button>
                     )}
                     <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove before shipping"
-                      onClick={() => { stashRemove(ph.key); refreshPendingView(); }}>Ã—</button>
+                      onClick={() => { stashRemove(ph.key); refreshPendingView(); }}>×</button>
                   </span>
                 ))}
               </div>
@@ -976,21 +980,21 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 <SelectTrigger className="h-9 w-36"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {['usps', 'ups', 'fedex', 'dhl_express', 'dhl_ecommerce'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                  <SelectItem value="other">otherâ€¦</SelectItem>
+                  <SelectItem value="other">other…</SelectItem>
                 </SelectContent>
               </Select>
               {mCarrier === 'other' && <Input placeholder="carrier token" value={mCarrierOther} onChange={e => setMCarrierOther(e.target.value)} className="h-9 w-32" />}
               <Input placeholder="Tracking number" value={mTracking} onChange={e => setMTracking(e.target.value)} className="h-9 flex-1 min-w-52 font-mono text-xs" />
               <Input placeholder="Cost $ (optional)" value={mCost} onChange={e => setMCost(e.target.value)} className="h-9 w-32" />
-              <Button size="sm" disabled={manualBusy} onClick={recordManual}>{manualBusy ? 'Recordingâ€¦' : 'Record shipment'}</Button>
+              <Button size="sm" disabled={manualBusy} onClick={recordManual}>{manualBusy ? 'Recording…' : 'Record shipment'}</Button>
             </div>
           ) : (
             <div className="space-y-2">
               <div className="flex gap-2 items-center">
-                <Button size="sm" variant="outline" disabled={ratesLoading} onClick={fetchRates}>{ratesLoading ? 'Quotingâ€¦' : 'Get rates'}</Button>
+                <Button size="sm" variant="outline" disabled={ratesLoading} onClick={fetchRates}>{ratesLoading ? 'Quoting…' : 'Get rates'}</Button>
                 {ratesResult && ratesResult.rates.length > 0 && pickedRate && (
                   <Button size="sm" disabled={purchasing} onClick={purchase}>
-                    {purchasing ? 'Purchasingâ€¦' : `Buy label â€” ${fmtUSD(ratesResult.rates.find(r => r.object_id === pickedRate)?.amount || 0)}${testMode ? ' (TEST)' : ''}`}
+                    {purchasing ? 'Purchasing…' : `Buy label — ${fmtUSD(ratesResult.rates.find(r => r.object_id === pickedRate)?.amount || 0)}${testMode ? ' (TEST)' : ''}`}
                   </Button>
                 )}
               </div>
@@ -998,7 +1002,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 <div className="text-[11px] text-amber-700 space-y-0.5">{ratesResult.messages.map((m, i) => <p key={i}>{m}</p>)}</div>
               )}
               {ratesResult && ratesResult.rates.length === 0 && (
-                <p className="text-xs text-red-600">No UPS/USPS rates returned{ratesResult.allRateCount > 0 ? ` (${ratesResult.allRateCount} other-carrier rates were filtered)` : ''} â€” check the addresses above{ratesResult.allRateCount === 0 ? ' and that UPS/USPS are enabled on your Shippo account' : ''}.</p>
+                <p className="text-xs text-red-600">No UPS/USPS rates returned{ratesResult.allRateCount > 0 ? ` (${ratesResult.allRateCount} other-carrier rates were filtered)` : ''} — check the addresses above{ratesResult.allRateCount === 0 ? ' and that UPS/USPS are enabled on your Shippo account' : ''}.</p>
               )}
               {ratesResult && ratesResult.rates.length > 0 && (
                 <div className="border rounded-lg overflow-x-auto">
@@ -1011,9 +1015,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         <TableRow key={r.object_id} className="cursor-pointer" onClick={() => setPickedRate(r.object_id)}>
                           <TableCell><input type="radio" readOnly checked={pickedRate === r.object_id} /></TableCell>
                           <TableCell>{r.provider}</TableCell>
-                          <TableCell className="text-xs">{r.servicelevel?.name || r.servicelevel?.token || 'â€”'}</TableCell>
+                          <TableCell className="text-xs">{r.servicelevel?.name || r.servicelevel?.token || '—'}</TableCell>
                           <TableCell className="text-right font-medium">{fmtUSD(r.amount)}</TableCell>
-                          <TableCell className="text-right text-xs">{r.estimated_days ?? 'â€”'}</TableCell>
+                          <TableCell className="text-right text-xs">{r.estimated_days ?? '—'}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -1027,13 +1031,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           {purchaseMsg && <p className="text-sm text-red-600">{purchaseMsg}</p>}
           {success && (
             <div className="rounded border border-green-300 bg-green-50 p-2 text-sm space-y-1">
-              <p className="font-medium text-green-900">Label purchased â€” tracking <span className="font-mono">{success.trackingNumber}</span></p>
-              {success.labelUrl && <p className="text-xs"><a className="underline" href={success.labelUrl} target="_blank" rel="noreferrer">Open label (PDF)</a> <span className="text-muted-foreground">â€” public unauthenticated link, don't share</span></p>}
+              <p className="font-medium text-green-900">Label purchased — tracking <span className="font-mono">{success.trackingNumber}</span></p>
+              {success.labelUrl && <p className="text-xs"><a className="underline" href={success.labelUrl} target="_blank" rel="noreferrer">Open label (PDF)</a> <span className="text-muted-foreground">— public unauthenticated link, don't share</span></p>}
             </div>
           )}
           {manualSuccess && (
             <div className="rounded border border-green-300 bg-green-50 p-2 text-sm">
-              <p className="font-medium text-green-900">Shipment recorded â€” tracking <span className="font-mono">{manualSuccess}</span> <span className="text-xs font-normal text-muted-foreground">(manual label â€” no in-app refund)</span></p>
+              <p className="font-medium text-green-900">Shipment recorded — tracking <span className="font-mono">{manualSuccess}</span> <span className="text-xs font-normal text-muted-foreground">(manual label — no in-app refund)</span></p>
             </div>
           )}
           {pushMsg && <p className={`text-sm ${pushMsg.startsWith('Pushed') ? 'text-green-700' : 'text-amber-700'}`}>{pushMsg}</p>}
@@ -1045,7 +1049,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
               {drafts.map(s => (
                 <div key={s.id} className="rounded border border-amber-300 bg-amber-50 p-2 text-xs space-y-1">
                   <p className="font-medium text-amber-900">
-                    DRAFT â€” {s.carrier} {s.servicelevel} {fmtUSD(s.rate_amount || 0)} Â· {(s.items || []).map(i => `${i.sku_code}Ã—${fmtNum(i.qty)}`).join(', ')}
+                    DRAFT — {s.carrier} {s.servicelevel} {fmtUSD(s.rate_amount || 0)} · {(s.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}
                     {s.purchase_attempted_at && !s.attempt_verified_no_label_at && <span className="ml-1 rounded bg-red-100 text-red-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase">may hold a paid label</span>}
                   </p>
                   <div className="flex flex-wrap gap-1 items-center">
@@ -1064,7 +1068,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         <span key={ph.id} className="relative">
                           <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id, s.id)} />
                           <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
-                            onClick={() => removePhoto(ph.id, s.id)}>Ã—</button>
+                            onClick={() => removePhoto(ph.id, s.id)}>×</button>
                         </span>
                       ))}
                     </div>
@@ -1077,7 +1081,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   <p className="flex flex-wrap items-center gap-1.5">
                     <StatusPill value={s.refund_status === 'SUCCESS' ? 'refunded' : s.status} />
                     <span className="font-mono">{(s.carrier || '').toUpperCase()} {s.tracking_number}</span>
-                    <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}Ã—${fmtNum(i.qty)}`).join(', ')}</span>
+                    <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}</span>
                     <span className="text-muted-foreground">{fmtUSD(s.label_cost_usd)}</span>
                     {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}
                     {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase">refund {s.refund_status}</span>}
@@ -1089,7 +1093,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         <span key={ph.id} className="relative">
                           <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id, s.id)} />
                           <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
-                            onClick={() => removePhoto(ph.id, s.id)}>Ã—</button>
+                            onClick={() => removePhoto(ph.id, s.id)}>×</button>
                         </span>
                       ))}
                     </div>
