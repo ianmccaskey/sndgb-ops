@@ -72,12 +72,12 @@ export function ProductsPage() {
   const toggleDigital = async (p: Product) => {
     if (!window.confirm(p.digital
       ? `${p.sku_code}: mark as a PHYSICAL product? It will re-enter fulfillment packing math (queues, session pool, shipping modal).`
-      : `${p.sku_code}: mark as DIGITAL (e.g. a COA certificate)? It will be excluded from ALL fulfillment packing math — never packed, never blocks an order from reading fully shipped.`)) return;
+      : `${p.sku_code}: mark as DIGITAL (e.g. a COA certificate)? It will be excluded from ALL fulfillment packing math — never packed, never blocks an order from reading fully shipped. Orders this completes will show a "not pushed" badge so their upstream status can be re-pushed.`)) return;
     try {
       const res = await doSetDigital({ product_id: p.id, digital: !p.digital, expected_digital: p.digital, actor: userName }) as unknown[] | null;
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
         setWMsg(!p.digital
-          ? `${p.sku_code}: not changed — either the flag was flipped in another session, or a shipment/draft box already holds attributed quantity of this product (hiding it mid-flight would strand packed work — void/refund those shipments first).`
+          ? `${p.sku_code}: not changed — either the flag was flipped in another session, or a DRAFT box is currently being packed with this product (finish or delete that draft first; completed shipments never block a reclassification).`
           : `${p.sku_code}: not changed — the flag was flipped in another session. Reloading.`);
       }
       reloadProducts();
