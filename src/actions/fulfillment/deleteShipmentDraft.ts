@@ -11,7 +11,10 @@ import { action } from '@uibakery/data';
  * until a proof-of-absence walk stamped attempt_verified_no_label_at:
  * deleting would orphan the rate id, the only recovery handle for a label
  * that may have been paid. Items snapshot into old_data (CASCADE would
- * erase them silently). Audited.
+ * erase them silently). Attached package photos also CASCADE away, so
+ * each one gets its own shipment_photo_deleted audit row (reason
+ * draft_deleted) and the draft's audit row carries their count — evidence
+ * never vanishes without a trail. Audited.
  */
 function deleteShipmentDraft() {
   return action('deleteShipmentDraft', 'SQL', {
@@ -31,16 +34,30 @@ function deleteShipmentDraft() {
           AND s.finalized_at IS NULL
           AND (s.purchase_started_at IS NULL OR s.purchase_started_at < now() - interval '10 minutes')
           AND (s.purchase_attempted_at IS NULL OR s.attempt_verified_no_label_at IS NOT NULL)
+      ), photos AS (
+        SELECT sp.id, sp.shipment_id, length(sp.image_data) AS bytes, sp.created_by, sp.created_at
+        FROM shipment_photos sp, snapshot sn
+        WHERE sp.shipment_id = sn.id
       ), del AS (
         DELETE FROM shipments s
         USING snapshot sn
         WHERE s.id = sn.id
         RETURNING s.id
+      ), audit_photos AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, old_data)
+        SELECT 'shipment_photos', p.id::text, 'shipment_photo_deleted', {{params.actor}}::text,
+               jsonb_build_object('shipment_id', p.shipment_id, 'bytes', p.bytes,
+                                  'taken_at', p.created_at, 'taken_by', p.created_by,
+                                  'reason', 'draft_deleted')
+        FROM photos p
+        JOIN del ON del.id = p.shipment_id
+        RETURNING row_pk
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, old_data)
       SELECT 'shipments', sn.id::text, 'shipment_draft_deleted', {{params.actor}}::text,
              jsonb_build_object('order_id', sn.order_id, 'shippo_rate_id', sn.shippo_rate_id,
-                                'rate_amount', sn.rate_amount, 'items', sn.items)
+                                'rate_amount', sn.rate_amount, 'items', sn.items,
+                                'photos_deleted', (SELECT count(*) FROM photos))
       FROM snapshot sn
       JOIN del ON del.id = sn.id
       RETURNING row_pk AS id
