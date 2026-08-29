@@ -313,13 +313,21 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             refreshPendingView();
           } else {
             const shipmentId = photoTarget.current;
+            // durability FIRST: the entry is stashed, bound to its target
+            // shipment, before any network work — a crash or reload
+            // mid-upload leaves a bound entry that auto-replays on reopen
+            // (the server's same-content replay dedupes a committed one)
+            if (!stashUpsert({ ...entry, shipment_id: shipmentId })) {
+              errors.push(`${f.name}: this device's storage is unavailable — the photo survives only while this page stays open.`);
+            }
             const r = await tryUpload(shipmentId, ph);
             if (r === 'ok') {
-              // attached and verified — nothing to keep
+              // attached and verified — release the stashed copy
+              stashRemove(entry.key);
             } else if (r === 'refused') {
               // stays durable, unbound and RECOVERED: visible, never
               // auto-attached to a different box
-              const durable = stashUpsert({ ...entry, recovered: true });
+              const durable = stashUpsert({ ...entry, shipment_id: null, recovered: true });
               refreshPendingView();
               errors.push(`${f.name}: refused — this shipment's photo quota (5 photos / 5MB) is full or the shipment was voided. Kept in the pending list marked "recovered"${durable ? '' : ' (storage unavailable — it survives only while this page stays open)'}: press "use" to allow it onto the next shipment, or remove it.`);
             } else {
