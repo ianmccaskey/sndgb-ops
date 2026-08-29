@@ -110,9 +110,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [viewShipPhoto, setViewShipPhoto] = useState<string | null>(null);
   const [doGetShipPhoto] = useMutateAction(getShipmentPhoto);
   // list rows carry thumbnails only; the full image loads on demand
-  const enlargeShipPhoto = async (photoId: number) => {
+  const enlargeShipPhoto = async (photoId: number, shipmentId: number) => {
     try {
-      const res = await doGetShipPhoto({ photo_id: photoId }) as { image_data?: string }[] | null;
+      const res = await doGetShipPhoto({ photo_id: photoId, shipment_id: shipmentId }) as { image_data?: string }[] | null;
       const row = Array.isArray(res) && res.length > 0 ? res[0] : null;
       if (row?.image_data) setViewShipPhoto(String(row.image_data));
     } catch { /* thumbnail stays; nothing to show */ }
@@ -1648,7 +1648,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       <div className="flex flex-wrap gap-1">
                         {shipPhotos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
                           <img key={ph.id} src={ph.thumb_data} alt="package photo" className="h-10 w-10 object-cover rounded border cursor-pointer"
-                            onClick={() => enlargeShipPhoto(ph.id)} />
+                            onClick={() => enlargeShipPhoto(ph.id, Number(ph.shipment_id))} />
                         ))}
                       </div>
                     )}

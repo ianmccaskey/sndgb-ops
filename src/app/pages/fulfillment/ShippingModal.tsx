@@ -263,9 +263,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   };
 
   // the full image loads on demand — list rows carry only thumbnails
-  const enlargePhoto = async (photoId: number) => {
+  const enlargePhoto = async (photoId: number, shipmentId: number) => {
     try {
-      const res = await doGetPhoto({ photo_id: photoId }) as { image_data?: string }[] | null;
+      const res = await doGetPhoto({ photo_id: photoId, shipment_id: shipmentId }) as { image_data?: string }[] | null;
       const row = Array.isArray(res) && res.length > 0 ? res[0] : null;
       if (row?.image_data) setViewPhoto(String(row.image_data));
       else setPhotoMsg('Could not load the full photo — it may have been removed.');
@@ -992,7 +992,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     <div className="flex flex-wrap gap-1.5">
                       {photos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
                         <span key={ph.id} className="relative">
-                          <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id)} />
+                          <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id, s.id)} />
                           <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
                             onClick={() => removePhoto(ph.id, s.id)}>×</button>
                         </span>
@@ -1017,7 +1017,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     <div className="flex flex-wrap gap-1.5">
                       {photos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
                         <span key={ph.id} className="relative">
-                          <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id)} />
+                          <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id, s.id)} />
                           <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
                             onClick={() => removePhoto(ph.id, s.id)}>×</button>
                         </span>
