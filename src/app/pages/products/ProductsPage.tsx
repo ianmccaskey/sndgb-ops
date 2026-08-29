@@ -78,7 +78,7 @@ export function ProductsPage() {
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
         setWMsg(!p.digital
           ? `${p.sku_code}: not changed — either the flag was flipped in another session, or a DRAFT box is currently being packed with this product (finish or delete that draft first; completed shipments never block a reclassification).`
-          : `${p.sku_code}: not changed — the flag was flipped in another session. Reloading.`);
+          : `${p.sku_code}: not changed — either the flag was flipped in another session, or making it physical would REOPEN an order already pushed to the ordering app as shipped (no safe way to downgrade its upstream status yet — void/refund one of that order's shipments first, or keep the product digital).`);
       }
       reloadProducts();
     } catch (e: unknown) {
