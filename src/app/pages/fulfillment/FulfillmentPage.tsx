@@ -210,7 +210,39 @@ export function FulfillmentPage() {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <div className="border rounded-lg overflow-x-auto">
+      {/* mobile: cards (same data, packing-first) */}
+      <div className="md:hidden space-y-2">
+        {displayQueue.map(r => (
+          <div key={r.id} className="rounded-lg border p-3 space-y-1.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="font-medium">{r.order_number} {r.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 text-amber-600" />}</p>
+                <p className="text-sm truncate">{r.customer_name}</p>
+              </div>
+              {stage === 'direct' ? (
+                <Button size="sm" className="h-7 text-xs shrink-0" disabled={saving} onClick={() => markDirect(r, true)}>Vendor shipped</Button>
+              ) : (
+                <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={() => setShipping(r)}>Ship</Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {r.address_line1}{r.address_line2 ? `, ${r.address_line2}` : ''} · {r.city}, {r.state_code} {r.postal_code}
+            </p>
+            <p className="text-xs">{stage === 'direct' ? r.direct_outstanding_summary : r.all_direct ? r.direct_items_summary : (stage === 'ready' ? (r.remaining_summary || r.items_summary) : r.items_summary)}</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <StatusPill value={r.recon_status || 'awaiting'} />
+              <StatusPill value={r.shipment_state || 'pending'} />
+              {rowBadges(r)}
+            </div>
+            {r.tracking_numbers && <p className="text-[11px] font-mono text-muted-foreground break-all">{r.tracking_numbers}</p>}
+          </div>
+        ))}
+        {displayQueue.length === 0 && (
+          <p className="text-center text-muted-foreground py-6 text-sm">Nothing in this stage{filterIds.size > 0 ? ' matching the product filter' : ''}.</p>
+        )}
+      </div>
+
+      <div className="hidden md:block border rounded-lg overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
