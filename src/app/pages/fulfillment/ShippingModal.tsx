@@ -269,7 +269,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           } else {
             const r = await tryUpload(photoTarget.current, ph);
             if (r === 'refused') {
-              errors.push(`${f.name}: refused — this shipment's photo quota (5 photos / 5MB) is full or the shipment was voided.`);
+              // the capture is the only copy — never discard it on a
+              // refusal: it moves to the visible pending list where the
+              // operator reattaches it to another shipment or removes it
+              setPendingPhotos(p => [...p, { ...ph, actor: userName }]);
+              errors.push(`${f.name}: refused — this shipment's photo quota (5 photos / 5MB) is full or the shipment was voided. Moved to the pending list: it will ride the next shipment, or remove it.`);
             } else if (r === 'error') {
               // stash — the camera capture may be the only copy
               const durable = writeStash([...readStash(), { ...ph, shipment_id: photoTarget.current, order_id: order.id, ts: Date.now(), actor: userName }]);
