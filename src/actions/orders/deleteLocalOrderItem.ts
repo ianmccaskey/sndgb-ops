@@ -29,14 +29,15 @@ function deleteLocalOrderItem() {
             SELECT 1 FROM order_items oj
             WHERE oj.order_id = oi.order_id AND oj.id <> oi.id AND oj.removed_at IS NULL
           )
-          -- same pack-flow gate as the add path, in reverse: once the order
-          -- packed/shipped, removing an item would drop billed/due while the
-          -- box may already contain it — reopen the shipment first
+          -- a line with quantity attributed to any non-voided shipment
+          -- (drafts reserve too) cannot be deleted — a box may already
+          -- contain it; void/refund that shipment first
           AND COALESCE((
-            SELECT sh.status::text FROM shipments sh
-            WHERE sh.order_id = oi.order_id
-            ORDER BY sh.created_at DESC LIMIT 1
-          ), 'pending') = 'pending'
+            SELECT sum(si.qty) FROM shipment_items si
+            JOIN shipments sh ON sh.id = si.shipment_id
+            WHERE si.order_item_id = oi.id
+              AND COALESCE(sh.refund_status, '') <> 'SUCCESS'
+          ), 0) = 0
         RETURNING oi.id, oi.group_buy_product_id, oi.qty, oi.unit_price_usd
       ), wo_clear AS (
         DELETE FROM order_writeoffs w

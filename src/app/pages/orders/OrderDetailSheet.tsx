@@ -556,7 +556,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         order_id: o.id, group_buy_id: o.group_buy_id, sku: addSku, qty: addQty.trim(), actor: userName,
       }) as unknown[] | null;
       const wrote = Array.isArray(res) ? res.length > 0 : !!res;
-      if (!wrote) setAddMsg('Refused — the product is already on the order (top-ups belong in the ordering app), or the order already packed/shipped (reopen its shipment to pending first).');
+      if (!wrote) setAddMsg('Refused — the product is already on the order (top-ups belong in the ordering app), or the order is already FULLY shipped (a new item on a closed order needs a shipment voided/refunded first).');
       else { setAddSku(''); setAddQty(''); }
       reloadItems(); reloadOrder();
     } catch (e: unknown) {
@@ -661,7 +661,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     setSaving(true); setCompMsg('');
     try {
       const res = await doSetItemQty({ item_id: it.id, order_id: o.id, qty: v, actor: userName }) as unknown[] | null;
-      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Qty edit refused — the order may have packed/shipped (reopen its shipment first), or the line is removed.');
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Qty edit refused — the new quantity may be below what shipments already packed/reserved for this line (void/refund that shipment first), or the line is removed.');
       else { setQtyEditId(null); setQtyEditVal(''); }
       reloadItems(); reloadOrder();
     } catch (e: unknown) {
@@ -676,7 +676,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     setSaving(true); setCompMsg('');
     try {
       const res = await doRemoveItem({ item_id: it.id, order_id: o.id, removed: !it.removed_at, actor: userName }) as unknown[] | null;
-      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Refused — the order may have packed/shipped (reopen its shipment first), or this is the last active line (cancel the order instead of emptying it).');
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Refused — a shipment already packed/reserved this line (void/refund it first), or this is the last active line (cancel the order instead of emptying it).');
       reloadItems(); reloadOrder();
     } catch (e: unknown) {
       setCompMsg(e instanceof Error ? e.message : 'Failed to change the line');

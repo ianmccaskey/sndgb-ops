@@ -44,15 +44,30 @@ function addLocalOrderItem() {
           -- silently reappears if the status ever flips back
           AND o.status NOT IN ('cancelled', 'refunded')
         WHERE p.sku_code = {{params.sku}}::text
-          -- the order must still be in the pack flow: once its latest
-          -- shipment is packed/shipped, a new item would bill the customer
-          -- for something fulfillment never sees — reopen the shipment
-          -- (set it back to pending) first, then add
-          AND COALESCE((
-            SELECT sh.status::text FROM shipments sh
-            WHERE sh.order_id = o.id
-            ORDER BY sh.created_at DESC LIMIT 1
-          ), 'pending') = 'pending'
+          -- a new item is legal while the order still has ANY open work —
+          -- it simply re-enters the ready queue with remaining quantity,
+          -- which fulfillment now sees per-line. Refused only when the
+          -- order is FULLY shipped (a finalized shipment exists, every
+          -- packable line's finalized shipped qty covers its effective qty,
+          -- and no vendor-direct line is outstanding): billing a closed
+          -- order for product no box will carry needs a deliberate reopen
+          -- (refund/void a shipment) first.
+          AND NOT (
+            EXISTS (
+              SELECT 1 FROM shipments shx
+              WHERE shx.order_id = o.id AND shx.finalized_at IS NOT NULL
+                AND COALESCE(shx.refund_status, '') <> 'SUCCESS')
+            AND NOT EXISTS (
+              SELECT 1 FROM order_items oj
+              WHERE oj.order_id = o.id AND oj.removed_at IS NULL
+                AND ((NOT oj.direct_ship AND COALESCE((
+                        SELECT sum(si.qty) FROM shipment_items si
+                        JOIN shipments sh2 ON sh2.id = si.shipment_id
+                        WHERE si.order_item_id = oj.id AND sh2.finalized_at IS NOT NULL
+                          AND COALESCE(sh2.refund_status, '') <> 'SUCCESS'
+                      ), 0) < COALESCE(oj.qty_override, oj.qty))
+                     OR (oj.direct_ship AND oj.direct_fulfilled_at IS NULL)))
+          )
           AND ({{params.qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           AND ({{params.qty}})::numeric > 0
           -- whole kits only: a fractional local line would owe the split

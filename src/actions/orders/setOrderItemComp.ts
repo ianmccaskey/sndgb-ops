@@ -34,15 +34,17 @@ function setOrderItemComp() {
           AND oi.order_id = {{params.order_id}}::bigint
           AND o.id = oi.order_id
           -- same authoritative guards as every item mutation: recon hides
-          -- cancelled orders (dormant money), and a comp change after the
-          -- box packed/shipped alters closed books — reopen the shipment
-          -- to pending first
+          -- cancelled orders (dormant money). Comps are billing-only, so a
+          -- comp change stays legal mid-partial (recon gates the next box);
+          -- it is refused only once THIS line is FULLY shipped — post-ship
+          -- money remedies belong in credits/refunds, not comps
           AND o.status NOT IN ('cancelled', 'refunded')
           AND COALESCE((
-            SELECT sh.status::text FROM shipments sh
-            WHERE sh.order_id = oi.order_id
-            ORDER BY sh.created_at DESC LIMIT 1
-          ), 'pending') = 'pending'
+            SELECT sum(si.qty) FROM shipment_items si
+            JOIN shipments sh ON sh.id = si.shipment_id
+            WHERE si.order_item_id = oi.id AND sh.finalized_at IS NOT NULL
+              AND COALESCE(sh.refund_status, '') <> 'SUCCESS'
+          ), 0) < COALESCE(oi.qty_override, oi.qty)
           AND ({{params.comp_qty}})::text ~ '^[0-9]+(\\.[0-9]{1,2})?$'
           -- cap at the EFFECTIVE quantity (edited/removed lines), so a
           -- stored comp can never exceed what the customer actually gets —

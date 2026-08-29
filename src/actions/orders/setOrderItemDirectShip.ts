@@ -50,11 +50,17 @@ function setOrderItemDirectShip() {
           -- active order, line not removed, order still in the pack flow
           AND o.status NOT IN ('cancelled', 'refunded')
           AND oi.removed_at IS NULL
+          -- a routing flip is refused while any non-voided shipment has
+          -- quantity attributed to THIS line: toggling to direct would
+          -- double-fulfill it (locally packed AND vendor-shipped). The
+          -- direct->local direction is trivially clean — drafts refuse
+          -- direct lines, so a direct line can have no attribution.
           AND COALESCE((
-            SELECT sh.status::text FROM shipments sh
-            WHERE sh.order_id = oi.order_id
-            ORDER BY sh.created_at DESC LIMIT 1
-          ), 'pending') = 'pending'
+            SELECT sum(si.qty) FROM shipment_items si
+            JOIN shipments sh ON sh.id = si.shipment_id
+            WHERE si.order_item_id = oi.id
+              AND COALESCE(sh.refund_status, '') <> 'SUCCESS'
+          ), 0) = 0
         RETURNING oi.id, oi.direct_ship
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)

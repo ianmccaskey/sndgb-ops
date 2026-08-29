@@ -11,7 +11,16 @@ function listOrders() {
              r.recon_status, r.effective_received_usd, r.diff_usd, r.pending_payment_count,
              COALESCE(it.items_summary, '') AS items_summary,
              COALESCE(it.item_count, 0) AS item_count,
-             s.status AS shipment_status, s.tracking_number
+             -- derived over ALL non-voided shipments: 'partial' when some
+             -- packable qty shipped and some remains; else max progression
+             CASE
+               WHEN COALESCE(s.ship_count, 0) = 0 THEN NULL
+               WHEN COALESCE(s.shipped_packable_qty, 0) > 0
+                    AND COALESCE(s.remaining_packable_qty, 0) > 0 THEN 'partial'
+               ELSE CASE s.max_rank WHEN 5 THEN 'delivered' WHEN 4 THEN 'reshipped'
+                                    WHEN 3 THEN 'shipped' WHEN 2 THEN 'packed' ELSE 'pending' END
+             END AS shipment_status,
+             COALESCE(s.tracking_numbers, '') AS tracking_number
       FROM orders o
       JOIN customers c ON c.id = o.customer_id
       LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
@@ -25,8 +34,29 @@ function listOrders() {
         GROUP BY oi.order_id
       ) it ON it.order_id = o.id
       LEFT JOIN LATERAL (
-        SELECT status, tracking_number FROM shipments sh
-        WHERE sh.order_id = o.id ORDER BY sh.created_at DESC LIMIT 1
+        SELECT count(*) AS ship_count,
+               max(CASE sh.status WHEN 'delivered' THEN 5 WHEN 'reshipped' THEN 4
+                                  WHEN 'shipped' THEN 3 WHEN 'packed' THEN 2 ELSE 1 END) AS max_rank,
+               string_agg(sh.tracking_number, ', ' ORDER BY sh.created_at)
+                 FILTER (WHERE sh.tracking_number IS NOT NULL) AS tracking_numbers,
+               (SELECT COALESCE(sum(LEAST(a.shipped, a.eff)), 0)
+                FROM (SELECT CASE WHEN oi.removed_at IS NULL THEN COALESCE(oi.qty_override, oi.qty) ELSE 0 END AS eff,
+                             (SELECT COALESCE(sum(si.qty), 0) FROM shipment_items si
+                              JOIN shipments s2 ON s2.id = si.shipment_id
+                              WHERE si.order_item_id = oi.id AND s2.finalized_at IS NOT NULL
+                                AND COALESCE(s2.refund_status, '') <> 'SUCCESS') AS shipped
+                      FROM order_items oi
+                      WHERE oi.order_id = o.id AND NOT oi.direct_ship AND oi.removed_at IS NULL) a) AS shipped_packable_qty,
+               (SELECT COALESCE(sum(GREATEST(a.eff - a.attributed, 0)), 0)
+                FROM (SELECT CASE WHEN oi.removed_at IS NULL THEN COALESCE(oi.qty_override, oi.qty) ELSE 0 END AS eff,
+                             (SELECT COALESCE(sum(si.qty), 0) FROM shipment_items si
+                              JOIN shipments s2 ON s2.id = si.shipment_id
+                              WHERE si.order_item_id = oi.id
+                                AND COALESCE(s2.refund_status, '') <> 'SUCCESS') AS attributed
+                      FROM order_items oi
+                      WHERE oi.order_id = o.id AND NOT oi.direct_ship AND oi.removed_at IS NULL) a) AS remaining_packable_qty
+        FROM shipments sh
+        WHERE sh.order_id = o.id AND COALESCE(sh.refund_status, '') <> 'SUCCESS'
       ) s ON true
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND ({{params.status}}::text = 'all' OR o.status::text = {{params.status}}::text)

@@ -8,10 +8,13 @@ import { action } from '@uibakery/data';
  * effective quantity.
  *
  * Guards (zero rows = refused): item belongs to the order; order not
- * cancelled/refunded; the line is not removed (restore it first); the order
- * is still in the pack flow (latest shipment pending — an edit after
- * packing would bill for a box that already shipped differently); qty is
- * positive with max 2 decimals, string-checked.
+ * cancelled/refunded; the line is not removed (restore it first); the new
+ * effective qty is not BELOW what shipments have already attributed to the
+ * line (shrinking under a packed/reserved quantity would un-account a box
+ * that physically exists — void/refund the shipment first; growing, or
+ * shrinking within the unattributed remainder, stays legal and simply
+ * changes remaining-to-pack); qty is positive with max 2 decimals,
+ * string-checked.
  *
  * Takes the 42001 per-order lock (the effective-qty delta feeds due) and
  * auto-clears a standing write-off when the effective qty actually changes.
@@ -60,11 +63,15 @@ function setOrderItemQty() {
           -- Half-to-half (0.5 -> 1.5) and whole-to-whole edits stay allowed.
           AND ((COALESCE(NULLIF({{params.qty}}::text, '')::numeric, oi.qty) % 1 = 0)
                = (oi.qty % 1 = 0))
-          AND COALESCE((
-            SELECT sh.status::text FROM shipments sh
-            WHERE sh.order_id = oi.order_id
-            ORDER BY sh.created_at DESC LIMIT 1
-          ), 'pending') = 'pending'
+          -- the new effective qty must cover everything shipments have
+          -- already attributed to THIS line (drafts included — they
+          -- reserve); an edit below that would un-account a real box
+          AND COALESCE(NULLIF({{params.qty}}::text, '')::numeric, oi.qty) >= COALESCE((
+            SELECT sum(si.qty) FROM shipment_items si
+            JOIN shipments sh ON sh.id = si.shipment_id
+            WHERE si.order_item_id = oi.id
+              AND COALESCE(sh.refund_status, '') <> 'SUCCESS'
+          ), 0)
         RETURNING oi.id, oi.qty, oi.qty_override, COALESCE(oi.qty_override, oi.qty) AS eff_qty, oi.comp_qty, oi.direct_fulfilled_at
       ), comp_clamp_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
