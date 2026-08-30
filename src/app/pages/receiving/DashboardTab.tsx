@@ -211,6 +211,26 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
         setScanMsg(`A barcode was read (${texts[0]}) but it does not look like a tracking number.`);
         return;
       }
+      // ONE photo must identify ONE package: if several tracking-like
+      // barcodes are in frame (two labels photographed at once, or a
+      // neighboring box's label caught in shot), the image is not
+      // uniquely attributable — refuse auto-receive unless every
+      // tracking-like barcode points at the SAME single package (one
+      // label often prints its number as more than one barcode)
+      const matchedIdsFor = (cands: string[]) =>
+        new Set(packages.filter(p => !p.tracking_mangled && matchTracking(cands, String(p.tracking_number || '')) != null).map(p => p.id));
+      const perText = texts.map(t => ({ raw: t, cands: trackingCandidates(t) }));
+      const trackingLike = perText.filter(x =>
+        x.cands.length > 0 && (x.cands.some(c => candidateCarrier(c) != null) || matchedIdsFor(x.cands).size > 0));
+      if (trackingLike.length > 1) {
+        const idSets = trackingLike.map(x => matchedIdsFor(x.cands));
+        const union = new Set(idSets.flatMap(s => [...s]));
+        const allSameSingle = union.size === 1 && idSets.every(s => s.size === 1);
+        if (!allSameSingle) {
+          setScanMsg('The photo contains more than one label barcode — photograph ONE label at a time, or receive from the package card.');
+          return;
+        }
+      }
       // match against every logged package (mangled rows can never pass
       // the receive CAS, so they are excluded up front), GRADED: only an
       // EXACT fingerprint match may auto-receive; suffix relations are

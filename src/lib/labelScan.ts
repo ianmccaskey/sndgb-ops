@@ -55,14 +55,24 @@ export async function decodeCarrierLabel(file: File): Promise<string[]> {
   const overBudget = () => performance.now() - started > DEADLINE_MS;
   const yieldToUi = () => new Promise<void>(r => setTimeout(r, 0));
   // ALWAYS request bounded dimensions — compressed byte size says nothing
-  // about pixel count, so no size heuristic gates this. Engines that
-  // reject the options bag (legacy Safari) fall back to a plain load:
-  // an accepted residual, since refusing to scan there entirely would be
-  // worse than a slow scan, and every current phone browser supports the
-  // resize options.
-  const bitmap = await createImageBitmap(file, { resizeWidth: 2000, resizeQuality: 'high' })
-    .catch(() => createImageBitmap(file))
-    .catch(() => null);
+  // about pixel count. The plain-load fallback runs ONLY when the options
+  // bag itself is rejected (TypeError on legacy engines), and BOTH loads
+  // race the remaining wall-clock budget so an oversized photo surfaces
+  // as a clear retake message instead of an apparent hang.
+  const remaining = () => Math.max(500, DEADLINE_MS - (performance.now() - started));
+  const withTimeout = <T,>(p: Promise<T>): Promise<T> =>
+    Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('The photo took too long to process — retake it closer to the label.')), remaining()))]);
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await withTimeout(createImageBitmap(file, { resizeWidth: 2000, resizeQuality: 'high' }));
+  } catch (e) {
+    if (e instanceof TypeError) {
+      // the options bag was rejected — bounded load unsupported here
+      bitmap = await withTimeout(createImageBitmap(file)).catch(() => null);
+    } else if (e instanceof Error && e.message.includes('took too long')) {
+      throw e;
+    }
+  }
   if (!bitmap) throw new Error(`Could not read "${file.name}" as an image.`);
   try {
     const hints = new Map();
