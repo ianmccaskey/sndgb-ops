@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listFulfillmentQueue from '@/actions/fulfillment/listFulfillmentQueue';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
@@ -128,26 +128,34 @@ export function FulfillmentPage() {
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState('');
   const canCheck = !!cfg.token && !!groupBuy?.external_id;
+  // each check carries a request id; a completion older than the latest id
+  // writes NOTHING — a check dispatched before a campaign/settings switch
+  // can never repopulate results (or errors) after switching back
+  const checkReq = useRef(0);
   const checkUpstream = async () => {
     if (!canCheck || !groupBuy?.external_id || groupBuyId == null) return;
     const source = { forGroupBuyId: groupBuyId, appId: cfg.appId, gbExternalId: groupBuy.external_id, token: cfg.token };
+    const req = ++checkReq.current;
     setChecking(true); setCheckError('');
     try {
       const orders = await listB44Orders(cfg, source.gbExternalId);
+      if (req !== checkReq.current) return;
       const statusById: Record<string, string> = {};
       for (const o of orders) statusById[String(o.id)] = String(o.status ?? '');
       setUpstream({ ...source, at: new Date().toLocaleTimeString(), total: orders.length, statusById });
     } catch (e: unknown) {
+      if (req !== checkReq.current) return;
       setCheckError(e instanceof Error ? e.message : 'Failed to check the ordering app');
     } finally {
-      setChecking(false);
+      if (req === checkReq.current) setChecking(false);
     }
   };
   // hard-DROP the snapshot on any source-identity change (not just hide
   // it): switching campaigns or editing settings and switching back must
   // never resurrect an old check as if it were current
   useEffect(() => {
-    setUpstream(null); setCheckError('');
+    checkReq.current++;
+    setUpstream(null); setCheckError(''); setChecking(false);
   }, [groupBuyId, groupBuy?.external_id, cfg.appId, cfg.token]);
   const upstreamLive = upstream
     && upstream.forGroupBuyId === groupBuyId
