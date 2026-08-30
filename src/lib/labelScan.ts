@@ -110,12 +110,16 @@ export const trackingCandidates = (raw: string): string[] => {
   const fp = fingerprint(raw);
   const out = new Set<string>();
   if (fp.length >= 8) out.add(fp);
-  // USPS IMpb / GS1: routing application identifier "420" + ZIP precedes
-  // the tracking; the tracking itself is what the label prints
-  const zip = fp.match(/^420\d{9}/) || fp.match(/^420\d{5}/);
-  if (zip) {
-    const rest = fp.slice(zip[0].length);
-    if (rest.length >= 8) out.add(rest);
+  // USPS IMpb / GS1: routing application identifier "420" + ZIP5 or
+  // ZIP+4 precedes the tracking, with NO delimiter in the digit string —
+  // a greedy ZIP+4 strip would eat the first 4 tracking digits on the
+  // (very common) ZIP5 labels, so BOTH strip depths become candidates
+  // and exact matching against the stored number decides
+  if (fp.startsWith('420')) {
+    for (const zipLen of [5, 9] as const) {
+      const rest = fp.slice(3 + zipLen);
+      if (rest.length >= 8 && /^\d+$/.test(fp.slice(3, 3 + zipLen))) out.add(rest);
+    }
   }
   return [...out];
 };
