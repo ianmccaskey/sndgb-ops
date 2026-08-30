@@ -265,9 +265,13 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
     messages: (b?.messages || [])
       .filter(m => {
         const joined = [m.source, m.code, m.text].filter(Boolean).join(' ');
-        if (/\b(ups|usps)\b/i.test(joined)) return true;
-        if (/shippo_(?!ups\b|usps\b)[a-z0-9_]+_(account|master)|[A-Za-z0-9]+_SHIPPO_TIER/i.test(joined)) return false;
-        return !/dhl|fedex|sendle|deutsche|canada|couriersplease|fastway|globegistics|asendia|hermes|evri|parcelforce|purolator|canpar|ontrac|lasership|aramex|tnt|royal ?mail|\bgls\b|\bdpd\b|australia ?post|chronopost|colissimo|poste\b/i.test(joined);
+        // \b can't see through underscores (shippo_ups_account), so the
+        // allowed-carrier test runs on a separator-normalized copy — a
+        // UPS/USPS account failure in token form MUST survive
+        const norm = joined.replace(/[_-]+/g, ' ');
+        if (/\b(ups|usps)\b/i.test(norm)) return true;
+        if (/shippo_[a-z0-9_]+_(account|master)|[A-Za-z0-9]+_SHIPPO_TIER/i.test(joined)) return false;
+        return !/dhl|fedex|sendle|deutsche|canada|couriersplease|fastway|globegistics|asendia|hermes|evri|parcelforce|purolator|canpar|ontrac|lasership|aramex|tnt|royal ?mail|\bgls\b|\bdpd\b|australia ?post|chronopost|colissimo|poste\b/i.test(norm);
       })
       .map(m => [m.source, m.code, m.text].filter(Boolean).join(' '))
       .filter(Boolean),
