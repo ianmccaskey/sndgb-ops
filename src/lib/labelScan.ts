@@ -1,5 +1,5 @@
-import { BrowserMultiFormatReader } from '@zxing/browser';
-import { BarcodeFormat, DecodeHintType } from '@zxing/library';
+import { HTMLCanvasElementLuminanceSource } from '@zxing/browser';
+import { BarcodeFormat, BinaryBitmap, DecodeHintType, HybridBinarizer, MultiFormatReader } from '@zxing/library';
 
 /*
  * Carrier-label scanning: decode the tracking barcode from a phone photo
@@ -34,7 +34,13 @@ const drawScaledRotated = (bitmap: ImageBitmap, maxEdge: number, rotateDeg: 0 | 
   return canvas;
 };
 
-/** All distinct barcode texts found in the photo (empty = none found). */
+/**
+ * ALL distinct barcode texts found in the photo (empty = none found).
+ * Carrier labels routinely carry SEVERAL Code 128 barcodes (routing,
+ * service, tracking), so every image variant runs a MULTI-barcode
+ * decode and every variant is scanned — no early stop that could lock
+ * onto a routing barcode and never see the tracking one.
+ */
 export async function decodeCarrierLabel(file: File): Promise<string[]> {
   if (!file.type.startsWith('image/')) throw new Error(`"${file.name}" is not an image.`);
   const bitmap = await createImageBitmap(file).catch(() => null);
@@ -43,17 +49,32 @@ export async function decodeCarrierLabel(file: File): Promise<string[]> {
     const hints = new Map();
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.ITF]);
     hints.set(DecodeHintType.TRY_HARDER, true);
-    const reader = new BrowserMultiFormatReader(hints);
+    const reader = new MultiFormatReader();
     const texts = new Set<string>();
     for (const maxEdge of [2000, 1200]) {
       for (const rot of [0, 90] as const) {
-        try {
-          const res = reader.decodeFromCanvas(drawScaledRotated(bitmap, maxEdge, rot));
-          const t = res.getText().trim();
-          if (t) texts.add(t);
-        } catch { /* no barcode in this variant — try the next */ }
+        const canvas = drawScaledRotated(bitmap, maxEdge, rot);
+        // mask-and-rescan: after each decode, blank the found barcode's
+        // region and scan again — up to four barcodes per variant, so a
+        // routing/service barcode cannot shadow the tracking one
+        for (let pass = 0; pass < 4; pass++) {
+          try {
+            const bb = new BinaryBitmap(new HybridBinarizer(new HTMLCanvasElementLuminanceSource(canvas)));
+            const res = reader.decode(bb, hints);
+            const t = res.getText().trim();
+            if (t) texts.add(t);
+            const pts = res.getResultPoints() || [];
+            if (pts.length === 0) break;
+            const xs = pts.map(p => p.getX());
+            const ys = pts.map(p => p.getY());
+            const ctx = canvas.getContext('2d');
+            if (!ctx) break;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(Math.min(...xs) - 12, Math.min(...ys) - 40,
+              (Math.max(...xs) - Math.min(...xs)) + 24, (Math.max(...ys) - Math.min(...ys)) + 80);
+          } catch { break; /* nothing further in this variant */ }
+        }
       }
-      if (texts.size > 0) break; // full resolution decoded; skip downscale
     }
     return [...texts];
   } finally {
@@ -79,13 +100,33 @@ export const trackingCandidates = (raw: string): string[] => {
 };
 
 /**
- * Does a decoded candidate set match a STORED tracking number? Exact
- * fingerprint match, or the scan carries the stored number as a suffix
- * (FedEx long form / IMpb with prefix uncovered), or — for long scans
- * only — the stored number carries the scan as a suffix.
+ * How does a decoded candidate set relate to a STORED tracking number?
+ * 'exact' = a candidate fingerprint equals the stored fingerprint — the
+ * only grade strong enough to AUTO-receive. 'suffix' = the scan carries
+ * the stored number as a suffix or vice versa (FedEx long forms, partial
+ * reads) — surfaced as a likely match for the operator to act on from
+ * the card, never auto-received. null = no relation.
  */
-export const matchesTracking = (candidates: string[], stored: string): boolean => {
+export type TrackingMatchKind = 'exact' | 'suffix';
+export const matchTracking = (candidates: string[], stored: string): TrackingMatchKind | null => {
   const t = fingerprint(stored);
-  if (t.length < 8) return false;
-  return candidates.some(c => c === t || c.endsWith(t) || (c.length >= 12 && t.endsWith(c)));
+  if (t.length < 8) return null;
+  if (candidates.some(c => c === t)) return 'exact';
+  if (candidates.some(c => c.endsWith(t) || (c.length >= 12 && t.endsWith(c)))) return 'suffix';
+  return null;
 };
+
+/**
+ * Structural carrier inference from a candidate: UPS numbers start 1Z
+ * (unmistakable); USPS-style IMpb numbers are 9[2-5] + 19-25 more
+ * digits (DHL eCommerce final-mile uses the same GS1 shape, so both
+ * carriers are compatible). null = shape proves nothing.
+ */
+export const candidateCarrier = (c: string): 'ups' | 'usps_like' | null =>
+  c.startsWith('1Z') ? 'ups' : /^9[2-5]\d{19,25}$/.test(c) ? 'usps_like' : null;
+
+/** Is a stored package's carrier compatible with an inferred shape? */
+export const carrierCompatible = (inferred: 'ups' | 'usps_like' | null, storedCarrier: string): boolean =>
+  inferred == null ? true
+    : inferred === 'ups' ? storedCarrier === 'ups'
+    : storedCarrier === 'usps' || storedCarrier === 'dhl_ecommerce';

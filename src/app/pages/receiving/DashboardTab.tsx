@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { RefreshCw, Truck, AlertTriangle, ScanLine } from 'lucide-react';
-import { decodeCarrierLabel, trackingCandidates, matchesTracking } from '@/lib/labelScan';
+import { decodeCarrierLabel, trackingCandidates, matchTracking, candidateCarrier, carrierCompatible } from '@/lib/labelScan';
 import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday } from './shared';
 import type { RxAddress, Pkg, CatalogProduct, VendorRow } from './shared';
 
@@ -212,23 +212,31 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
         return;
       }
       // match against every logged package (mangled rows can never pass
-      // the receive CAS, so they are excluded up front)
-      const matched = packages.filter(p => !p.tracking_mangled && matchesTracking(candidates, String(p.tracking_number || '')));
+      // the receive CAS, so they are excluded up front), GRADED: only an
+      // EXACT fingerprint match may auto-receive; suffix relations are
+      // surfaced for the operator to act on from the card
+      const matchedAll = packages
+        .filter(p => !p.tracking_mangled)
+        .map(p => ({ p, kind: matchTracking(candidates, String(p.tracking_number || '')) }))
+        .filter((x): x is { p: Pkg; kind: 'exact' | 'suffix' } => x.kind != null);
       // the system's identity is carrier + tracking, and the same number
       // may legitimately exist on different carriers — a scan that
       // matches across carriers is AMBIGUOUS, never auto-received
-      if (new Set(matched.map(p => p.carrier)).size > 1) {
-        setScanMsg(`The scan matches packages on different carriers (${matched.map(h => `${(h.carrier || '').toUpperCase()} ${h.tracking_number}`).join('; ')}) — check the label's carrier and receive from the right card.`);
+      if (new Set(matchedAll.map(x => x.p.carrier)).size > 1) {
+        setScanMsg(`The scan matches packages on different carriers (${matchedAll.map(x => `${(x.p.carrier || '').toUpperCase()} ${x.p.tracking_number}`).join('; ')}) — check the label's carrier and receive from the right card.`);
         return;
       }
-      // UPS numbers are structurally unmistakable (1Z prefix): a scan
-      // that says UPS must not receive a package logged on another carrier
-      const inferredUps = candidates.some(c => c.startsWith('1Z'));
-      const open = matched.filter(p => !p.received_at && p.committed_at);
-      if (open.length === 1) {
-        const p = open[0];
-        if (inferredUps && p.carrier !== 'ups') {
-          setScanMsg(`The barcode is a UPS number but the matching package is logged as ${(p.carrier || '').toUpperCase()} — check the label and the package, then receive from its card.`);
+      const open = matchedAll.filter(x => !x.p.received_at && x.p.committed_at);
+      const openExact = open.filter(x => x.kind === 'exact');
+      if (openExact.length === 1) {
+        const p = openExact[0].p;
+        // the EXACT-matching candidate's structural carrier (1Z = UPS;
+        // IMpb shape = USPS/DHL eCommerce) must not contradict the
+        // package's logged carrier
+        const t = String(p.tracking_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const exactCand = candidates.find(c => c === t);
+        if (exactCand && !carrierCompatible(candidateCarrier(exactCand), p.carrier)) {
+          setScanMsg(`The barcode's format does not match the package's logged carrier (${(p.carrier || '').toUpperCase()}) — check the label and the package, then receive from its card.`);
           return;
         }
         const contents = (p.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ') || 'no items';
@@ -238,13 +246,17 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
             ? `Received ${p.tracking_number}.`
             : 'NOT received — the package changed since this page loaded (already received, corrected, or emptied elsewhere). Check its card; the list has refreshed.');
         }
-      } else if (open.length > 1) {
-        setScanMsg(`The scan matches ${open.length} open packages (${open.map(h => h.tracking_number).join(', ')}) — receive the right one from its card.`);
-      } else if (matched.some(p => p.received_at)) {
-        const r = matched.find(p => p.received_at)!;
+      } else if (openExact.length > 1) {
+        setScanMsg(`The scan matches ${openExact.length} open packages (${openExact.map(x => x.p.tracking_number).join(', ')}) — receive the right one from its card.`);
+      } else if (open.length > 0) {
+        // suffix relations only: never auto-received — the number on the
+        // label must be verified by eye against the card
+        setScanMsg(`The scan LIKELY corresponds to ${open.map(x => `${x.p.tracking_number} (${(x.p.carrier || '').toUpperCase()})`).join(', ')} but is not an exact match — verify the label's number and receive from the card.`);
+      } else if (matchedAll.some(x => x.p.received_at)) {
+        const r = matchedAll.find(x => x.p.received_at)!.p;
         setScanMsg(`${r.tracking_number} is already received (${fmtDateTime(r.received_at!)} by ${r.received_by}).`);
-      } else if (matched.some(p => !p.committed_at)) {
-        setScanMsg(`${matched.find(p => !p.committed_at)!.tracking_number} is still a DRAFT — commit it on its card, then scan again.`);
+      } else if (matchedAll.some(x => !x.p.committed_at)) {
+        setScanMsg(`${matchedAll.find(x => !x.p.committed_at)!.p.tracking_number} is still a DRAFT — commit it on its card, then scan again.`);
       } else {
         setScanMsg(`Scanned ${candidates[0]} — no logged package matches. Log the package first, then scan to receive it.`);
       }
