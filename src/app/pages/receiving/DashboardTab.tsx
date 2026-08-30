@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import createInboundPackage from '@/actions/receiving/createInboundPackage';
 import addPackageItem from '@/actions/receiving/addPackageItem';
@@ -15,7 +15,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { RefreshCw, Truck, AlertTriangle } from 'lucide-react';
+import { RefreshCw, Truck, AlertTriangle, ScanLine } from 'lucide-react';
+import { decodeCarrierLabel, trackingCandidates, matchesTracking } from '@/lib/labelScan';
 import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday } from './shared';
 import type { RxAddress, Pkg, CatalogProduct, VendorRow } from './shared';
 
@@ -186,6 +187,56 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
       const err = await refreshOne({ ...p, committed_at: new Date().toISOString() });
       if (err) setRowMsg(m => ({ ...m, [p.id]: err }));
       afterChange();
+    }
+  };
+
+  // ---- scan-to-receive: photograph the carrier label, decode its
+  // tracking barcode client-side, match against LOGGED packages, and
+  // receive on confirmation. The scan never creates or mutates anything
+  // by itself — it only routes to the existing audited receive. ----
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanMsg, setScanMsg] = useState('');
+  const scanInputRef = useRef<HTMLInputElement | null>(null);
+  const onScanPicked = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setScanBusy(true); setScanMsg('');
+    try {
+      const texts = await decodeCarrierLabel(files[0]);
+      if (texts.length === 0) {
+        setScanMsg('No barcode found in the photo — get closer, keep the label flat, and avoid glare.');
+        return;
+      }
+      const candidates = texts.flatMap(trackingCandidates);
+      if (candidates.length === 0) {
+        setScanMsg(`A barcode was read (${texts[0]}) but it does not look like a tracking number.`);
+        return;
+      }
+      // match against every logged package (mangled rows can never pass
+      // the receive CAS, so they are excluded up front)
+      const matched = packages.filter(p => !p.tracking_mangled && matchesTracking(candidates, String(p.tracking_number || '')));
+      const open = matched.filter(p => !p.received_at && p.committed_at);
+      if (open.length === 1) {
+        const p = open[0];
+        const contents = (p.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ') || 'no items';
+        if (window.confirm(`Receive ${p.tracking_number} (${(p.carrier || '').toUpperCase()}${p.vendor_code ? `, ${p.vendor_code}` : ''}) at ${p.address_label}?\n\nContents: ${contents}`)) {
+          await receivePkg(p);
+          setScanMsg(`Received ${p.tracking_number}.`);
+        }
+      } else if (open.length > 1) {
+        setScanMsg(`The scan matches ${open.length} open packages (${open.map(h => h.tracking_number).join(', ')}) — receive the right one from its card.`);
+      } else if (matched.some(p => p.received_at)) {
+        const r = matched.find(p => p.received_at)!;
+        setScanMsg(`${r.tracking_number} is already received (${fmtDateTime(r.received_at!)} by ${r.received_by}).`);
+      } else if (matched.some(p => !p.committed_at)) {
+        setScanMsg(`${matched.find(p => !p.committed_at)!.tracking_number} is still a DRAFT — commit it on its card, then scan again.`);
+      } else {
+        setScanMsg(`Scanned ${candidates[0]} — no logged package matches. Log the package first, then scan to receive it.`);
+      }
+    } catch (e: unknown) {
+      setScanMsg(e instanceof Error ? e.message : 'Scan failed — try another photo.');
+    } finally {
+      setScanBusy(false);
+      if (scanInputRef.current) scanInputRef.current.value = '';
     }
   };
 
@@ -374,8 +425,16 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
           <Button size="sm" variant="outline" className="h-8 text-xs" onClick={refreshAll} disabled={!hasKey}>
             <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh all
           </Button>
+          <Button size="sm" variant="outline" className="h-8 text-xs" disabled={scanBusy}
+            title="Photograph a carrier label — the tracking barcode is read and the matching logged package is received"
+            onClick={() => scanInputRef.current?.click()}>
+            <ScanLine className="w-3.5 h-3.5 mr-1" /> {scanBusy ? 'Reading…' : 'Scan label'}
+          </Button>
+          <input ref={scanInputRef} type="file" accept="image/*" capture="environment" className="hidden"
+            onChange={e => onScanPicked(e.target.files)} />
           {refreshAllProgress && <span className="text-xs text-muted-foreground">{refreshAllProgress}</span>}
         </div>
+        {scanMsg && <p className={`text-xs ${scanMsg.startsWith('Received ') ? 'text-green-700' : 'text-amber-700'}`}>{scanMsg}</p>}
         <div className="flex flex-wrap gap-1.5">
           {products.filter(pr => packages.some(p => (p.items || []).some(i => Number(i.product_id) === pr.id))).map(pr => {
             const on = productFilter.has(pr.id);
