@@ -181,6 +181,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // was taken for nor drift to a later one
   const capturingRef = useRef(false);
   const landingRef = useRef(false);
+  // set when a landing's bounded wait expired while a capture was still
+  // compressing: that capture missed the snapshot, so its entries must
+  // not become ordinary auto-attach pending photos
+  const landedDuringCapture = useRef(false);
 
   // 'refused' = the server said no (quota full, shipment voided or gone) —
   // retrying the same payload cannot succeed. 'error' = ambiguous transport
@@ -265,6 +269,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       return;
     }
     capturingRef.current = true; // landings wait for this before snapshotting
+    landedDuringCapture.current = false;
     setPhotoBusy(true); setPhotoMsg('');
     const errors: string[] = [];
     try {
@@ -273,9 +278,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           const ph = await compressImageToDataUrl(f);
           // the capture is the only copy — it enters the DURABLE stash
           // before anything else is attempted
-          const entry: StashedPhoto = { ...ph, shipment_id: null, order_id: order.id, ts: Date.now(), actor: userName, key: newStashKey() };
+          // a shipment that landed while this capture was compressing
+          // already snapshotted its pending set — these photos become
+          // RECOVERED (explicit placement) so they cannot silently ride
+          // the NEXT box
+          const missedLanding = landedDuringCapture.current;
+          const entry: StashedPhoto = { ...ph, shipment_id: null, order_id: order.id, ts: Date.now(), actor: userName, key: newStashKey(), ...(missedLanding ? { recovered: true } : {}) };
           if (photoTarget.current === 'pending') {
             if (!(await stashUpsert(entry))) errors.push(`${f.name}: kept for this shipment, but this device's storage is unavailable — it survives only while this page stays open.`);
+            else if (missedLanding) errors.push(`${f.name}: a shipment was created while this photo was processing — it is kept as a "recovered" photo: press "use" to allow it onto the next shipment, or attach it to a shipment row directly.`);
             await refreshPendingView();
           } else {
             const shipmentId = photoTarget.current;
@@ -332,6 +343,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     // encoder cannot deadlock shipping — after the cap, a straggler
     // stays visibly pending instead of silently lost
     for (let i = 0; i < 100 && capturingRef.current; i++) await new Promise(r => setTimeout(r, 100));
+    // cap hit with the capture still running: its photos will land after
+    // this snapshot — flag them so they become RECOVERED (explicit
+    // operator placement) instead of ordinary pending photos that would
+    // silently ride the NEXT box
+    if (capturingRef.current) landedDuringCapture.current = true;
     // recovered entries are excluded: evidence never migrates to a
     // different box without the operator's explicit per-photo "use"
     const { photos: stashPhotos, readOk: pendReadOk } = await readStash(order.id);
