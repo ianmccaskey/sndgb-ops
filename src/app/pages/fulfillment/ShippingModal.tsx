@@ -520,6 +520,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // and "92122" differ — so every address field is re-strung here and
   // only strung values enter payloads and CAS snapshots
   const s = (v: unknown): string => (v == null ? '' : String(v));
+  // for the ship-FROM CAS: the server compares its jsonb_build_object of
+  // the live receive_addresses row EXACTLY (IS DISTINCT FROM, no
+  // normalization) — a NULL street2/phone/email is jsonb null there, so
+  // the snapshot must keep null as null while still re-stringing numbers.
+  // (The ship-TO side COALESCEs to '' server-side, so s() is right there.)
+  const sn = (v: unknown): string | null => (v == null ? null : String(v));
   const shipTo: ShippoAddress | null = order.address_line1 ? {
     name: s(order.contact_name) || s(order.customer_name), street1: s(order.address_line1),
     street2: s(order.address_line2) || undefined as unknown as string,
@@ -650,9 +656,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const lineError = validateChosen();
       if (lineError) { setPurchaseMsg(lineError + ' Nothing was purchased.'); return; }
       const expectedFrom = {
-        name: s(fromRow.name), street1: s(fromRow.street1), street2: s(fromRow.street2),
-        city: s(fromRow.city), state: s(fromRow.state), zip: s(fromRow.zip),
-        country: s(fromRow.country), phone: s(fromRow.phone), email: s(fromRow.email),
+        name: sn(fromRow.name), street1: sn(fromRow.street1), street2: sn(fromRow.street2),
+        city: sn(fromRow.city), state: sn(fromRow.state), zip: sn(fromRow.zip),
+        country: sn(fromRow.country), phone: sn(fromRow.phone), email: sn(fromRow.email),
       };
       // 1. DRAFT FIRST, atomic with its attribution — the server re-proves
       //    every gate row-locked (remaining, money, ship-to, ship-from)
@@ -750,9 +756,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const lineError = validateChosen();
       if (lineError) { setMsg(lineError); return; }
       const expectedFrom = fromRow ? {
-        name: s(fromRow.name), street1: s(fromRow.street1), street2: s(fromRow.street2),
-        city: s(fromRow.city), state: s(fromRow.state), zip: s(fromRow.zip),
-        country: s(fromRow.country), phone: s(fromRow.phone), email: s(fromRow.email),
+        name: sn(fromRow.name), street1: sn(fromRow.street1), street2: sn(fromRow.street2),
+        city: sn(fromRow.city), state: sn(fromRow.state), zip: sn(fromRow.zip),
+        country: sn(fromRow.country), phone: sn(fromRow.phone), email: sn(fromRow.email),
       } : null;
       let recordedId: number | null = null;
       try {
