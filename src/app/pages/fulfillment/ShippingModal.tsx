@@ -175,6 +175,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [viewPhoto, setViewPhoto] = useState<string | null>(null);
   const photoTarget = useRef<'pending' | number>('pending');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // capture/landing mutual exclusion: a capture in flight (compression
+  // precedes the stash write) delays the landing snapshot; a landing in
+  // flight refuses new captures — a photo can neither miss the box it
+  // was taken for nor drift to a later one
+  const capturingRef = useRef(false);
+  const landingRef = useRef(false);
 
   // 'refused' = the server said no (quota full, shipment voided or gone) —
   // retrying the same payload cannot succeed. 'error' = ambiguous transport
@@ -248,15 +254,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
 
   const onFilesPicked = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    // while a shipment is being created, a new capture would land as an
-    // ordinary unbound pending photo AFTER uploadPendingPhotos snapshotted
-    // its set — never riding the box being packed, free to drift to a
-    // later one. Refuse the capture window instead of racing it.
-    if (purchaseInFlight.current || manualBusy) {
+    // while a shipment is landing — creation OR any draft-recovery path
+    // (landingRef spans uploadPendingPhotos, which every landing route
+    // reaches via shipmentLanded) — a new capture would materialize
+    // AFTER the snapshot: never riding the box being packed, free to
+    // drift to a later one. Refuse the capture window instead of racing.
+    if (purchaseInFlight.current || manualBusy || landingRef.current) {
       setPhotoMsg('A shipment is being created right now — wait a moment, then add the photo (you can also attach it to the shipment row once it appears).');
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
+    capturingRef.current = true; // landings wait for this before snapshotting
     setPhotoBusy(true); setPhotoMsg('');
     const errors: string[] = [];
     try {
@@ -304,6 +312,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (photoTarget.current !== 'pending') reloadPhotos();
       if (errors.length > 0) setPhotoMsg(errors.join(' '));
     } finally {
+      capturingRef.current = false;
       setPhotoBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -315,6 +324,14 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // ambiguous error re-binds it to this shipment for auto-retry — never
   // silently dropped, never blocking the shipment
   const uploadPendingPhotos = async (shipmentId: number) => {
+    landingRef.current = true; // new captures refuse while we consume
+    try {
+    // an in-flight capture (compression runs before the stash write)
+    // must become visible before the snapshot, or it would miss this
+    // shipment and drift to a later one; bounded wait so a wedged
+    // encoder cannot deadlock shipping — after the cap, a straggler
+    // stays visibly pending instead of silently lost
+    for (let i = 0; i < 100 && capturingRef.current; i++) await new Promise(r => setTimeout(r, 100));
     // recovered entries are excluded: evidence never migrates to a
     // different box without the operator's explicit per-photo "use"
     const { photos: stashPhotos, readOk: pendReadOk } = await readStash(order.id);
@@ -356,6 +373,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (!allDurable) parts.push(`Warning: this device's storage is unavailable — unattached photos survive only while this page stays open.`);
     if (parts.length > 0) setPhotoMsg(parts.join(' '));
     if (attached > 0 || refused > 0 || errored > 0) reloadPhotos();
+    } finally { landingRef.current = false; }
   };
 
   const removePhoto = async (photoId: number, shipmentId: number) => {
