@@ -232,13 +232,13 @@ export const stashMutateIf = async (key: string, expect: StashExpect, next: Stas
       tx.onerror = () => reject(tx.error ?? new Error('idb transaction error'));
     }));
   } catch {
-    // IndexedDB unavailable: nothing readable contradicts the caller's
-    // observed state, so apply optimistically to the overlay (the prior
-    // degraded-mode behavior) — atomic within this tab, page-lifetime
-    // only, and reported non-durable for honest messaging
-    if (next === null) { memPhotos.delete(key); memRemoved.add(key); }
-    else { memPhotos.set(key, next); memRemoved.delete(key); }
-    return { ok: true, durable: false };
+    // IndexedDB unavailable and the key is not overlay-owned: the
+    // durable row cannot be validated, so the CAS FAILS CLOSED — a tab
+    // that cannot see durable state must never overwrite what another
+    // tab durably changed. (Brand-new keys that were never durably
+    // persisted live in the overlay and are handled by the same-tab CAS
+    // above, so degraded-mode capture keeps working.)
+    return { ok: false, durable: false };
   }
 };
 

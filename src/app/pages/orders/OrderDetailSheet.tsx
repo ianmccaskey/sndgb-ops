@@ -137,12 +137,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const refreshStranded = async () => {
     if (orderId == null) { setStranded([]); return; }
     const { photos, readOk } = await readStash(orderId);
-    // only TRULY stranded entries belong here: bound failed uploads and
-    // explicitly recovered photos. A fresh unbound pending capture is the
-    // ship dialog's domain (it rides the next shipment created THERE) —
-    // surfacing it here would let it attach to an older box it was never
-    // meant for
-    setStranded(photos.filter(s => s.order_id === orderId && (s.shipment_id != null || s.recovered === true)));
+    // every entry for the order is VISIBLE here (a fully shipped order
+    // may never reopen the ship dialog, and photos must not be orphaned
+    // invisibly) — but an ordinary unbound pending capture is not
+    // attachable from this surface until the operator explicitly
+    // "recover"s it: fresh captures belong to the ship dialog's next box,
+    // never implicitly to an older one
+    setStranded(photos.filter(s => s.order_id === orderId));
     if (!readOk) setStrandedMsg('Warning: saved photos on this device could not be read — this list may be incomplete. Reload the page to retry.');
   };
   useEffect(() => { if (open) { setStrandedMsg(''); refreshStranded(); } // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -177,7 +178,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     const preState = { shipment_id: s.shipment_id, recovered: !!s.recovered };
     const bindRes = await stashMutateIf(s.key, preState, { ...s, shipment_id: target });
     if (!bindRes.ok) {
-      setStrandedMsg('This photo changed in another tab — the list has been refreshed; try again.');
+      setStrandedMsg('This photo could not be updated safely (it changed in another tab, or this device’s storage is unavailable) — the list has been refreshed; try again.');
       refreshStranded();
       return;
     }
@@ -1774,12 +1775,22 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         return (
                           <span key={s.key} className="relative flex flex-col items-center gap-1">
                             <img src={s.thumb} alt="stranded package photo" className="h-12 w-12 object-cover rounded border cursor-pointer"
-                              title={s.shipment_id != null ? `Failed upload for shipment #${s.shipment_id}` : 'Pending photo not attached to any shipment'}
+                              title={s.shipment_id != null ? `Failed upload for shipment #${s.shipment_id}`
+                                : s.recovered ? 'Recovered photo — attachable to the newest live shipment'
+                                : 'Pending capture from the Ship dialog — press "recover" to make it attachable here'}
                               onClick={() => setViewShipPhoto(s.full)} />
-                            <Button size="sm" variant="outline" className="h-5 px-1.5 text-[10px]" disabled={saving}
-                              onClick={() => retryStranded(s)}>
-                              {s.shipment_id != null ? 'Retry' : 'Attach'}
-                            </Button>
+                            {s.shipment_id == null && !s.recovered ? (
+                              <Button size="sm" variant="outline" className="h-5 px-1.5 text-[10px]" disabled={saving}
+                                title="Convert this pending capture into a recoverable photo that can be attached from here"
+                                onClick={async () => { await stashMutateIf(s.key, { shipment_id: null, recovered: false }, { ...s, recovered: true }); refreshStranded(); }}>
+                                recover
+                              </Button>
+                            ) : (
+                              <Button size="sm" variant="outline" className="h-5 px-1.5 text-[10px]" disabled={saving}
+                                onClick={() => retryStranded(s)}>
+                                {s.shipment_id != null ? 'Retry' : 'Attach'}
+                              </Button>
+                            )}
                             <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Discard this saved photo"
                               onClick={async () => {
                                 if (!window.confirm('Discard this saved photo? It has not been uploaded anywhere.')) return;
