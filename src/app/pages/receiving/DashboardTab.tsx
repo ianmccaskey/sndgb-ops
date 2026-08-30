@@ -214,13 +214,29 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
       // match against every logged package (mangled rows can never pass
       // the receive CAS, so they are excluded up front)
       const matched = packages.filter(p => !p.tracking_mangled && matchesTracking(candidates, String(p.tracking_number || '')));
+      // the system's identity is carrier + tracking, and the same number
+      // may legitimately exist on different carriers — a scan that
+      // matches across carriers is AMBIGUOUS, never auto-received
+      if (new Set(matched.map(p => p.carrier)).size > 1) {
+        setScanMsg(`The scan matches packages on different carriers (${matched.map(h => `${(h.carrier || '').toUpperCase()} ${h.tracking_number}`).join('; ')}) — check the label's carrier and receive from the right card.`);
+        return;
+      }
+      // UPS numbers are structurally unmistakable (1Z prefix): a scan
+      // that says UPS must not receive a package logged on another carrier
+      const inferredUps = candidates.some(c => c.startsWith('1Z'));
       const open = matched.filter(p => !p.received_at && p.committed_at);
       if (open.length === 1) {
         const p = open[0];
+        if (inferredUps && p.carrier !== 'ups') {
+          setScanMsg(`The barcode is a UPS number but the matching package is logged as ${(p.carrier || '').toUpperCase()} — check the label and the package, then receive from its card.`);
+          return;
+        }
         const contents = (p.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ') || 'no items';
-        if (window.confirm(`Receive ${p.tracking_number} (${(p.carrier || '').toUpperCase()}${p.vendor_code ? `, ${p.vendor_code}` : ''}) at ${p.address_label}?\n\nContents: ${contents}`)) {
-          await receivePkg(p);
-          setScanMsg(`Received ${p.tracking_number}.`);
+        if (window.confirm(`Receive ${p.tracking_number}\nCarrier: ${(p.carrier || '').toUpperCase()}${p.vendor_code ? ` · Vendor: ${p.vendor_code}` : ''}\nAddress: ${p.address_label}\nContents: ${contents}\n\nOK marks it received.`)) {
+          const ok = await receivePkg(p);
+          setScanMsg(ok
+            ? `Received ${p.tracking_number}.`
+            : 'NOT received — the package changed since this page loaded (already received, corrected, or emptied elsewhere). Check its card; the list has refreshed.');
         }
       } else if (open.length > 1) {
         setScanMsg(`The scan matches ${open.length} open packages (${open.map(h => h.tracking_number).join(', ')}) — receive the right one from its card.`);
@@ -240,14 +256,19 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
     }
   };
 
-  const receivePkg = async (p: Pkg) => {
+  // returns whether the DB write actually happened — callers (the card
+  // button ignores it; the scan flow reports honestly from it) must not
+  // claim success on a zero-row refusal
+  const receivePkg = async (p: Pkg): Promise<boolean> => {
     // the receive action CASes on carrier+tracking; a mangled row can never
     // supply the identity it needs — refuse with the real reason up front
-    if (p.tracking_mangled) { setRowMsg(m => ({ ...m, [p.id]: 'Cannot mark received: the platform returned this tracking number rounded, so the identity check cannot pass. Delete the package and re-log it — the database record is intact.' })); return; }
+    if (p.tracking_mangled) { setRowMsg(m => ({ ...m, [p.id]: 'Cannot mark received: the platform returned this tracking number rounded, so the identity check cannot pass. Delete the package and re-log it — the database record is intact.' })); return false; }
     const res = await doReceive({ package_id: p.id, carrier: p.carrier, tracking_number: p.tracking_number, actor: userName, mode: 'manual' }) as unknown[] | null;
-    if (!(Array.isArray(res) ? res.length > 0 : !!res)) setRowMsg(m => ({ ...m, [p.id]: 'Not received — is it committed, not already received, and unchanged since this page loaded? Reload and retry.' }));
+    const ok = Array.isArray(res) ? res.length > 0 : !!res;
+    if (!ok) setRowMsg(m => ({ ...m, [p.id]: 'Not received — is it committed, not already received, and unchanged since this page loaded? Reload and retry.' }));
     else setRowMsg(m => ({ ...m, [p.id]: '' }));
     afterChange();
+    return ok;
   };
 
   const unreceivePkg = async (p: Pkg) => {
