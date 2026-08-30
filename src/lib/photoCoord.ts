@@ -76,6 +76,23 @@ const anyActive = (kind: CoordKind, orderId: number): boolean => {
 export const remoteCaptureActive = (orderId: number): boolean => anyActive('capture', orderId);
 export const remoteLandingActive = (orderId: number): boolean => anyActive('landing', orderId);
 
+// true when SOME cross-tab transport actually works: BroadcastChannel,
+// or a functional localStorage for the storage-event fallback. When
+// false, remote activity is invisible — callers must fail CLOSED
+// (conservative capture classification), never assume single-tab.
+let lsProbe: boolean | null = null;
+export const coordAvailable = (): boolean => {
+  if (channel) return true;
+  if (lsProbe == null) {
+    try {
+      localStorage.setItem('sndgb.coordProbe', '1');
+      localStorage.removeItem('sndgb.coordProbe');
+      lsProbe = true;
+    } catch { lsProbe = false; }
+  }
+  return lsProbe;
+};
+
 // subscribe to remote coordination events (returns an unsubscribe)
 export const subscribeCoord = (cb: (m: CoordMsg) => void): (() => void) => {
   listeners.add(cb);

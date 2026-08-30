@@ -20,7 +20,7 @@ import { compressImageToDataUrl } from '@/lib/imageCapture';
 import type { CapturedPhoto } from '@/lib/imageCapture';
 import { newStashKey, readStash, stashGet, stashUpsert, stashRemove, stashMutateIf, markLandingBlind, readLandingBlindTs, clearLandingBlind } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
-import { announce, remoteCaptureActive, remoteLandingActive, subscribeCoord } from '@/lib/photoCoord';
+import { announce, coordAvailable, remoteCaptureActive, remoteLandingActive, subscribeCoord } from '@/lib/photoCoord';
 import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
@@ -321,14 +321,19 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             // a shipment that landed while this capture was compressing
             // already snapshotted its pending set — such photos become
             // RECOVERED (explicit placement) so they cannot silently ride
-            // the NEXT box. Applies ONLY to pending captures: a direct
-            // row-attach below is explicitly bound to its chosen shipment
-            // and has no drift risk (and its CAS states assume
-            // recovered: false).
+            // the NEXT box. The same conservative classification applies
+            // when NO cross-tab transport works (no BroadcastChannel and
+            // no usable localStorage): another tab's landing would be
+            // invisible, so ordinary auto-attach cannot be assumed safe.
+            // Applies ONLY to pending captures: a direct row-attach below
+            // is explicitly bound to its chosen shipment and has no drift
+            // risk (and its CAS states assume recovered: false).
             const missedLanding = landedDuringCapture.current;
-            const pendingEntry = missedLanding ? { ...entry, recovered: true } : entry;
+            const noCoord = !coordAvailable();
+            const pendingEntry = missedLanding || noCoord ? { ...entry, recovered: true } : entry;
             if (!(await stashUpsert(pendingEntry))) errors.push(`${f.name}: kept for this shipment, but this device's storage is unavailable — it survives only while this page stays open.`);
             else if (missedLanding) errors.push(`${f.name}: a shipment was created while this photo was processing — it is kept as a "recovered" photo: press "use" to allow it onto the next shipment, or attach it to a shipment row directly.`);
+            else if (noCoord) errors.push(`${f.name}: this browser cannot coordinate between tabs, so the photo is kept as a "recovered" photo — press "use" to allow it onto the next shipment, or attach it to a shipment row directly.`);
             await refreshPendingView();
           } else {
             const shipmentId = photoTarget.current;
