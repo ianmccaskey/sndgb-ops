@@ -222,6 +222,21 @@ export type ShippoRate = {
 
 const ALLOWED_PROVIDERS = ['USPS', 'UPS'];
 
+// the services the operator actually ships with sort ABOVE everything
+// else (each group price-ascending): UPS Ground, UPS Ground Saver, USPS
+// Ground Advantage, USPS Priority Mail. Matched by servicelevel token
+// first, then by EXACT normalized name (never a prefix — "Priority
+// Mail" must not drag "Priority Mail Express" up with it).
+const PRIORITY_TOKENS = new Set(['ups_ground', 'ups_ground_saver', 'usps_ground_advantage', 'usps_priority']);
+const normSvc = (s?: string) => (s || '').replace(/[®™]/g, '').trim().toLowerCase();
+const isPriorityRate = (r: ShippoRate): boolean => {
+  if (PRIORITY_TOKENS.has(normSvc(r.servicelevel?.token))) return true;
+  const p = (r.provider || '').toUpperCase();
+  const n = normSvc(r.servicelevel?.name);
+  return (p === 'UPS' && (n === 'ground' || n === 'ground saver'))
+    || (p === 'USPS' && (n === 'ground advantage' || n === 'priority mail'));
+};
+
 /** Declared-value insurance riding on the shipment: rates quoted from an
  * insured shipment carry the insurance through to the purchased label
  * (Shippo bills the premium with the label). amount is the INSURED VALUE
@@ -263,7 +278,13 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
   } | null;
   const all = b?.rates || [];
   return {
-    rates: all.filter(r => ALLOWED_PROVIDERS.includes((r.provider || '').toUpperCase())),
+    rates: all
+      .filter(r => ALLOWED_PROVIDERS.includes((r.provider || '').toUpperCase()))
+      .sort((a, b2) => {
+        const pa = isPriorityRate(a), pb = isPriorityRate(b2);
+        if (pa !== pb) return pa ? -1 : 1;
+        return Number(a.amount) - Number(b2.amount);
+      }),
     allRateCount: all.length,
     // UPS/USPS messages ALWAYS stay (account failures included). For the
     // rest, drop other-carrier noise two ways: structurally — Shippo's
