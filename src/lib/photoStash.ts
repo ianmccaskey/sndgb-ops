@@ -213,9 +213,14 @@ const readBlind = (): BlindMark[] => {
 };
 export const markLandingBlind = (orderId: number): void => {
   try {
-    const marks = readBlind().filter(m => m && typeof m.order_id === 'number');
+    // ONE marker per order, newest ts wins; no global truncation — an
+    // unresolved order's marker must never be evicted by unrelated
+    // activity. Markers are tiny (~30 bytes), grow only with orders that
+    // had a blind landing, and clearLandingBlind removes them once the
+    // order's photos are durably reclassified.
+    const marks = readBlind().filter(m => m && typeof m.order_id === 'number' && m.order_id !== orderId);
     marks.push({ order_id: orderId, ts: Date.now() });
-    localStorage.setItem(BLIND_KEY, JSON.stringify(marks.slice(-20)));
+    localStorage.setItem(BLIND_KEY, JSON.stringify(marks));
   } catch { /* both channels down: the honest warning is all we have */ }
 };
 export const readLandingBlindTs = (orderId: number): number | null => {
