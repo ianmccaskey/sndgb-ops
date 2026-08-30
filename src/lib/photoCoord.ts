@@ -62,6 +62,7 @@ if (!channel && typeof window !== 'undefined') {
 let sendHealthy = true;
 export const announce = (kind: CoordKind, orderId: number, active: boolean): void => {
   const msg: CoordMsg = { kind, order_id: orderId, active, tab: TAB_ID };
+  persistHold(kind, orderId, active); // late-join visibility (heartbeats refresh ts)
   if (channel) {
     try { channel.postMessage(msg); sendHealthy = true; } catch { sendHealthy = false; }
     return;
@@ -69,11 +70,37 @@ export const announce = (kind: CoordKind, orderId: number, active: boolean): voi
   try { localStorage.setItem(LS_MSG_KEY, JSON.stringify({ ...msg, nonce: Math.random() })); sendHealthy = true; } catch { sendHealthy = false; }
 };
 
+// persisted hold records: a tab that opens or reloads MID-operation has
+// received no broadcast yet — it would be blind to an active hold until
+// the next 10s heartbeat. Every announce also upserts/removes its hold
+// here (best-effort; the live broadcast rail is authoritative when
+// localStorage is down), and anyActive() consults both, so late-joining
+// tabs see current holds immediately. Same 30s staleness as broadcasts.
+const HOLDS_KEY = 'sndgb.photoCoordHolds';
+type HoldRec = { kind: CoordKind; tab: string; order_id: number; ts: number };
+const readHolds = (): HoldRec[] => {
+  try { return JSON.parse(localStorage.getItem(HOLDS_KEY) || '[]') as HoldRec[]; } catch { return []; }
+};
+const persistHold = (kind: CoordKind, orderId: number, active: boolean): void => {
+  try {
+    const now = Date.now();
+    const holds = readHolds().filter(h =>
+      h && !(h.kind === kind && h.tab === TAB_ID) && now - h.ts <= STALE_MS);
+    if (active) holds.push({ kind, tab: TAB_ID, order_id: orderId, ts: now });
+    localStorage.setItem(HOLDS_KEY, JSON.stringify(holds));
+  } catch { /* live broadcast rail still covers already-open tabs */ }
+};
+
 const anyActive = (kind: CoordKind, orderId: number): boolean => {
   const now = Date.now();
   for (const [tab, v] of remote[kind]) {
     if (now - v.ts > STALE_MS) { remote[kind].delete(tab); continue; }
     if (v.order_id === orderId) return true;
+  }
+  // late-join bootstrap: holds persisted by tabs whose broadcasts predate
+  // this tab's existence
+  for (const h of readHolds()) {
+    if (h && h.kind === kind && h.tab !== TAB_ID && h.order_id === orderId && now - h.ts <= STALE_MS) return true;
   }
   return false;
 };
