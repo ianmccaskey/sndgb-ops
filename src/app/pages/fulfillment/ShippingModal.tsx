@@ -551,8 +551,16 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   };
 
   // rate signature: ship-from CONTENTS + ship-to + dims/weight + the CHOSEN
-  // QUANTITIES (an attribution edit changes the draft, so it re-quotes)
-  const quoteSig = JSON.stringify({ shipFrom, from: fromRow, to: expectedTo, dims, weight, chosen: chosen.map(c => [c.line.order_item_id, c.qty]) });
+  // QUANTITIES (an attribution edit changes the draft, so it re-quotes).
+  // Only shipment-relevant address fields enter the signature —
+  // presentation flags (is_default_ship_from) flip from the OTHER admin's
+  // session and must never invalidate a still-valid quote.
+  const fromSig = fromRow ? {
+    label: fromRow.label, name: sn(fromRow.name), street1: sn(fromRow.street1), street2: sn(fromRow.street2),
+    city: sn(fromRow.city), state: sn(fromRow.state), zip: sn(fromRow.zip),
+    country: sn(fromRow.country), phone: sn(fromRow.phone), email: sn(fromRow.email),
+  } : null;
+  const quoteSig = JSON.stringify({ shipFrom, from: fromSig, to: expectedTo, dims, weight, chosen: chosen.map(c => [c.line.order_item_id, c.qty]) });
   useEffect(() => {
     if (ratesResult && ratesResult.sig !== quoteSig) { setRatesResult(null); setPickedRate(''); setPurchaseMsg(''); }
   }, [quoteSig, ratesResult]);

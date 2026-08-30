@@ -283,6 +283,14 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       // can change it without this tab's props ever updating)
       const fromRow = addresses.find(a => String(a.id) === fFrom);
       if (!fromRow) { setPurchaseMsg('Ship-from address not found — reload the page.'); return; }
+      // Shippo refuses purchases whose address_from has no phone
+      // ("address_from.phone must not be empty") — refuse BEFORE the
+      // draft exists, same guard as the fulfillment Ship dialog, so the
+      // fix is one field instead of a delete-and-requote loop
+      if (!String(fromRow.phone ?? '').trim()) {
+        setPurchaseMsg(`"${fromRow.label}" has no phone — Shippo refuses label purchases without a ship-from phone. Add one on the Addresses tab (it goes to the carrier, not onto the label), then re-fetch rates.`);
+        return;
+      }
       const expectedFrom = {
         name: fromRow.name, street1: fromRow.street1, street2: fromRow.street2,
         city: fromRow.city, state: fromRow.state, zip: fromRow.zip,
@@ -591,7 +599,15 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         setDraftMsg(m => ({ ...m, [t.id]: `Label purchased (${result.transactionId}) but saving failed — ${result.labelUrl} — use Retry save.` }));
       }
     } catch (e: unknown) {
-      setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Purchase failed' }));
+      const msg = e instanceof Error ? e.message : 'Purchase failed';
+      // an address_from refusal is baked into the RATE (frozen at quote
+      // time) — fixing the address cannot fix this draft's rate
+      setDraftMsg(m => ({
+        ...m,
+        [t.id]: msg + (e instanceof ShippoPurchaseRefusedError && /address_from/i.test(msg)
+          ? ' This draft\'s rate is frozen with the ship-from as it was quoted — fixing the address does NOT fix the rate. Delete this draft (Delete verifies no label first) and re-quote.'
+          : ''),
+      }));
     } finally {
       purchaseInFlight.current = false;
     }
