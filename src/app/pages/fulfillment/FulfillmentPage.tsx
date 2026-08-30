@@ -71,6 +71,17 @@ export function FulfillmentPage() {
     { group_buy_id: groupBuyId, stage, product_ids: productIdsCsv, filter_mode: filterMode },
     { enabled });
   const queue = rows<QueueRow>(raw);
+  // BELT AND BRACES: filterMode sits in the load deps above, but the
+  // platform runtime was observed (live, on mobile) NOT re-running the
+  // load when only the mode string changed — the operator had to remove
+  // and re-add a product chip to force a fetch. An explicit reload on
+  // every mode change costs at most one duplicate idempotent read.
+  const modeMounted = useRef(false);
+  useEffect(() => {
+    if (!modeMounted.current) { modeMounted.current = true; return; }
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterMode]);
   const [rawAddresses] = useLoadAction(listReceiveAddresses, [], {});
   const addresses = rows<RxAddress>(rawAddresses);
   const [rawProducts] = useLoadAction(listProducts, [], {});
