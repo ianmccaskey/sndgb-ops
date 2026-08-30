@@ -179,8 +179,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         const recDurable = await stashUpsert({ ...s, shipment_id: null, recovered: true });
         setStrandedMsg('Its original shipment refused this photo (deleted, voided, quota full, or it was removed on purpose) — it is now attachable: use "Attach" to put it on the newest live shipment, or discard it.'
           + (recDurable ? '' : ' Warning: this device’s storage is unavailable — it survives only while this page stays open.'));
-      } else setStrandedMsg('The shipment refused this photo (quota full, voided, already on another box of this order, or previously removed on purpose) — remove it here if it is no longer needed.'
-        + (boundDurable ? '' : ' Warning: this device’s storage is unavailable — it survives only while this page stays open.'));
+      } else {
+        // roll the pre-upload bind BACK: a refused DELIBERATE attach must
+        // stay an operator-driven Attach — left bound, the next click
+        // would send replay=true and could converge onto a sibling box
+        const rbDurable = await stashUpsert({ ...s, shipment_id: null, recovered: true });
+        setStrandedMsg('The shipment refused this photo (quota full, voided, already on another box of this order, or previously removed on purpose) — remove it here if it is no longer needed.'
+          + (rbDurable ? '' : ' Warning: this device’s storage is unavailable — it survives only while this page stays open.'));
+      }
     } catch {
       setStrandedMsg(boundDurable
         ? 'Upload failed — the photo stays saved on this device; retry.'
