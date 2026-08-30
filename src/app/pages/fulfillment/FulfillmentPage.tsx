@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listFulfillmentQueue from '@/actions/fulfillment/listFulfillmentQueue';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
@@ -143,6 +143,12 @@ export function FulfillmentPage() {
       setChecking(false);
     }
   };
+  // hard-DROP the snapshot on any source-identity change (not just hide
+  // it): switching campaigns or editing settings and switching back must
+  // never resurrect an old check as if it were current
+  useEffect(() => {
+    setUpstream(null); setCheckError('');
+  }, [groupBuyId, groupBuy?.external_id, cfg.appId, cfg.token]);
   const upstreamLive = upstream
     && upstream.forGroupBuyId === groupBuyId
     && upstream.gbExternalId === (groupBuy?.external_id || '')
@@ -183,8 +189,11 @@ export function FulfillmentPage() {
   }, [queue, sessionActive, stage, showPartials, JSON.stringify(pool)]);
   const sessionHiddenCount = sessionActive && stage === 'ready' ? queue.length - displayQueue.length : 0;
   // counted over the whole loaded stage, not the session-filtered view — a
-  // session must not hide the existence of unrecorded-shipped orders
+  // session must not hide the existence of unrecorded-shipped orders.
+  // listFulfillmentQueue caps at 1000 rows; at the cap the stage may be
+  // truncated, so the banner must not claim clean stage-wide coverage
   const mismatchCount = upstreamLive ? queue.filter(upstreamMismatch).length : 0;
+  const queueTruncated = queue.length >= 1000;
 
   const toggleFilter = (pid: number) => {
     setFilterIds(s => { const n = new Set(s); if (n.has(pid)) n.delete(pid); else n.add(pid); return n; });
@@ -378,12 +387,15 @@ export function FulfillmentPage() {
       {/* upstream check result — persists until cleared or re-pulled so the
           rose "shipped upstream" badges have a visible legend */}
       {upstreamLive && (
-        <div className={`rounded-lg border px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1 ${mismatchCount > 0 ? 'border-rose-300 bg-rose-50' : 'border-green-300 bg-green-50'}`}>
-          <span className={`font-medium ${mismatchCount > 0 ? 'text-rose-900' : 'text-green-900'}`}>
+        <div className={`rounded-lg border px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1 ${mismatchCount > 0 ? 'border-rose-300 bg-rose-50' : queueTruncated ? 'border-amber-300 bg-amber-50' : 'border-green-300 bg-green-50'}`}>
+          <span className={`font-medium ${mismatchCount > 0 ? 'text-rose-900' : queueTruncated ? 'text-amber-900' : 'text-green-900'}`}>
             Ordering app checked at {upstreamLive.at} ({fmtNum(upstreamLive.total)} orders) — {mismatchCount === 0
               ? `no order in this ${filterIds.size > 0 ? 'filtered view' : 'stage'} is marked shipped there without being recorded here.`
               : `${mismatchCount} order${mismatchCount > 1 ? 's' : ''} in this ${filterIds.size > 0 ? 'filtered view' : 'stage'} marked shipped there without being recorded here.`}
           </span>
+          {queueTruncated && (
+            <span className="text-amber-800">Only the first 1000 loaded orders were checked — this stage may hold more; narrow by stage or product filter to cover the rest.</span>
+          )}
           {mismatchCount > 0 && (
             <span className="text-rose-900">Look for the <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1 py-0.5 uppercase">shipped upstream</span> badge — its tooltip names the recording flow (Ship, or Vendor shipped for direct orders).</span>
           )}
