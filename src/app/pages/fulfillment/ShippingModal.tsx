@@ -515,6 +515,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(qtys), packable.length, weightTouched]);
 
+  // ---- packaging: box (L/W/H) or polymailer (L/W only — Shippo parcels
+  // require a height, so soft packs send a nominal 1 inch) ----
+  const [packaging, setPackaging] = useState<'box' | 'polymailer'>('box');
+  const POLYMAILER_HEIGHT = '1';
+  const heightVal = packaging === 'polymailer' ? POLYMAILER_HEIGHT : dims.height;
+
   // ---- insurance: the customer's upstream insurance fee (override wins)
   // decides the DEFAULT; the insured value is this box's contents at
   // order prices, editable like the weight (freeze on manual edit) ----
@@ -587,7 +593,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     city: sn(fromRow.city), state: sn(fromRow.state), zip: sn(fromRow.zip),
     country: sn(fromRow.country), phone: sn(fromRow.phone), email: sn(fromRow.email),
   } : null;
-  const quoteSig = JSON.stringify({ shipFrom, from: fromSig, to: expectedTo, dims, weight, ins: insureBox ? insuredValue.trim() : '', chosen: chosen.map(c => [c.line.order_item_id, c.qty]) });
+  const quoteSig = JSON.stringify({ shipFrom, from: fromSig, to: expectedTo, dims, packaging, weight, ins: insureBox ? insuredValue.trim() : '', chosen: chosen.map(c => [c.line.order_item_id, c.qty]) });
   useEffect(() => {
     if (ratesResult && ratesResult.sig !== quoteSig) { setRatesResult(null); setPickedRate(''); setPurchaseMsg(''); }
   }, [quoteSig, ratesResult]);
@@ -599,8 +605,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (!shipTo) { setMsg('This order has no street address — fix it in the order sheet first.'); return; }
     const lineError = validateChosen();
     if (lineError) { setMsg(lineError); return; }
-    for (const k of ['length', 'width', 'height'] as const) {
-      if (!QTY_RE.test(dims[k].trim()) || !(Number(dims[k]) > 0)) { setMsg('Box dimensions must be positive numbers (inches).'); return; }
+    for (const k of (packaging === 'polymailer' ? ['length', 'width'] as const : ['length', 'width', 'height'] as const)) {
+      if (!QTY_RE.test(dims[k].trim()) || !(Number(dims[k]) > 0)) { setMsg(`${packaging === 'polymailer' ? 'Polymailer' : 'Box'} dimensions must be positive numbers (inches).`); return; }
     }
     if (!QTY_RE.test(weight.trim()) || !(Number(weight) > 0)) { setMsg('Weight must be a positive number (lb).'); return; }
     if (insureBox && (!QTY_RE.test(insuredValue.trim()) || !(Number(insuredValue) > 0))) {
@@ -613,7 +619,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         city: s(fromRow.city), state: s(fromRow.state), zip: s(fromRow.zip), country: s(fromRow.country) || 'US',
         phone: s(fromRow.phone) || undefined as unknown as string, email: s(fromRow.email) || undefined as unknown as string,
       }, shipTo, {
-        length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(),
+        length: dims.length.trim(), width: dims.width.trim(), height: heightVal.trim(),
         distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb',
       }, insureBox ? { amount: insuredValue.trim(), currency: 'USD' } : null);
       setRatesResult({ ...res, sig: quoteSig });
@@ -728,8 +734,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           ship_from_address_id: Number(shipFrom),
           expected_from: JSON.stringify(expectedFrom), expected_to: JSON.stringify(expectedTo),
           parcel: JSON.stringify({
-            length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(),
-            distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb',
+            length: dims.length.trim(), width: dims.width.trim(), height: heightVal.trim(),
+            distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb', packaging,
             ...(insureBox ? { insurance_amount_usd: insuredValue.trim() } : {}),
           }),
           carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
@@ -1165,9 +1171,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             )}
             {!manualMode && (
               <>
+                <span className="inline-flex rounded-md border overflow-hidden text-xs h-9">
+                  <button className={`px-2.5 ${packaging === 'box' ? 'bg-violet-600 text-white' : 'bg-background text-muted-foreground'}`}
+                    title="Rigid box — length, width, and height" onClick={() => setPackaging('box')}>box</button>
+                  <button className={`px-2.5 border-l ${packaging === 'polymailer' ? 'bg-violet-600 text-white' : 'bg-background text-muted-foreground'}`}
+                    title="Soft polymailer — length and width only (a nominal 1 in height is sent to Shippo)" onClick={() => setPackaging('polymailer')}>polymailer</button>
+                </span>
                 <Input placeholder="L in" value={dims.length} onChange={e => setDims(d => ({ ...d, length: e.target.value }))} className="h-9 w-20" />
                 <Input placeholder="W in" value={dims.width} onChange={e => setDims(d => ({ ...d, width: e.target.value }))} className="h-9 w-20" />
-                <Input placeholder="H in" value={dims.height} onChange={e => setDims(d => ({ ...d, height: e.target.value }))} className="h-9 w-20" />
+                {packaging === 'box' && (
+                  <Input placeholder="H in" value={dims.height} onChange={e => setDims(d => ({ ...d, height: e.target.value }))} className="h-9 w-20" />
+                )}
                 <Input placeholder="Weight lb" value={weight} onChange={e => { setWeight(e.target.value); setWeightTouched(true); }} className="h-9 w-24" />
                 {weightTouched && (
                   <button className="text-xs text-muted-foreground underline" onClick={() => { setWeightTouched(false); }}>recalc</button>

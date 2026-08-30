@@ -406,9 +406,12 @@ export function FulfillmentPage() {
   const [directing, setDirecting] = useState<QueueRow | null>(null);
   const [rawDirectLines, directLinesLoading] = useLoadAction(getPackableItems,
     ['direct', directing?.id ?? 0], { order_id: directing?.id ?? 0 }, { enabled: !!directing });
-  type DirectLine = { order_item_id: number; sku_code: string; effective_qty: string; direct_ship: boolean; direct_fulfilled_at: string | null };
+  type DirectLine = { order_item_id: number; sku_code: string; effective_qty: string; direct_ship: boolean; direct_fulfilled_at: string | null; digital: boolean };
+  // NOT digital mirrors the queue's direct-side projection — a misflagged
+  // digital+direct line is not vendor shipping work and must never be
+  // stamped (the action refuses digital lines server-side too)
   const directLines = useMemo(() =>
-    rows<DirectLine>(rawDirectLines).filter(l => l.direct_ship && !l.direct_fulfilled_at),
+    rows<DirectLine>(rawDirectLines).filter(l => l.direct_ship && !l.direct_fulfilled_at && !l.digital),
     [rawDirectLines]);
   const [directChecked, setDirectChecked] = useState<Set<number>>(new Set());
   const [dvCarrier, setDvCarrier] = useState('');

@@ -59,6 +59,13 @@ function markOrderDirectFulfilled() {
           AND o.status NOT IN ('cancelled', 'refunded')
           AND oi.direct_ship
           AND oi.removed_at IS NULL
+          -- digital lines are never vendor-shipping work (same projection
+          -- as the direct queue) — enforced here so no client drift can
+          -- stamp a misflagged digital+direct line
+          AND NOT EXISTS (
+            SELECT 1 FROM group_buy_products g
+            JOIN products p ON p.id = g.product_id
+            WHERE g.id = oi.group_buy_product_id AND p.digital)
           AND ((inp.fulfilled AND oi.direct_fulfilled_at IS NULL)
                OR (NOT inp.fulfilled AND oi.direct_fulfilled_at IS NOT NULL))
           AND (
@@ -82,6 +89,13 @@ function markOrderDirectFulfilled() {
                    AND ok.order_id = {{params.order_id}}::bigint
                    AND ok.direct_ship AND ok.direct_fulfilled_at IS NULL
                    AND ok.removed_at IS NULL
+                   -- mirrors the update predicate exactly: a digital id in
+                   -- the chosen set refuses the WHOLE call rather than
+                   -- letting the anchor pass while the update skips it
+                   AND NOT EXISTS (
+                     SELECT 1 FROM group_buy_products g2
+                     JOIN products p2 ON p2.id = g2.product_id
+                     WHERE g2.id = ok.group_buy_product_id AND p2.digital)
                   WHERE ok.id IS NULL
                 ))
             -- bulk undo: every fulfilled line (adds work back — safe)
