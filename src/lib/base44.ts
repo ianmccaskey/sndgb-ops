@@ -179,14 +179,24 @@ export async function updateB44Order(cfg: B44Config, orderId: string, fields: Re
   }
 }
 
-/** All orders for one group buy, filtered server-side and paginated. */
+/**
+ * All orders for one group buy, filtered server-side and paginated.
+ * Fails CLOSED on pagination: a 2xx page that is not an array (schema
+ * drift, proxy envelope) THROWS instead of reading as end-of-data —
+ * callers treat the returned list as a complete pull (the Import page's
+ * deleted-upstream diff, Fulfillment's upstream-status check), so a
+ * silently truncated result is worse than a visible error.
+ */
 export async function listB44Orders(cfg: B44Config, gbExternalId: string): Promise<B44Order[]> {
   const out: B44Order[] = [];
   const limit = 1000;
   const q = encodeURIComponent(JSON.stringify({ group_buy_id: gbExternalId }));
   for (let skip = 0; ; skip += limit) {
     const batch = await b44Get(cfg, `/entities/Order?q=${q}&sort=-created_date&limit=${limit}&skip=${skip}`);
-    if (!Array.isArray(batch) || batch.length === 0) break;
+    if (!Array.isArray(batch)) {
+      throw new Error('Ordering app returned an unexpected response mid-pull — discarding the partial result rather than treating it as complete.');
+    }
+    if (batch.length === 0) break;
     out.push(...batch as B44Order[]);
     if (batch.length < limit) break;
   }
