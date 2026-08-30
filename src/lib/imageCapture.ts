@@ -10,6 +10,9 @@ const MAX_EDGE = 1600;
 const THUMB_EDGE = 240;
 const TARGET_BYTES = 900_000;         // data-URL length target (~675KB binary)
 const QUALITIES = [0.8, 0.7, 0.6, 0.5];
+// the server hard-refuses thumb_data over 80,000 chars; stay safely under
+const THUMB_TARGET = 79_000;
+const THUMB_QUALITIES = [0.7, 0.5, 0.35, 0.2];
 
 export type CapturedPhoto = { full: string; thumb: string };
 
@@ -33,8 +36,18 @@ export async function compressImageToDataUrl(file: File): Promise<CapturedPhoto>
   try {
     const canvas = drawScaled(bitmap, MAX_EDGE);
     // the small thumbnail rides in list views; the full image loads only
-    // on demand when enlarged
-    const thumb = drawScaled(bitmap, THUMB_EDGE).toDataURL('image/jpeg', 0.7);
+    // on demand when enlarged. Ratchet its quality down until it honors
+    // the server's 80KB cap — a high-entropy shot can otherwise breach it
+    // and surface as an undiagnosable refusal
+    const thumbCanvas = drawScaled(bitmap, THUMB_EDGE);
+    let thumb = '';
+    for (const q of THUMB_QUALITIES) {
+      thumb = thumbCanvas.toDataURL('image/jpeg', q);
+      if (thumb.length <= THUMB_TARGET) break;
+    }
+    if (thumb.length > THUMB_TARGET) {
+      throw new Error(`"${file.name}": the preview thumbnail would not compress small enough — try a simpler shot.`);
+    }
     for (const q of QUALITIES) {
       const url = canvas.toDataURL('image/jpeg', q);
       if (url.length <= TARGET_BYTES) return { full: url, thumb };

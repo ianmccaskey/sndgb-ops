@@ -136,7 +136,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [strandedMsg, setStrandedMsg] = useState('');
   const refreshStranded = async () => {
     const { photos, readOk } = await readStash();
-    setStranded(photos.filter(s => s.order_id === orderId));
+    // only TRULY stranded entries belong here: bound failed uploads and
+    // explicitly recovered photos. A fresh unbound pending capture is the
+    // ship dialog's domain (it rides the next shipment created THERE) —
+    // surfacing it here would let it attach to an older box it was never
+    // meant for
+    setStranded(photos.filter(s => s.order_id === orderId && (s.shipment_id != null || s.recovered === true)));
     if (!readOk) setStrandedMsg('Warning: saved photos on this device could not be read — this list may be incomplete. Reload the page to retry.');
   };
   useEffect(() => { if (open) { setStrandedMsg(''); refreshStranded(); } // eslint-disable-next-line react-hooks/exhaustive-deps
