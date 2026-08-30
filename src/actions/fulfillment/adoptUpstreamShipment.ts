@@ -17,6 +17,7 @@ function adoptUpstreamShipment() {
         {{params.order_id}}::bigint,
         {{params.group_buy_id}}::bigint,
         {{params.items}}::jsonb,
+        {{params.shipped_date}}::text,
         {{params.note}}::text,
         {{params.actor}}::text
       )

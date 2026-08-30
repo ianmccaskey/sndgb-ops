@@ -252,25 +252,49 @@ export function FulfillmentPage() {
       .filter(l => adoptFull || l.date != null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adopting, rawAdoptLines, adoptFull, JSON.stringify(adoptInfo?.shipped)]);
+  // undated lines only exist on order-level shipped/delivered adoption;
+  // they need an explicit operator confirmation (the order status alone
+  // is weaker evidence than a per-item date)
+  const undatedCount = adoptLines.filter(l => l.date == null).length;
+  const [adoptConfirmed, setAdoptConfirmed] = useState(false);
+  useEffect(() => { setAdoptConfirmed(false); }, [adopting?.id]);
   const runAdopt = async () => {
     if (!adopting || groupBuyId == null || adoptLines.length === 0) return;
+    if (undatedCount > 0 && !adoptConfirmed) return;
     setAdoptBusy(true); setAdoptMsg('');
     try {
-      const dates = Array.from(new Set(adoptLines.map(l => l.date).filter(Boolean))) as string[];
-      const note = `Recorded from ordering app (status "${adoptInfo?.status ?? ''}"${dates.length > 0 ? `; item shipped dates ${dates.join(', ')}` : ''}) — no tracking; adopted via the upstream check.`;
-      const res = await doAdopt({
-        order_id: adopting.id, group_buy_id: groupBuyId,
-        items: JSON.stringify(adoptLines.map(l => ({ order_item_id: l.order_item_id, qty: String(l.remaining_qty) }))),
-        note, actor: userName,
-      }) as unknown[] | null;
-      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
-        setAdoptMsg('Not recorded — the order changed since this list loaded (a draft or box may now cover these items, or the order was cancelled). Close and re-check.');
-        return;
+      // one shipment row PER upstream ship date, each carrying its true
+      // shipped_at; undated lines (order-level evidence) become their own
+      // row stamped now() with the note saying the date is unknown
+      const groups = new Map<string, typeof adoptLines>();
+      for (const l of adoptLines) {
+        const k = l.date ?? '';
+        groups.set(k, [...(groups.get(k) ?? []), l]);
+      }
+      let recorded = 0;
+      for (const [date, lines] of groups) {
+        const note = `Recorded from ordering app (status "${adoptInfo?.status ?? ''}"; ${date
+          ? `item shipped date ${date}`
+          : 'no per-item ship date — adopted on the order-level status, date unknown'}) — no tracking; adopted via the upstream check.`;
+        const res = await doAdopt({
+          order_id: adopting.id, group_buy_id: groupBuyId,
+          items: JSON.stringify(lines.map(l => ({ order_item_id: l.order_item_id, qty: String(l.remaining_qty) }))),
+          shipped_date: date, note, actor: userName,
+        }) as unknown[] | null;
+        if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+          setAdoptMsg(recorded > 0
+            ? `${recorded} box${recorded > 1 ? 'es' : ''} recorded, then one refused — the order changed underneath (a draft or box may now cover the rest). Close and re-check.`
+            : 'Not recorded — the order changed since this list loaded (a draft or box may now cover these items, or the order was cancelled). Close and re-check.');
+          reload();
+          return;
+        }
+        recorded += 1;
       }
       setAdopting(null);
       reload();
     } catch (e: unknown) {
       setAdoptMsg(e instanceof Error ? e.message : 'Failed to record the upstream shipment');
+      reload();
     } finally {
       setAdoptBusy(false);
     }
@@ -699,10 +723,16 @@ export function FulfillmentPage() {
                 ))}
               </div>
             )}
+            {undatedCount > 0 && (
+              <label className="flex items-start gap-1.5 text-xs text-amber-800 cursor-pointer">
+                <input type="checkbox" className="mt-0.5" checked={adoptConfirmed} onChange={e => setAdoptConfirmed(e.target.checked)} />
+                <span>{undatedCount} item{undatedCount > 1 ? 's have' : ' has'} no per-item shipped date — only the order-level "{adoptInfo?.status}" status covers {undatedCount > 1 ? 'them' : 'it'}. I confirm these items really shipped.</span>
+              </label>
+            )}
             {adoptMsg && <p className="text-xs text-red-600">{adoptMsg}</p>}
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={() => setAdopting(null)}>Cancel</Button>
-              <Button size="sm" disabled={adoptBusy || adoptLinesLoading || adoptLines.length === 0} onClick={runAdopt}>
+              <Button size="sm" disabled={adoptBusy || adoptLinesLoading || adoptLines.length === 0 || (undatedCount > 0 && !adoptConfirmed)} onClick={runAdopt}>
                 {adoptBusy ? 'Recording…' : `Record ${adoptLines.length} item${adoptLines.length === 1 ? '' : 's'} as shipped`}
               </Button>
             </div>
