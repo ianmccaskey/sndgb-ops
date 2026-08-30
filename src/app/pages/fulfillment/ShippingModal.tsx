@@ -523,11 +523,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [insureBox, setInsureBox] = useState(customerInsured);
   const [insuredValue, setInsuredValue] = useState('');
   const [insuredTouched, setInsuredTouched] = useState(false);
+  // Shippo's insurance premium rate: $1.27 per $100 of declared value
+  const SHIPPO_INS_RATE_PER_100 = 1.27;
   const calcInsuredValue = () => {
-    // house rule (Ian): coverage = $100 per $1 of insurance fee the
-    // customer paid ($7 fee -> $700 insured). Orders with no fee (manual
-    // tick) fall back to this box's contents value at order prices.
-    if (insuranceFee > 0) return (Math.round(insuranceFee * 100 * 100) / 100).toFixed(2);
+    // house rule (Ian): the customer's insurance fee BUYS coverage at
+    // Shippo's rate — insured value = fee / $1.27 x $100, floored to
+    // cents so the premium never exceeds what the customer paid
+    // ($7 fee -> $551.18 insured). Orders with no fee (manual tick)
+    // fall back to this box's contents value at order prices.
+    if (insuranceFee > 0) return (Math.floor((insuranceFee / SHIPPO_INS_RATE_PER_100) * 100 * 100) / 100).toFixed(2);
     const v = chosen.reduce((s, c) => s + Number(c.qty || 0) * Number(c.line.unit_price_usd || 0), 0);
     return v > 0 ? (Math.round(v * 100) / 100).toFixed(2) : '';
   };
@@ -1168,7 +1172,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   <>
                     <Input placeholder="Value $" value={insuredValue}
                       onChange={e => { setInsuredValue(e.target.value); setInsuredTouched(true); }} className="h-9 w-24"
-                      title="Insured (declared) value — $100 of coverage per $1 of insurance the customer paid; the premium is billed by Shippo with the label" />
+                      title="Insured (declared) value — prefilled so Shippo's premium ($1.27 per $100 insured) matches what the customer paid; the premium is billed by Shippo with the label" />
                     {insuredTouched && (
                       <button className="text-xs text-muted-foreground underline" onClick={() => { setInsuredTouched(false); }}>recalc</button>
                     )}
