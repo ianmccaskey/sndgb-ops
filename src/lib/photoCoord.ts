@@ -76,6 +76,23 @@ const anyActive = (kind: CoordKind, orderId: number): boolean => {
 export const remoteCaptureActive = (orderId: number): boolean => anyActive('capture', orderId);
 export const remoteLandingActive = (orderId: number): boolean => anyActive('landing', orderId);
 
+// hold a capture/landing signal ALIVE for the full operation: announces
+// active immediately, re-announces every 10s (well inside the 30s
+// staleness window, so a long-running operation never silently ages
+// out of other tabs' view), and announces inactive on release. Callers
+// must invoke the returned release in a finally.
+export const announceHold = (kind: CoordKind, orderId: number): (() => void) => {
+  announce(kind, orderId, true);
+  const iv = setInterval(() => announce(kind, orderId, true), 10_000);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    clearInterval(iv);
+    announce(kind, orderId, false);
+  };
+};
+
 // true when SOME cross-tab transport actually works: BroadcastChannel,
 // or a functional localStorage for the storage-event fallback. When
 // false, remote activity is invisible — callers must fail CLOSED

@@ -20,7 +20,7 @@ import { compressImageToDataUrl } from '@/lib/imageCapture';
 import type { CapturedPhoto } from '@/lib/imageCapture';
 import { newStashKey, readStash, stashGet, stashUpsert, stashRemove, stashMutateIf, markLandingBlind, readLandingBlindTs, clearLandingBlind } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
-import { announce, coordAvailable, remoteCaptureActive, remoteLandingActive, subscribeCoord } from '@/lib/photoCoord';
+import { announceHold, coordAvailable, remoteCaptureActive, remoteLandingActive, subscribeCoord } from '@/lib/photoCoord';
 import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
@@ -306,7 +306,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       return;
     }
     capturingRef.current = true; // landings wait for this before snapshotting
-    announce('capture', order.id, true); // other tabs' landings wait too
+    // heartbeat-held so a slow multi-file compression never ages out of
+    // other tabs' view; released in the finally
+    const releaseCaptureHold = announceHold('capture', order.id);
     landedDuringCapture.current = false;
     setPhotoBusy(true); setPhotoMsg('');
     const errors: string[] = [];
@@ -371,7 +373,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (errors.length > 0) setPhotoMsg(errors.join(' '));
     } finally {
       capturingRef.current = false;
-      announce('capture', order.id, false);
+      releaseCaptureHold();
       setPhotoBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -384,7 +386,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // silently dropped, never blocking the shipment
   const uploadPendingPhotos = async (shipmentId: number) => {
     landingRef.current = true; // new captures refuse while we consume
-    announce('landing', order.id, true); // other tabs' captures refuse + flag
+    // heartbeat-held so a long-running landing (many uploads, slow IDB)
+    // never ages out of other tabs' view; released in the finally
+    const releaseLandingHold = announceHold('landing', order.id);
     try {
     // an in-flight capture (compression runs before the stash write) —
     // in THIS tab or another — must become visible before the snapshot,
@@ -450,7 +454,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (attached > 0 || refused > 0 || errored > 0) reloadPhotos();
     } finally {
       landingRef.current = false;
-      announce('landing', order.id, false);
+      releaseLandingHold();
     }
   };
 
