@@ -134,6 +134,10 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [fetchShipRowsJit] = useMutateAction(listOrderShipments);
   const [stranded, setStranded] = useState<StashedPhoto[]>([]);
   const [strandedMsg, setStrandedMsg] = useState('');
+  // explicit attach target per recovered photo (stash key -> shipment id
+  // as string; '' = default newest finalized box). Validated against a
+  // fresh JIT read at click time.
+  const [attachTarget, setAttachTarget] = useState<Record<string, string>>({});
   const refreshStranded = async () => {
     if (orderId == null) { setStranded([]); return; }
     const { photos, readOk } = await readStash(orderId);
@@ -170,8 +174,18 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         type JitRow = { id: number; refund_status: string | null; finalized_at: string | null; carrier: string | null; tracking_number: string | number | null };
         const res = await fetchShipRowsJit({ order_id: orderId }) as JitRow[] | null;
         const live = (Array.isArray(res) ? res : []).filter(r => r.refund_status !== 'SUCCESS');
-        const pool = live.filter(r => r.finalized_at != null);
-        const chosen = (pool.length > 0 ? pool : live).reduce<JitRow | null>((acc, r) => (acc == null || Number(r.id) > Number(acc.id) ? r : acc), null);
+        // the operator's explicit pick wins; it must still exist LIVE in
+        // the fresh read. No pick = newest finalized box (drafts only
+        // when nothing finalized exists).
+        const pickedId = attachTarget[s.key] ? Number(attachTarget[s.key]) : null;
+        let chosen: JitRow | null = null;
+        if (pickedId != null) {
+          chosen = live.find(r => Number(r.id) === pickedId) ?? null;
+          if (!chosen) { setStrandedMsg('The selected shipment is no longer live — the list has been refreshed; choose again.'); refreshStranded(); return; }
+        } else {
+          const pool = live.filter(r => r.finalized_at != null);
+          chosen = (pool.length > 0 ? pool : live).reduce<JitRow | null>((acc, r) => (acc == null || Number(r.id) > Number(acc.id) ? r : acc), null);
+        }
         if (!chosen) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
         const label = `#${chosen.id}${chosen.finalized_at ? '' : ' (unfinished draft)'}${chosen.carrier ? ` ${String(chosen.carrier).toUpperCase()}` : ''}${chosen.tracking_number ? ` ${String(chosen.tracking_number)}` : ''}`;
         if (!window.confirm(`Attach this photo to shipment ${label}? It becomes part of that box's evidence.`)) return;
@@ -1799,10 +1813,25 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                                 recover
                               </Button>
                             ) : (
-                              <Button size="sm" variant="outline" className="h-5 px-1.5 text-[10px]" disabled={saving}
-                                onClick={() => retryStranded(s)}>
-                                {s.shipment_id != null ? 'Retry' : 'Attach'}
-                              </Button>
+                              <>
+                                {s.shipment_id == null && shipRows.filter(r => r.refund_status !== 'SUCCESS').length > 1 && (
+                                  <select className="h-5 max-w-[110px] rounded border bg-background text-[10px]"
+                                    title="Choose the exact box this photo belongs to"
+                                    value={attachTarget[s.key] ?? ''}
+                                    onChange={e => setAttachTarget(m => ({ ...m, [s.key]: e.target.value }))}>
+                                    <option value="">newest box</option>
+                                    {shipRows.filter(r => r.refund_status !== 'SUCCESS').map(r => (
+                                      <option key={r.id} value={String(r.id)}>
+                                        #{r.id}{r.finalized_at ? '' : ' draft'}{r.tracking_number ? ` ${String(r.tracking_number)}` : ''}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                                <Button size="sm" variant="outline" className="h-5 px-1.5 text-[10px]" disabled={saving}
+                                  onClick={() => retryStranded(s)}>
+                                  {s.shipment_id != null ? 'Retry' : 'Attach'}
+                                </Button>
+                              </>
                             )}
                             <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Discard this saved photo"
                               onClick={async () => {

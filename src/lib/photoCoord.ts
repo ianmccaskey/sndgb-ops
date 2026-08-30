@@ -108,14 +108,17 @@ export const coordAvailable = (): boolean => {
   // recent send FAILED counts as unavailable until a send succeeds again
   if (!sendHealthy) return false;
   if (channel) return true;
-  if (lsProbe == null) {
+  // only POSITIVE probe results cache: a failed probe re-runs on the
+  // next call, so fallback availability self-heals after a transient
+  // storage failure instead of pinning the tab in degraded mode
+  if (lsProbe !== true) {
     try {
       localStorage.setItem('sndgb.coordProbe', '1');
       localStorage.removeItem('sndgb.coordProbe');
       lsProbe = true;
     } catch { lsProbe = false; }
   }
-  return lsProbe;
+  return lsProbe === true;
 };
 
 // subscribe to remote coordination events (returns an unsubscribe)
