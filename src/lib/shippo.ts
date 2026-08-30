@@ -256,14 +256,18 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
   return {
     rates: all.filter(r => ALLOWED_PROVIDERS.includes((r.provider || '').toUpperCase())),
     allRateCount: all.length,
-    // messages about carriers we never show (DHL master account, Sendle /
-    // Deutsche Post / Canada Post "carrier account doesn't support ..."
-    // noise) are dropped; anything mentioning UPS/USPS, and any message
-    // that is NOT a carrier-account notice (address warnings etc.), stays
+    // messages naming a carrier we never show (DHL, Sendle, Deutsche
+    // Post, Canada Post, ...) are dropped; UPS/USPS messages and every
+    // message naming NO carrier (generic account errors, address
+    // warnings) stay — a genuine UPS/USPS account failure must surface
     messages: (b?.messages || [])
+      .filter(m => {
+        const joined = [m.source, m.code, m.text].filter(Boolean).join(' ');
+        if (/\b(ups|usps)\b/i.test(joined)) return true;
+        return !/dhl|sendle|deutsche|canada|couriersplease|fastway|globegistics|asendia|hermes|parcelforce|purolator|canpar|ontrac|lasership|aramex|tnt|royal ?mail|gls\b/i.test(joined);
+      })
       .map(m => [m.source, m.code, m.text].filter(Boolean).join(' '))
-      .filter(Boolean)
-      .filter(m => /\b(ups|usps)\b/i.test(m) || !/(carrier|master) account/i.test(m)),
+      .filter(Boolean),
   };
 }
 

@@ -513,11 +513,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(qtys), packable.length, weightTouched]);
 
-  // preselect the app-wide default ship-from until the operator picks one
+  // preselect the app-wide default ship-from, and SELF-HEAL a selection
+  // that no longer resolves to an active address (the other admin archived
+  // it or moved the default mid-session) — falling back to the current
+  // default or to unselected. A changed selection changes quoteSig, so
+  // stale rates invalidate with it.
   useEffect(() => {
-    if (shipFrom) return;
+    if (addresses.length === 0) return;
+    const cur = addresses.find(a => String(a.id) === shipFrom);
+    if (cur?.active) return;
     const d = addresses.find(a => a.active && a.is_default_ship_from);
-    if (d) setShipFrom(String(d.id));
+    setShipFrom(d ? String(d.id) : '');
   }, [addresses, shipFrom]);
   const fromRow = addresses.find(a => String(a.id) === shipFrom) || null;
   // row boundary: the transport re-types digit-only text (ZIPs, phones)
