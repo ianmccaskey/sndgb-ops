@@ -138,7 +138,13 @@ export function FulfillmentPage() {
     const req = ++checkReq.current;
     setChecking(true); setCheckError('');
     try {
-      const orders = await listB44Orders(cfg, source.gbExternalId);
+      // a stalled upstream must not wedge the button: the race loser is
+      // simply dropped (nothing is attached to it), so a timeout leaves
+      // the check retryable and a late resolution writes nothing
+      const orders = await Promise.race([
+        listB44Orders(cfg, source.gbExternalId),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Ordering app check timed out after 30 seconds — try again.')), 30000)),
+      ]);
       if (req !== checkReq.current) return;
       const statusById: Record<string, string> = {};
       for (const o of orders) statusById[String(o.id)] = String(o.status ?? '');
@@ -163,10 +169,13 @@ export function FulfillmentPage() {
     && upstream.appId === cfg.appId
     && upstream.token === cfg.token
     ? upstream : null;
-  // upstream vocabulary is app-defined; anything mentioning ship/deliver
-  // counts as "they consider it on its way". Local partial still flags —
-  // upstream says done while boxes remain unrecorded here.
-  const upstreamShippedLike = (s: string) => /ship|deliver/i.test(s);
+  // upstream vocabulary is app-defined, so shipped-like is an EXACT
+  // allowlist of the statuses Paige actually sets — a loose substring
+  // match would badge exception states ("delivery exception",
+  // "undeliverable return") and drive bogus manual records. Statuses that
+  // merely LOOK shipping-related surface informationally, never as badges.
+  const upstreamShippedLike = (s: string) => ['shipped', 'delivered'].includes(s.trim().toLowerCase());
+  const upstreamShipAdjacent = (s: string) => !upstreamShippedLike(s) && /ship|deliver/i.test(s);
   const LOCAL_SHIPPED = new Set(['shipped', 'delivered', 'reshipped']);
   const upstreamStatusOf = (r: QueueRow): string | undefined =>
     upstreamLive && r.external_id ? upstreamLive.statusById[String(r.external_id)] : undefined;
@@ -202,6 +211,11 @@ export function FulfillmentPage() {
   // truncated, so the banner must not claim clean stage-wide coverage
   const mismatchCount = upstreamLive ? queue.filter(upstreamMismatch).length : 0;
   const queueTruncated = queue.length >= 1000;
+  // ship-adjacent-but-unrecognized statuses get named in the banner so a
+  // vocabulary change upstream degrades visibly, never silently
+  const shipAdjacentStatuses = upstreamLive
+    ? Array.from(new Set(queue.map(upstreamStatusOf).filter((s): s is string => !!s && upstreamShipAdjacent(s))))
+    : [];
 
   const toggleFilter = (pid: number) => {
     setFilterIds(s => { const n = new Set(s); if (n.has(pid)) n.delete(pid); else n.add(pid); return n; });
@@ -403,6 +417,9 @@ export function FulfillmentPage() {
           </span>
           {queueTruncated && (
             <span className="text-amber-800">Only the first 1000 loaded orders were checked — this stage may hold more; narrow by stage or product filter to cover the rest.</span>
+          )}
+          {shipAdjacentStatuses.length > 0 && (
+            <span className="text-amber-800">Unrecognized shipping-related upstream status{shipAdjacentStatuses.length > 1 ? 'es' : ''} not flagged: {shipAdjacentStatuses.map(s => `"${s}"`).join(', ')} — only "shipped"/"delivered" are recognized; review these by eye.</span>
           )}
           {mismatchCount > 0 && (
             <span className="text-rose-900">Look for the <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1 py-0.5 uppercase">shipped upstream</span> badge — its tooltip names the recording flow (Ship, or Vendor shipped for direct orders).</span>
