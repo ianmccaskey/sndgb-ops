@@ -248,6 +248,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
 
   const onFilesPicked = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
+    // while a shipment is being created, a new capture would land as an
+    // ordinary unbound pending photo AFTER uploadPendingPhotos snapshotted
+    // its set — never riding the box being packed, free to drift to a
+    // later one. Refuse the capture window instead of racing it.
+    if (purchaseInFlight.current || manualBusy) {
+      setPhotoMsg('A shipment is being created right now — wait a moment, then add the photo (you can also attach it to the shipment row once it appears).');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
     setPhotoBusy(true); setPhotoMsg('');
     const errors: string[] = [];
     try {

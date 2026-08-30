@@ -162,14 +162,22 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     const wasBound = s.shipment_id != null;
     let target = s.shipment_id;
     if (target == null) {
-      // resolve the newest LIVE shipment fresh, never from cached rows
+      // resolve the target fresh, never from cached rows; prefer a
+      // FINALIZED box over a draft (a deleted draft would leave the photo
+      // only in audit tombstones), and NEVER attach silently — the
+      // operator confirms the exact shipment the evidence will join
       try {
-        const res = await fetchShipRowsJit({ order_id: orderId }) as { id: number; refund_status: string | null }[] | null;
+        type JitRow = { id: number; refund_status: string | null; finalized_at: string | null; carrier: string | null; tracking_number: string | number | null };
+        const res = await fetchShipRowsJit({ order_id: orderId }) as JitRow[] | null;
         const live = (Array.isArray(res) ? res : []).filter(r => r.refund_status !== 'SUCCESS');
-        target = live.reduce<number | null>((acc, r) => (acc == null || Number(r.id) > acc ? Number(r.id) : acc), null);
+        const pool = live.filter(r => r.finalized_at != null);
+        const chosen = (pool.length > 0 ? pool : live).reduce<JitRow | null>((acc, r) => (acc == null || Number(r.id) > Number(acc.id) ? r : acc), null);
+        if (!chosen) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
+        const label = `#${chosen.id}${chosen.finalized_at ? '' : ' (unfinished draft)'}${chosen.carrier ? ` ${String(chosen.carrier).toUpperCase()}` : ''}${chosen.tracking_number ? ` ${String(chosen.tracking_number)}` : ''}`;
+        if (!window.confirm(`Attach this photo to shipment ${label}? It becomes part of that box's evidence.`)) return;
+        target = Number(chosen.id);
       } catch { setStrandedMsg('Could not load this order’s shipments — try again.'); return; }
     }
-    if (target == null) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
     // bind FIRST via CAS, before any network work: a committed insert
     // with a lost response must replay against THIS shipment later, never
     // migrate to a different "newest" box. The CAS applies only if the
