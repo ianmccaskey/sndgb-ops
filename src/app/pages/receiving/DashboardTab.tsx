@@ -15,8 +15,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { RefreshCw, Truck, AlertTriangle, ScanLine } from 'lucide-react';
+import { RefreshCw, Truck, AlertTriangle, ScanLine, Printer } from 'lucide-react';
 import { decodeCarrierLabel, trackingCandidates, matchTracking, candidateCarrier, carrierCompatible } from '@/lib/labelScan';
+import { printPackageLabel, niimbotSupported, niimbotConnected } from '@/lib/niimbotPrint';
+import type { PackageLabelData } from '@/lib/niimbotPrint';
 import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday } from './shared';
 import type { RxAddress, Pkg, CatalogProduct, VendorRow } from './shared';
 
@@ -220,6 +222,54 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
   const [smMsg, setSmMsg] = useState('');
   const [smBusy, setSmBusy] = useState(false);
 
+  // ---- Niimbot B1 auto-label: a PER-DEVICE toggle (localStorage — the
+  // operator enables it on the phone only), printing a 50x30 package
+  // label after a scan-confirmed receive. The first print needs a tap
+  // (browser Bluetooth chooser); once connected, later receives print
+  // automatically. ----
+  const [autoPrint, setAutoPrint] = useState<boolean>(() => {
+    try { return localStorage.getItem('sndgb.printOnScanReceive') === '1'; } catch { return false; }
+  });
+  const toggleAutoPrint = () => {
+    setAutoPrint(v => {
+      try { localStorage.setItem('sndgb.printOnScanReceive', v ? '0' : '1'); } catch { /* per-device convenience */ }
+      return !v;
+    });
+  };
+  const [printJob, setPrintJob] = useState<PackageLabelData | null>(null);
+  const [printBusy, setPrintBusy] = useState(false);
+  const [printMsg, setPrintMsg] = useState('');
+  // after a receive: auto-print when the printer is already connected;
+  // otherwise queue the job behind a tap (the chooser needs a gesture)
+  const queueLabelPrint = async (label: PackageLabelData) => {
+    if (!autoPrint || !niimbotSupported()) return;
+    setPrintMsg('');
+    if (niimbotConnected()) {
+      try {
+        await printPackageLabel(label);
+        setPrintMsg(`Printed label for ${label.tracking}.`);
+        setPrintJob(null);
+        return;
+      } catch (e: unknown) {
+        setPrintMsg(e instanceof Error ? e.message : 'Print failed.');
+      }
+    }
+    setPrintJob(label);
+  };
+  const runPrintJob = async () => {
+    if (!printJob) return;
+    setPrintBusy(true); setPrintMsg('');
+    try {
+      await printPackageLabel(printJob);
+      setPrintMsg(`Printed label for ${printJob.tracking}.`);
+      setPrintJob(null);
+    } catch (e: unknown) {
+      setPrintMsg(e instanceof Error ? e.message : 'Print failed — tap Print to retry.');
+    } finally {
+      setPrintBusy(false);
+    }
+  };
+
   const seedCreateForm = (scanned: string) => {
     setSmAddr(''); setSmVendor('');
     // structural carrier guess: 1Z = UPS, IMpb shape = USPS-like; FedEx
@@ -294,6 +344,18 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
         ? `Received ${p.tracking_number}.`
         : `NOT received — the package changed since this page loaded.${applied > 0 ? ` ${applied} count correction${applied > 1 ? 's were' : ' was'} already saved to it.` : ''} Check its card; the list has refreshed.`);
       setScanModal(null);
+      if (ok) {
+        // label reflects the CONFIRMED counts (corrections + added line)
+        const items = (p.items || []).map(it => ({ sku: it.sku_code, qty: (scanQty[it.id] ?? String(Number(it.qty))).trim() }));
+        if (scanAddLine.product && scanAddLine.qty.trim()) {
+          const pr = products.find(x => x.id === Number(scanAddLine.product));
+          items.push({ sku: pr?.sku_code || 'added', qty: scanAddLine.qty.trim() });
+        }
+        await queueLabelPrint({
+          tracking: String(p.tracking_number || ''), carrier: String(p.carrier || ''),
+          vendor: p.vendor_code || null, address: p.address_label, items, receivedBy: userName,
+        });
+      }
     } finally {
       setSmBusy(false);
       afterChange();
@@ -353,6 +415,15 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
       }
       setScanModal(null);
       afterChange();
+      if (okRes(received)) {
+        await queueLabelPrint({
+          tracking: smTracking.trim(), carrier: carrierTok,
+          vendor: vendors.find(v => String(v.id) === smVendor)?.code || null,
+          address: addresses.find(a => String(a.id) === smAddr)?.label || '',
+          items: lines.map(l => ({ sku: products.find(x => x.id === Number(l.product))?.sku_code || '?', qty: l.qty.trim() })),
+          receivedBy: userName,
+        });
+      }
     } finally {
       setSmBusy(false);
     }
@@ -667,9 +738,26 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
           </Button>
           <input ref={scanInputRef} type="file" accept="image/*" capture="environment" className="hidden"
             onChange={e => onScanPicked(e.target.files)} />
+          {niimbotSupported() && (
+            <Button size="sm" variant={autoPrint ? 'default' : 'outline'} className="h-8 text-xs"
+              title="Print a 50x30 package label on the Niimbot B1 after each scan-confirmed receive — a per-device setting (enable on the phone that carries the printer)"
+              onClick={toggleAutoPrint}>
+              <Printer className="w-3.5 h-3.5 mr-1" /> auto-label {autoPrint ? 'on' : 'off'}
+            </Button>
+          )}
           {refreshAllProgress && <span className="text-xs text-muted-foreground">{refreshAllProgress}</span>}
         </div>
         {scanMsg && <p className={`text-xs ${scanMsg.startsWith('Received ') || scanMsg.startsWith('Logged and received') ? 'text-green-700' : 'text-amber-700'}`}>{scanMsg}</p>}
+        {printJob && (
+          <div className="rounded-lg border border-green-300 bg-green-50 px-3 py-1.5 text-xs flex flex-wrap items-center gap-2">
+            <span className="text-green-900 font-medium">Received — print the package label ({printJob.tracking}).</span>
+            <Button size="sm" className="h-7 text-xs" disabled={printBusy} onClick={runPrintJob}>
+              <Printer className="w-3.5 h-3.5 mr-1" /> {printBusy ? 'Printing…' : 'Print label'}
+            </Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPrintJob(null)}>Dismiss</Button>
+          </div>
+        )}
+        {printMsg && <p className={`text-xs ${printMsg.startsWith('Printed ') ? 'text-green-700' : 'text-amber-700'}`}>{printMsg}</p>}
 
         {/* scan triage modal */}
         <Dialog open={!!scanModal} onOpenChange={o => { if (!o) setScanModal(null); }}>
