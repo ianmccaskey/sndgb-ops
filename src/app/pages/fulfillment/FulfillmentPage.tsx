@@ -7,7 +7,7 @@ import listProducts from '@/actions/products/listProducts';
 import { useApp } from '@/app/AppContext';
 import { useShippoHttp } from '@/lib/useShippoHttp';
 import { isTestKey } from '@/lib/shippo';
-import { B44_DEFAULT_APP_ID } from '@/lib/base44';
+import { B44_DEFAULT_APP_ID, listB44Orders } from '@/lib/base44';
 import { rows } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,7 +40,7 @@ type QueueRow = QueueOrder & {
 type CatalogProduct = { id: number; sku_code: string; digital: boolean; active: boolean };
 
 export function FulfillmentPage() {
-  const { groupBuyId, userName, settings } = useApp();
+  const { groupBuyId, groupBuy, userName, settings } = useApp();
   const shippoKey = settings.shippo_api_key || '';
   const testMode = shippoKey !== '' && isTestKey(shippoKey);
   const shippoHttp = useShippoHttp();
@@ -115,6 +115,52 @@ export function FulfillmentPage() {
     });
   };
 
+  // ---- upstream status check: pull every ordering-app order's status and
+  // flag rows the ordering app marks shipped-like while no local shipment is
+  // recorded (Paige marks shipped over there; this app is the record of
+  // carrier + tracking). The snapshot stays bound to its full source
+  // identity — campaign relink or settings edits make it inert, same
+  // discipline as the Import pull. ----
+  const [upstream, setUpstream] = useState<{
+    forGroupBuyId: number; appId: string; gbExternalId: string; token: string;
+    at: string; total: number; statusById: Record<string, string>;
+  } | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState('');
+  const canCheck = !!cfg.token && !!groupBuy?.external_id;
+  const checkUpstream = async () => {
+    if (!canCheck || !groupBuy?.external_id || groupBuyId == null) return;
+    const source = { forGroupBuyId: groupBuyId, appId: cfg.appId, gbExternalId: groupBuy.external_id, token: cfg.token };
+    setChecking(true); setCheckError('');
+    try {
+      const orders = await listB44Orders(cfg, source.gbExternalId);
+      const statusById: Record<string, string> = {};
+      for (const o of orders) statusById[String(o.id)] = String(o.status ?? '');
+      setUpstream({ ...source, at: new Date().toLocaleTimeString(), total: orders.length, statusById });
+    } catch (e: unknown) {
+      setCheckError(e instanceof Error ? e.message : 'Failed to check the ordering app');
+    } finally {
+      setChecking(false);
+    }
+  };
+  const upstreamLive = upstream
+    && upstream.forGroupBuyId === groupBuyId
+    && upstream.gbExternalId === (groupBuy?.external_id || '')
+    && upstream.appId === cfg.appId
+    && upstream.token === cfg.token
+    ? upstream : null;
+  // upstream vocabulary is app-defined; anything mentioning ship/deliver
+  // counts as "they consider it on its way". Local partial still flags —
+  // upstream says done while boxes remain unrecorded here.
+  const upstreamShippedLike = (s: string) => /ship|deliver/i.test(s);
+  const LOCAL_SHIPPED = new Set(['shipped', 'delivered', 'reshipped']);
+  const upstreamStatusOf = (r: QueueRow): string | undefined =>
+    upstreamLive && r.external_id ? upstreamLive.statusById[String(r.external_id)] : undefined;
+  const upstreamMismatch = (r: QueueRow): boolean => {
+    const s = upstreamStatusOf(r);
+    return !!s && upstreamShippedLike(s) && !LOCAL_SHIPPED.has(r.shipment_state || '');
+  };
+
   const displayQueue = useMemo(() => {
     if (!sessionActive || stage !== 'ready') return queue;
     const rank = { full: 0, partial: 1, none: 2 } as const;
@@ -126,6 +172,9 @@ export function FulfillmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, sessionActive, stage, showPartials, JSON.stringify(pool)]);
   const sessionHiddenCount = sessionActive && stage === 'ready' ? queue.length - displayQueue.length : 0;
+  // counted over the whole loaded stage, not the session-filtered view — a
+  // session must not hide the existence of unrecorded-shipped orders
+  const mismatchCount = upstreamLive ? queue.filter(upstreamMismatch).length : 0;
 
   const toggleFilter = (pid: number) => {
     setFilterIds(s => { const n = new Set(s); if (n.has(pid)) n.delete(pid); else n.add(pid); return n; });
@@ -159,6 +208,7 @@ export function FulfillmentPage() {
       {r.has_draft && !r.draft_needs_recovery && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="An unfinished shipment draft exists — open Ship to continue or delete it">draft</span>}
       {r.draft_needs_recovery && <span className="rounded bg-red-100 text-red-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A draft's Shippo purchase was dispatched but never saved — it may hold a PAID label. Open Ship to recover.">needs recovery</span>}
       {r.push_outstanding && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A shipped box has not been pushed to the ordering app — open Ship and use Push upstream">not pushed</span>}
+      {upstreamMismatch(r) && <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`The ordering app marks this order "${upstreamStatusOf(r)}" but no shipment is fully recorded here — open Ship and record the carrier + tracking (manual entry)`}>shipped upstream</span>}
       {sessionActive && stage === 'ready' && packability(r) === 'full' && <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase">packable</span>}
       {sessionActive && stage === 'ready' && packability(r) === 'partial' && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">part-packable</span>}
     </span>
@@ -233,7 +283,14 @@ export function FulfillmentPage() {
             <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => setFilterIds(new Set())}>Clear</Button>
           </>
         )}
-        <Button size="sm" variant={sessionActive ? 'default' : 'outline'} className="h-8 ml-auto" onClick={() => setSessionOpen(o => !o)}>
+        <Button size="sm" variant="outline" className="h-8 ml-auto" disabled={!canCheck || checking}
+          title={canCheck
+            ? 'Pull every order\'s status from the ordering app and flag orders marked shipped there with no shipment recorded here'
+            : 'Needs the ordering-app token in Settings and a campaign linked to the ordering app'}
+          onClick={checkUpstream}>
+          {checking ? 'Checking…' : 'Check ordering app'}
+        </Button>
+        <Button size="sm" variant={sessionActive ? 'default' : 'outline'} className="h-8" onClick={() => setSessionOpen(o => !o)}>
           Shipment session{poolEntries.length > 0 ? ` · ${poolEntries.length} product${poolEntries.length > 1 ? 's' : ''}` : ''}
         </Button>
       </div>
@@ -306,6 +363,26 @@ export function FulfillmentPage() {
       )}
 
       {error && <p className="text-sm text-red-600">{error}</p>}
+      {checkError && <p className="text-sm text-red-600">{checkError}</p>}
+
+      {/* upstream check result — persists until cleared or re-pulled so the
+          rose "shipped upstream" badges have a visible legend */}
+      {upstreamLive && (
+        <div className={`rounded-lg border px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1 ${mismatchCount > 0 ? 'border-rose-300 bg-rose-50' : 'border-green-300 bg-green-50'}`}>
+          <span className={`font-medium ${mismatchCount > 0 ? 'text-rose-900' : 'text-green-900'}`}>
+            Ordering app checked at {upstreamLive.at} ({fmtNum(upstreamLive.total)} orders) — {mismatchCount === 0
+              ? 'no order in this stage is marked shipped there without a shipment recorded here.'
+              : `${mismatchCount} order${mismatchCount > 1 ? 's' : ''} in this stage marked shipped there with no shipment recorded here.`}
+          </span>
+          {mismatchCount > 0 && (
+            <span className="text-rose-900">Look for the <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1 py-0.5 uppercase">shipped upstream</span> badge — open Ship and record the carrier + tracking.</span>
+          )}
+          <span className="ml-auto flex gap-1">
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={checking} onClick={checkUpstream}>Refresh</Button>
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setUpstream(null)}>Clear</Button>
+          </span>
+        </div>
+      )}
 
       {/* persistent whenever the session is filtering rows out — the
           collapsible card is not the only place this is visible, so a
