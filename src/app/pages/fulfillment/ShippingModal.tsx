@@ -392,17 +392,21 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     // recovered entries are excluded: evidence never migrates to a
     // different box without the operator's explicit per-photo "use"
     const { photos: rawStash, readOk: pendReadOk } = await readStash(order.id);
+    let blindDurable = true;
     if (!pendReadOk) {
       // a BLIND landing: real pending photos may exist unreadable; mark
       // it durably (localStorage — a separate channel that often
-      // survives an IndexedDB failure) so the next successful read
-      // converts them to recovered instead of letting them ride the
-      // NEXT box
-      markLandingBlind(order.id);
+      // survives an IndexedDB failure) AND in page memory, so the next
+      // successful read converts them to recovered instead of letting
+      // them ride the NEXT box
+      blindDurable = markLandingBlind(order.id);
     }
     const stashPhotos = pendReadOk ? await reclassifyBlind(rawStash) : rawStash;
     const mine = stashPhotos.filter(s => s.shipment_id === null && !s.recovered);
-    const readWarning = pendReadOk ? '' : 'Warning: saved photos on this device could not be read — some pending photos may not have attached; they will resurface as "recovered" photos once storage is readable again.';
+    const readWarning = pendReadOk ? ''
+      : blindDurable
+        ? 'Warning: saved photos on this device could not be read — some pending photos may not have attached; they will resurface as "recovered" photos once storage is readable again.'
+        : 'Warning: saved photos on this device could not be read AND the recovery marker could not be persisted — keep this page open until storage recovers, or review this order’s saved photos manually before shipping another box.';
     if (mine.length === 0) { if (readWarning) setPhotoMsg(readWarning); return; }
     let refused = 0, errored = 0, attached = 0, allDurable = true;
     for (const s of mine) {
