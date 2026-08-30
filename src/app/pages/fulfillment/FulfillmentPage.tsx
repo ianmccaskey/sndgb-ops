@@ -75,6 +75,9 @@ export function FulfillmentPage() {
   // queue splits into fully / partially packable and the pool counts DOWN
   // as boxes ship (onShipped) ----
   const [sessionOpen, setSessionOpen] = useState(false);
+  // default OFF (per Ian): an active session shows ONLY orders the pool
+  // fully covers; partials appear only when toggled on
+  const [showPartials, setShowPartials] = useState(false);
   const [pool, setPool] = useState<Record<number, string>>({});
   const [sAddProduct, setSAddProduct] = useState('');
   const [sAddQty, setSAddQty] = useState('');
@@ -112,9 +115,14 @@ export function FulfillmentPage() {
   const displayQueue = useMemo(() => {
     if (!sessionActive || stage !== 'ready') return queue;
     const rank = { full: 0, partial: 1, none: 2 } as const;
-    return [...queue].sort((a, b) => rank[packability(a)] - rank[packability(b)] || a.order_number.localeCompare(b.order_number));
+    // the session FILTERS, not just sorts: only orders the pool fully
+    // covers show by default; partials only when toggled, never 'none'
+    return queue
+      .filter(r => { const p = packability(r); return p === 'full' || (showPartials && p === 'partial'); })
+      .sort((a, b) => rank[packability(a)] - rank[packability(b)] || a.order_number.localeCompare(b.order_number));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queue, sessionActive, stage, JSON.stringify(pool)]);
+  }, [queue, sessionActive, stage, showPartials, JSON.stringify(pool)]);
+  const sessionHiddenCount = sessionActive && stage === 'ready' ? queue.length - displayQueue.length : 0;
 
   const toggleFilter = (pid: number) => {
     setFilterIds(s => { const n = new Set(s); if (n.has(pid)) n.delete(pid); else n.add(pid); return n; });
@@ -278,8 +286,17 @@ export function FulfillmentPage() {
                 })}
               </div>
             )}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                <input type="checkbox" checked={showPartials} onChange={e => setShowPartials(e.target.checked)} />
+                Show partially packable
+              </label>
+              {sessionHiddenCount > 0 && (
+                <span className="text-xs text-muted-foreground">{sessionHiddenCount} order{sessionHiddenCount > 1 ? 's' : ''} hidden by the session</span>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
-              Orders in "Ready" sort and badge against this pool — <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1 py-0.5 uppercase">packable</span> = every remaining item covered, <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5 uppercase">part-packable</span> = a partial box is possible.
+              "Ready" shows only orders this pool fully covers — <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1 py-0.5 uppercase">packable</span> = every remaining item covered{showPartials && <>; <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5 uppercase">part-packable</span> = a partial box is possible</>}.
             </p>
           </CardContent>
         </Card>
