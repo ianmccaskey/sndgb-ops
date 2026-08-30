@@ -190,6 +190,58 @@ export const stashGet = async (key: string): Promise<StashedPhoto | null> => {
   } catch { return null; }
 };
 
+// Atomic compare-and-swap. The current row is read, matched against the
+// state the caller last observed, and mutated inside ONE readwrite
+// transaction — IndexedDB readwrite transactions on the same store
+// serialize across tabs, so a stale tab's write can never override a
+// newer discard or reclassification made elsewhere. next=null deletes.
+// ok=false means the stored state no longer matches: abort and refresh.
+// durable=false means IndexedDB was unavailable and the mutation landed
+// only in the page-memory overlay (same-tab atomic; honest messaging
+// applies).
+export type StashExpect = { shipment_id: number | null; recovered: boolean };
+export type StashCasResult = { ok: boolean; durable: boolean };
+const matchesExpect = (row: StashedPhoto | null, expect: StashExpect): boolean =>
+  row !== null && row.shipment_id === expect.shipment_id && !!row.recovered === expect.recovered;
+
+export const stashMutateIf = async (key: string, expect: StashExpect, next: StashedPhoto | null): Promise<StashCasResult> => {
+  const applyMem = (effective: StashedPhoto | null): StashCasResult => {
+    if (!matchesExpect(effective, expect)) return { ok: false, durable: false };
+    if (next === null) { memPhotos.delete(key); memRemoved.add(key); }
+    else { memPhotos.set(key, next); memRemoved.delete(key); }
+    return { ok: true, durable: false };
+  };
+  // when the overlay owns this key, it IS the newest state (any durable
+  // row underneath is stale) — same-tab CAS on the overlay
+  if (memRemoved.has(key)) return { ok: false, durable: false };
+  if (memPhotos.has(key)) return applyMem(memPhotos.get(key) ?? null);
+  try {
+    return await openDb().then(db => new Promise<StashCasResult>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      const store = tx.objectStore(STORE);
+      let ok = false;
+      const getReq = store.get(key);
+      getReq.onsuccess = () => {
+        const row = (getReq.result as StashedPhoto | undefined) ?? null;
+        if (!matchesExpect(row, expect)) return; // no write happens
+        ok = true;
+        if (next === null) store.delete(key); else store.put(next);
+      };
+      tx.oncomplete = () => resolve({ ok, durable: true });
+      tx.onabort = () => reject(tx.error ?? new Error('idb transaction aborted'));
+      tx.onerror = () => reject(tx.error ?? new Error('idb transaction error'));
+    }));
+  } catch {
+    // IndexedDB unavailable: nothing readable contradicts the caller's
+    // observed state, so apply optimistically to the overlay (the prior
+    // degraded-mode behavior) — atomic within this tab, page-lifetime
+    // only, and reported non-durable for honest messaging
+    if (next === null) { memPhotos.delete(key); memRemoved.add(key); }
+    else { memPhotos.set(key, next); memRemoved.delete(key); }
+    return { ok: true, durable: false };
+  }
+};
+
 // true = durably persisted; false = page-lifetime memory only
 export const stashUpsert = async (entry: StashedPhoto): Promise<boolean> => {
   memRemoved.delete(entry.key);

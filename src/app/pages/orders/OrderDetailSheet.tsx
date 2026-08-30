@@ -20,7 +20,7 @@ import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
 import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
 import getShipmentPhoto from '@/actions/fulfillment/getShipmentPhoto';
 import addShipmentPhoto from '@/actions/fulfillment/addShipmentPhoto';
-import { readStash, stashGet, stashRemove, stashUpsert } from '@/lib/photoStash';
+import { readStash, stashGet, stashRemove, stashMutateIf } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
@@ -169,22 +169,31 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       } catch { setStrandedMsg('Could not load this order’s shipments — try again.'); return; }
     }
     if (target == null) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
-    // bind FIRST, before any network work: a committed insert with a
-    // lost response must replay against THIS shipment later, never
-    // migrate to a different "newest" box (the modal's durable-attach
-    // contract). false = page-lifetime only — every message below says so
-    const boundDurable = await stashUpsert({ ...s, shipment_id: target });
+    // bind FIRST via CAS, before any network work: a committed insert
+    // with a lost response must replay against THIS shipment later, never
+    // migrate to a different "newest" box. The CAS applies only if the
+    // entry still matches the state we just observed — a tab that changed
+    // it in the microseconds since wins, and we abort.
+    const preState = { shipment_id: s.shipment_id, recovered: !!s.recovered };
+    const bindRes = await stashMutateIf(s.key, preState, { ...s, shipment_id: target });
+    if (!bindRes.ok) {
+      setStrandedMsg('This photo changed in another tab — the list has been refreshed; try again.');
+      refreshStranded();
+      return;
+    }
+    const boundDurable = bindRes.durable; // false = page-lifetime only
+    const boundState = { shipment_id: target, recovered: !!s.recovered };
     try {
       // a bound entry is an automatic replay (the insert may have already
       // committed); an unbound attach here is a deliberate operator act
       const res = await doAddShipPhoto({ shipment_id: target, image_data: s.full, thumb_data: s.thumb, actor: s.actor || userName, replay: wasBound }) as unknown[] | null;
       const ok = Array.isArray(res) ? res.length > 0 : !!res;
       if (ok) {
-        const removed = await stashRemove(s.key);
-        // a failed removal (storage unavailable) is harmless: the server's
-        // order-scoped same-content dedupe recognizes a re-offer of this
+        const del = await stashMutateIf(s.key, boundState, null);
+        // a non-durable removal (storage unavailable) is harmless: the
+        // server's same-content dedupe recognizes a re-offer of this
         // photo and returns the existing row instead of duplicating
-        setStrandedMsg(removed ? 'Photo attached.' : 'Photo attached. (This device’s storage is unavailable, so it may be re-offered after a reload — re-attaching is harmless; the server recognizes it.)');
+        setStrandedMsg(del.ok && del.durable ? 'Photo attached.' : 'Photo attached. (This device’s storage is unavailable, so it may be re-offered after a reload — re-attaching is harmless; the server recognizes it.)');
         reloadShipPhotos();
       }
       else if (wasBound) {
@@ -192,16 +201,17 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         // the photo was deliberately removed) — mirror the ship dialog:
         // the entry becomes unbound + recovered, so "Attach" to a live
         // shipment is offered instead of retrying a dead one forever
-        const recDurable = await stashUpsert({ ...s, shipment_id: null, recovered: true });
+        const rec = await stashMutateIf(s.key, boundState, { ...s, shipment_id: null, recovered: true });
         setStrandedMsg('Its original shipment refused this photo (deleted, voided, quota full, or it was removed on purpose) — it is now attachable: use "Attach" to put it on the newest live shipment, or discard it.'
-          + (recDurable ? '' : ' Warning: this device’s storage is unavailable — it survives only while this page stays open.'));
+          + (rec.ok && rec.durable ? '' : ' Warning: this device’s storage is unavailable — it survives only while this page stays open.'));
       } else {
         // roll the pre-upload bind BACK: a refused DELIBERATE attach must
-        // stay an operator-driven Attach — left bound, the next click
-        // would send replay=true and could converge onto a sibling box
-        const rbDurable = await stashUpsert({ ...s, shipment_id: null, recovered: true });
+        // stay an operator-driven Attach — left bound, a later automatic
+        // retry would run with replay semantics against a box the
+        // operator never confirmed
+        const rb = await stashMutateIf(s.key, boundState, { ...s, shipment_id: null, recovered: true });
         setStrandedMsg('The shipment refused this photo (quota full, voided, already on another box of this order, or previously removed on purpose) — remove it here if it is no longer needed.'
-          + (rbDurable ? '' : ' Warning: this device’s storage is unavailable — it survives only while this page stays open.'));
+          + (rb.ok && rb.durable ? '' : ' Warning: this device’s storage is unavailable — it survives only while this page stays open.'));
       }
     } catch {
       setStrandedMsg(boundDurable

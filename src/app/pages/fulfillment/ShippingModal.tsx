@@ -18,7 +18,7 @@ import deleteShipmentPhoto from '@/actions/fulfillment/deleteShipmentPhoto';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { compressImageToDataUrl } from '@/lib/imageCapture';
 import type { CapturedPhoto } from '@/lib/imageCapture';
-import { newStashKey, readStash, stashGet, stashUpsert, stashRemove } from '@/lib/photoStash';
+import { newStashKey, readStash, stashGet, stashUpsert, stashRemove, stashMutateIf } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
 import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
@@ -209,19 +209,24 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         // reclassified it since the snapshot — never override that
         const cur = await stashGet(s.key);
         if (!cur || cur.shipment_id !== s.shipment_id) continue;
+        const preState = { shipment_id: s.shipment_id, recovered: !!s.recovered };
         // replay=true: the server refuses to resurrect an image the
         // operator explicitly deleted from that shipment
         const r = await tryUpload(s.shipment_id as number, s, s.actor || userName, true);
+        // every post-upload write is a CAS against the pre-upload state:
+        // a tab that changed the entry mid-upload wins, never us
         if (r === 'ok') {
           recovered += 1;
-          if (!(await stashRemove(s.key))) allDurable = false;
+          const res = await stashMutateIf(s.key, preState, null);
+          if (res.ok && !res.durable) allDurable = false;
         } else if (r === 'refused') {
           // shipment gone (draft recreated?), quota full, or deliberately
           // deleted — the entry STAYS DURABLE, unbound and marked
           // recovered: visible, but it will not ride another box unless
           // the operator explicitly says so
           moved += 1;
-          if (!(await stashUpsert({ ...s, shipment_id: null, recovered: true }))) allDurable = false;
+          const res = await stashMutateIf(s.key, preState, { ...s, shipment_id: null, recovered: true });
+          if (res.ok && !res.durable) allDurable = false;
         } else kept += 1; // stays bound in the stash; retried on next open
       }
       await refreshPendingView();
@@ -261,22 +266,24 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             // shipment, before any network work — a crash or reload
             // mid-upload leaves a bound entry that auto-replays on reopen
             // (the server's same-content replay dedupes a committed one)
-            if (!(await stashUpsert({ ...entry, shipment_id: shipmentId }))) {
+            const bindDurable = await stashUpsert({ ...entry, shipment_id: shipmentId });
+            if (!bindDurable) {
               errors.push(`${f.name}: this device's storage is unavailable — the photo survives only while this page stays open.`);
             }
+            const boundState = { shipment_id: shipmentId, recovered: false };
             const r = await tryUpload(shipmentId, ph);
             if (r === 'ok') {
-              // attached and verified — release the stashed copy
-              await stashRemove(entry.key);
+              // attached and verified — release the stashed copy (CAS: a
+              // tab that already reclassified it wins)
+              await stashMutateIf(entry.key, boundState, null);
             } else if (r === 'refused') {
               // stays durable, unbound and RECOVERED: visible, never
               // auto-attached to a different box
-              const durable = await stashUpsert({ ...entry, shipment_id: null, recovered: true });
+              const res = await stashMutateIf(entry.key, boundState, { ...entry, shipment_id: null, recovered: true });
               await refreshPendingView();
-              errors.push(`${f.name}: refused — the quota (5 photos / 5MB) is full, the shipment was voided, or this exact photo already rides another box of this order. Kept in the pending list marked "recovered"${durable ? '' : ' (storage unavailable — it survives only while this page stays open)'}: press "use" to allow it onto the next shipment, or remove it.`);
+              errors.push(`${f.name}: refused — the quota (5 photos / 5MB) is full, the shipment was voided, or this exact photo already rides another box of this order. Kept in the pending list marked "recovered"${res.ok && res.durable ? '' : ' (storage unavailable — it survives only while this page stays open)'}: press "use" to allow it onto the next shipment, or remove it.`);
             } else {
-              const durable = await stashUpsert({ ...entry, shipment_id: shipmentId });
-              errors.push(durable
+              errors.push(bindDurable
                 ? `${f.name}: did not attach (transport error) — saved on this device and auto-retried next time this dialog opens.`
                 : `${f.name}: did not attach AND could not be saved to this device (storage unavailable) — it survives only while this page stays open. Retry now or re-take the photo.`);
             }
@@ -307,24 +314,27 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (mine.length === 0) { if (readWarning) setPhotoMsg(readWarning); return; }
     let refused = 0, errored = 0, attached = 0, allDurable = true;
     for (const s of mine) {
-      // re-read first: another tab may have discarded, attached, or
-      // reclassified this entry since the snapshot — skip if so
-      const cur = await stashGet(s.key);
-      if (!cur || cur.shipment_id !== null || cur.recovered) continue;
-      // bind FIRST: if the insert commits but the tab dies before we hear
-      // back, the entry replays against THIS shipment on reopen (deduped
-      // server-side) instead of riding a later box as an ordinary pending
-      // photo — cross-shipment migration is impossible
-      if (!(await stashUpsert({ ...s, shipment_id: shipmentId }))) allDurable = false;
+      // bind FIRST via CAS: applies only if the entry is still an
+      // ordinary unbound pending photo — a tab that discarded, attached,
+      // or reclassified it since the snapshot wins, and we skip. A
+      // successful bind means a crash mid-upload replays against THIS
+      // shipment on reopen (deduped server-side): cross-shipment
+      // migration is impossible
+      const bindRes = await stashMutateIf(s.key, { shipment_id: null, recovered: false }, { ...s, shipment_id: shipmentId });
+      if (!bindRes.ok) continue;
+      if (!bindRes.durable) allDurable = false;
+      const boundState = { shipment_id: shipmentId, recovered: false };
       const r = await tryUpload(shipmentId, s, s.actor || userName);
       if (r === 'ok') {
         attached += 1;
-        if (!(await stashRemove(s.key))) allDurable = false;
+        const res = await stashMutateIf(s.key, boundState, null);
+        if (res.ok && !res.durable) allDurable = false;
       } else if (r === 'refused') {
         // refused by the very shipment it was meant for — it becomes a
         // recovered entry, visible and never auto-consumed again
         refused += 1;
-        if (!(await stashUpsert({ ...s, shipment_id: null, recovered: true }))) allDurable = false;
+        const res = await stashMutateIf(s.key, boundState, { ...s, shipment_id: null, recovered: true });
+        if (res.ok && !res.durable) allDurable = false;
       } else {
         errored += 1; // stays bound to this shipment for safe replay
       }
@@ -975,7 +985,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                       onClick={() => setViewPhoto(ph.full)} />
                     {ph.recovered && (
                       <button className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-amber-100 text-amber-900 border border-amber-400 px-1.5 text-[9px] leading-tight" title="Allow this photo to attach to the next shipment you create"
-                        onClick={async () => { await stashUpsert({ ...ph, recovered: false }); refreshPendingView(); }}>use</button>
+                        onClick={async () => { await stashMutateIf(ph.key, { shipment_id: null, recovered: true }, { ...ph, recovered: false }); refreshPendingView(); }}>use</button>
                     )}
                     <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove before shipping"
                       onClick={async () => {
