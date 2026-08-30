@@ -103,29 +103,50 @@ const memRemoved = new Set<string>();
 let legacyImported = false;
 const importLegacy = async (): Promise<void> => {
   if (legacyImported) return;
-  legacyImported = true;
   try {
     const raw = localStorage.getItem(LEGACY_KEY);
-    if (!raw) return;
+    if (!raw) { legacyImported = true; return; }
     const items = JSON.parse(raw) as Partial<StashedPhoto>[];
     let skipped = 0;
-    for (const i of items) {
-      if (!i || typeof i.full !== 'string' || typeof i.thumb !== 'string' || typeof i.order_id !== 'number') { skipped += 1; continue; }
-      const entry: StashedPhoto = {
+    const entries: StashedPhoto[] = [];
+    items.forEach((i, idx) => {
+      if (!i || typeof i.full !== 'string' || typeof i.thumb !== 'string' || typeof i.order_id !== 'number') { skipped += 1; return; }
+      entries.push({
         full: i.full,
         thumb: i.thumb,
         shipment_id: typeof i.shipment_id === 'number' ? i.shipment_id : null,
         order_id: i.order_id,
-        ts: typeof i.ts === 'number' ? i.ts : Date.now(),
+        ts: typeof i.ts === 'number' ? i.ts : 0,
         actor: typeof i.actor === 'string' ? i.actor : '', // '' -> callers fall back to the current user
-        key: typeof i.key === 'string' ? i.key : newStashKey(),
+        // DETERMINISTIC key for keyless rows: a retry after a partial
+        // import overwrites the same records instead of duplicating them
+        // (the legacy snapshot is never rewritten by current code)
+        key: typeof i.key === 'string' ? i.key : `legacy-${idx}-${i.order_id}`,
         recovered: i.recovered === true,
-      };
-      await idbOp('readwrite', s => s.put(entry));
-    }
+      });
+    });
     if (skipped > 0) console.warn(`photoStash: skipped ${skipped} malformed legacy stash record(s) with no image payload`);
-    localStorage.removeItem(LEGACY_KEY);
-  } catch { /* leave the legacy key in place; retried next read */ legacyImported = false; }
+    try {
+      for (const e of entries) {
+        if (memRemoved.has(e.key)) continue; // discarded while memory-overlaid: do not resurrect
+        await idbOp('readwrite', s => s.put(e));
+        memPhotos.delete(e.key);
+      }
+      localStorage.removeItem(LEGACY_KEY);
+      legacyImported = true;
+    } catch {
+      // IndexedDB unavailable or aborted partway: keep the legacy key for
+      // the next attempt, and surface every row through the memory
+      // overlay so pre-upgrade saved photos stay VISIBLE in the recovery
+      // UIs instead of silently disappearing
+      for (const e of entries) {
+        if (!memPhotos.has(e.key) && !memRemoved.has(e.key)) memPhotos.set(e.key, e);
+      }
+    }
+  } catch {
+    legacyImported = true; // unparseable JSON: nothing recoverable; do not loop
+    console.warn('photoStash: legacy stash was unreadable and was left in place');
+  }
 };
 
 // readOk=false means the DURABLE store could not be read: photos saved
