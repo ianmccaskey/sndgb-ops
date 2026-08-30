@@ -128,8 +128,9 @@ export function FulfillmentPage() {
     forGroupBuyId: number; appId: string; gbExternalId: string; token: string;
     at: string; total: number;
     // per upstream order: status + which item product ids carry a
-    // shipped_date there (the ordering app tracks shipment per ITEM)
-    byId: Record<string, { status: string; shipped: { pid: string; date: string }[] }>;
+    // shipped_date there (the ordering app tracks shipment per ITEM);
+    // qty preserved so adoption can clamp to what upstream actually shipped
+    byId: Record<string, { status: string; shipped: { pid: string; date: string; qty: number }[] }>;
   } | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState('');
@@ -152,13 +153,13 @@ export function FulfillmentPage() {
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Ordering app check timed out after 30 seconds — try again.')), 30000)),
       ]);
       if (req !== checkReq.current) return;
-      const byId: Record<string, { status: string; shipped: { pid: string; date: string }[] }> = {};
+      const byId: Record<string, { status: string; shipped: { pid: string; date: string; qty: number }[] }> = {};
       for (const o of orders) {
         byId[String(o.id)] = {
           status: String(o.status ?? ''),
           shipped: (Array.isArray(o.items) ? o.items : [])
             .filter(it => it.shipped_date != null && String(it.shipped_date) !== '' && it.product_id != null)
-            .map(it => ({ pid: String(it.product_id), date: String(it.shipped_date) })),
+            .map(it => ({ pid: String(it.product_id), date: String(it.shipped_date), qty: Number(it.quantity ?? 0) })),
         };
       }
       setUpstream({ ...source, at: new Date().toLocaleTimeString(), total: orders.length, byId });
@@ -210,14 +211,15 @@ export function FulfillmentPage() {
   const mismatchTitle = (r: QueueRow) => r.all_direct
     ? `The ordering app marks this order "${upstreamStatusOf(r)}" but its vendor-shipped items are not marked sent here — use "Vendor shipped" on the Direct ship tab`
     : `The ordering app marks this order "${upstreamStatusOf(r)}" but no shipment is fully recorded here — open Ship and record the carrier + tracking (manual entry)`;
-  // partially_shipped upstream with NOTHING recorded here = at least one
-  // box exists that this app knows nothing about. A local partial (or
-  // beyond) is already consistent with upstream partial — no flag.
+  // partially_shipped upstream with NO FINALIZED local shipment = at
+  // least one box exists that this app knows nothing about. Only
+  // finalized shipped quantity counts as consistent — a draft/packed box
+  // is different (unshipped) work and must NOT suppress the warning.
   const partialMismatch = (r: QueueRow): boolean => {
     const s = upstreamStatusOf(r);
     if (!s || !upstreamPartial(s)) return false;
     if (r.all_direct && !r.direct_outstanding) return false;
-    return (r.shipment_state || 'pending') === 'pending';
+    return !(Number(r.shipped_packable_qty) > 0);
   };
   const partialTitle = (r: QueueRow) => r.all_direct
     ? 'The ordering app marks this order "partially_shipped" but nothing is recorded here — mark the sent vendor items via "Vendor shipped" on the Direct ship tab'
@@ -239,19 +241,35 @@ export function FulfillmentPage() {
   };
   const adoptInfo = adopting ? upstreamInfoOf(adopting) : undefined;
   const adoptFull = !!adoptInfo && upstreamShippedLike(adoptInfo.status);
-  const adoptLines = useMemo(() => {
-    if (!adopting || !adoptInfo) return [] as (AdoptLine & { date: string | null })[];
-    return rows<AdoptLine>(rawAdoptLines)
-      .filter(l => !l.direct_ship && !l.digital && Number(l.remaining_qty) > 0)
-      .map(l => ({
-        ...l,
-        date: adoptInfo.shipped.find(x => x.pid === String(l.product_external_id))?.date ?? null,
-      }))
-      // full upstream status adopts every remaining line; partial adopts
-      // only lines the ordering app marks item-shipped
-      .filter(l => adoptFull || l.date != null);
+  // upstream facts keep their qty/date cardinality: same-pid entries on
+  // ONE date sum their quantities and the adopted qty is clamped to what
+  // upstream actually shipped; same-pid entries across DIFFERENT dates
+  // (or unusable upstream quantities) are AMBIGUOUS and fail closed —
+  // listed, excluded, and pointed at Ship > manual entry instead.
+  const adoptComputed = useMemo(() => {
+    const empty = { lines: [] as (AdoptLine & { date: string | null; adopt_qty: string; clamped: boolean })[], ambiguous: [] as string[] };
+    if (!adopting || !adoptInfo) return empty;
+    const out = { lines: [...empty.lines], ambiguous: [...empty.ambiguous] };
+    for (const l of rows<AdoptLine>(rawAdoptLines)) {
+      if (l.direct_ship || l.digital || !(Number(l.remaining_qty) > 0)) continue;
+      const entries = adoptInfo.shipped.filter(x => x.pid === String(l.product_external_id));
+      const dates = Array.from(new Set(entries.map(e => e.date)));
+      if (dates.length > 1) { out.ambiguous.push(l.sku_code); continue; }
+      if (entries.length === 0) {
+        // no per-item fact: only order-level shipped/delivered covers it
+        if (adoptFull) out.lines.push({ ...l, date: null, adopt_qty: String(l.remaining_qty), clamped: false });
+        continue;
+      }
+      const upQty = entries.reduce((s, e) => s + (Number.isFinite(e.qty) && e.qty > 0 ? e.qty : 0), 0);
+      if (!(upQty > 0)) { out.ambiguous.push(l.sku_code); continue; }
+      const m = Math.min(Number(l.remaining_qty), upQty);
+      if (!(m > 0)) continue;
+      out.lines.push({ ...l, date: dates[0], adopt_qty: m.toFixed(2), clamped: m < Number(l.remaining_qty) });
+    }
+    return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adopting, rawAdoptLines, adoptFull, JSON.stringify(adoptInfo?.shipped)]);
+  const adoptLines = adoptComputed.lines;
   // undated lines only exist on order-level shipped/delivered adoption;
   // they need an explicit operator confirmation (the order status alone
   // is weaker evidence than a per-item date)
@@ -278,7 +296,7 @@ export function FulfillmentPage() {
           : 'no per-item ship date — adopted on the order-level status, date unknown'}) — no tracking; adopted via the upstream check.`;
         const res = await doAdopt({
           order_id: adopting.id, group_buy_id: groupBuyId,
-          items: JSON.stringify(lines.map(l => ({ order_item_id: l.order_item_id, qty: String(l.remaining_qty) }))),
+          items: JSON.stringify(lines.map(l => ({ order_item_id: l.order_item_id, qty: l.adopt_qty }))),
           shipped_date: date, note, actor: userName,
         }) as unknown[] | null;
         if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
@@ -717,11 +735,17 @@ export function FulfillmentPage() {
                 {adoptLines.map(l => (
                   <div key={l.order_item_id} className="flex items-center gap-2 px-2 py-1.5 text-xs">
                     <span className="font-medium">{l.sku_code}</span>
-                    <span className="text-muted-foreground">× {fmtNum(Number(l.remaining_qty))}</span>
+                    <span className="text-muted-foreground">× {fmtNum(Number(l.adopt_qty))}</span>
+                    {l.clamped && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5" title={`Upstream shipped less than the local remaining ${fmtNum(Number(l.remaining_qty))} — only the upstream-shipped quantity is recorded`}>of {fmtNum(Number(l.remaining_qty))}</span>}
                     <span className="ml-auto text-muted-foreground">{l.date ? `shipped upstream ${l.date}` : `order marked ${adoptInfo?.status}`}</span>
                   </div>
                 ))}
               </div>
+            )}
+            {adoptComputed.ambiguous.length > 0 && (
+              <p className="text-xs text-amber-700">
+                Not recordable automatically (conflicting upstream dates or unusable quantities): {adoptComputed.ambiguous.join(', ')} — record {adoptComputed.ambiguous.length > 1 ? 'these' : 'it'} via Ship &gt; manual entry.
+              </p>
             )}
             {undatedCount > 0 && (
               <label className="flex items-start gap-1.5 text-xs text-amber-800 cursor-pointer">
