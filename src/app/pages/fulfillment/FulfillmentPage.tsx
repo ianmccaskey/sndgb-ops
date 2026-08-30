@@ -158,8 +158,18 @@ export function FulfillmentPage() {
     upstreamLive && r.external_id ? upstreamLive.statusById[String(r.external_id)] : undefined;
   const upstreamMismatch = (r: QueueRow): boolean => {
     const s = upstreamStatusOf(r);
-    return !!s && upstreamShippedLike(s) && !LOCAL_SHIPPED.has(r.shipment_state || '');
+    if (!s || !upstreamShippedLike(s)) return false;
+    // vendor-direct completion is recorded WITHOUT a local shipment row —
+    // an all-direct order whose vendor lines are marked sent is fully
+    // accounted for here, never a mismatch
+    if (r.all_direct && !r.direct_outstanding) return false;
+    return !LOCAL_SHIPPED.has(r.shipment_state || '');
   };
+  // the right recording flow differs: all-direct orders resolve via the
+  // Direct ship tab's "Vendor shipped", everything else via Ship > manual
+  const mismatchTitle = (r: QueueRow) => r.all_direct
+    ? `The ordering app marks this order "${upstreamStatusOf(r)}" but its vendor-shipped items are not marked sent here — use "Vendor shipped" on the Direct ship tab`
+    : `The ordering app marks this order "${upstreamStatusOf(r)}" but no shipment is fully recorded here — open Ship and record the carrier + tracking (manual entry)`;
 
   const displayQueue = useMemo(() => {
     if (!sessionActive || stage !== 'ready') return queue;
@@ -208,7 +218,7 @@ export function FulfillmentPage() {
       {r.has_draft && !r.draft_needs_recovery && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="An unfinished shipment draft exists — open Ship to continue or delete it">draft</span>}
       {r.draft_needs_recovery && <span className="rounded bg-red-100 text-red-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A draft's Shippo purchase was dispatched but never saved — it may hold a PAID label. Open Ship to recover.">needs recovery</span>}
       {r.push_outstanding && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A shipped box has not been pushed to the ordering app — open Ship and use Push upstream">not pushed</span>}
-      {upstreamMismatch(r) && <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`The ordering app marks this order "${upstreamStatusOf(r)}" but no shipment is fully recorded here — open Ship and record the carrier + tracking (manual entry)`}>shipped upstream</span>}
+      {upstreamMismatch(r) && <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={mismatchTitle(r)}>shipped upstream</span>}
       {sessionActive && stage === 'ready' && packability(r) === 'full' && <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase">packable</span>}
       {sessionActive && stage === 'ready' && packability(r) === 'partial' && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">part-packable</span>}
     </span>
@@ -371,12 +381,16 @@ export function FulfillmentPage() {
         <div className={`rounded-lg border px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1 ${mismatchCount > 0 ? 'border-rose-300 bg-rose-50' : 'border-green-300 bg-green-50'}`}>
           <span className={`font-medium ${mismatchCount > 0 ? 'text-rose-900' : 'text-green-900'}`}>
             Ordering app checked at {upstreamLive.at} ({fmtNum(upstreamLive.total)} orders) — {mismatchCount === 0
-              ? 'no order in this stage is marked shipped there without a shipment recorded here.'
-              : `${mismatchCount} order${mismatchCount > 1 ? 's' : ''} in this stage marked shipped there with no shipment recorded here.`}
+              ? `no order in this ${filterIds.size > 0 ? 'filtered view' : 'stage'} is marked shipped there without being recorded here.`
+              : `${mismatchCount} order${mismatchCount > 1 ? 's' : ''} in this ${filterIds.size > 0 ? 'filtered view' : 'stage'} marked shipped there without being recorded here.`}
           </span>
           {mismatchCount > 0 && (
-            <span className="text-rose-900">Look for the <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1 py-0.5 uppercase">shipped upstream</span> badge — open Ship and record the carrier + tracking.</span>
+            <span className="text-rose-900">Look for the <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1 py-0.5 uppercase">shipped upstream</span> badge — its tooltip names the recording flow (Ship, or Vendor shipped for direct orders).</span>
           )}
+          {filterIds.size > 0 && (
+            <span className="text-amber-800">The product filter is narrowing this check — orders outside it are not counted. <button className="underline" onClick={() => setFilterIds(new Set())}>Clear filter</button> for full-stage coverage.</span>
+          )}
+          <span className="text-muted-foreground">Switch to the All tab for coverage across every stage.</span>
           <span className="ml-auto flex gap-1">
             <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={checking} onClick={checkUpstream}>Refresh</Button>
             <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setUpstream(null)}>Clear</Button>
