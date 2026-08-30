@@ -165,8 +165,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // nothing. Entries leave the stash only on a verified attach or an
   // explicit operator removal. ----
   const [pendingPhotos, setPendingPhotos] = useState<StashedPhoto[]>([]);
-  const refreshPendingView = async () =>
-    setPendingPhotos((await readStash()).filter(s => s.order_id === order.id && s.shipment_id === null));
+  const refreshPendingView = async () => {
+    const { photos, readOk } = await readStash();
+    setPendingPhotos(photos.filter(s => s.order_id === order.id && s.shipment_id === null));
+    if (!readOk) setPhotoMsg('Warning: saved photos on this device could not be read — the pending list may be incomplete. Reload the page to retry.');
+  };
   const [photoMsg, setPhotoMsg] = useState('');
   const [photoBusy, setPhotoBusy] = useState(false);
   const [viewPhoto, setViewPhoto] = useState<string | null>(null);
@@ -195,8 +198,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (stashRetried.current) return;
     stashRetried.current = true;
     (async () => {
-      await refreshPendingView();
-      const bound = (await readStash()).filter(s => s.order_id === order.id && s.shipment_id !== null);
+      const { photos: all, readOk } = await readStash();
+      setPendingPhotos(all.filter(s => s.order_id === order.id && s.shipment_id === null));
+      if (!readOk) setPhotoMsg('Warning: saved photos on this device could not be read — pending photos and failed-upload retries may be missing. Reload the page to retry.');
+      const bound = all.filter(s => s.order_id === order.id && s.shipment_id !== null);
       if (bound.length === 0) return;
       let recovered = 0, moved = 0, kept = 0, allDurable = true;
       for (const s of bound) {
@@ -292,8 +297,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const uploadPendingPhotos = async (shipmentId: number) => {
     // recovered entries are excluded: evidence never migrates to a
     // different box without the operator's explicit per-photo "use"
-    const mine = (await readStash()).filter(s => s.order_id === order.id && s.shipment_id === null && !s.recovered);
-    if (mine.length === 0) return;
+    const { photos: stashPhotos, readOk: pendReadOk } = await readStash();
+    const mine = stashPhotos.filter(s => s.order_id === order.id && s.shipment_id === null && !s.recovered);
+    const readWarning = pendReadOk ? '' : 'Warning: saved photos on this device could not be read — some pending photos may not have attached; reopen this dialog to retry.';
+    if (mine.length === 0) { if (readWarning) setPhotoMsg(readWarning); return; }
     let refused = 0, errored = 0, attached = 0, allDurable = true;
     for (const s of mine) {
       // bind FIRST, synchronously: if the insert commits but the tab dies
@@ -316,6 +323,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     }
     await refreshPendingView();
     const parts: string[] = [];
+    if (readWarning) parts.push(readWarning);
     if (refused > 0) parts.push(`${refused} photo(s) refused (quota full, shipment voided, or already on another box of this order) — kept pending, marked "recovered"; press "use" to allow one onto the next shipment.`);
     if (errored > 0) parts.push(`${errored} photo(s) did not attach — saved on this device and auto-retried next time this dialog opens.`);
     if (!allDurable) parts.push(`Warning: this device's storage is unavailable — unattached photos survive only while this page stays open.`);
@@ -962,7 +970,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         onClick={async () => { await stashUpsert({ ...ph, recovered: false }); refreshPendingView(); }}>use</button>
                     )}
                     <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove before shipping"
-                      onClick={async () => { await stashRemove(ph.key); refreshPendingView(); }}>×</button>
+                      onClick={async () => {
+                        const durable = await stashRemove(ph.key);
+                        await refreshPendingView();
+                        if (!durable) setPhotoMsg('Removed from this list, but this device’s storage is unavailable — the photo may reappear after a reload; remove it again then.');
+                      }}>×</button>
                   </span>
                 ))}
               </div>

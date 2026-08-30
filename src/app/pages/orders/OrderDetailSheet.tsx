@@ -129,7 +129,11 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doAddShipPhoto] = useMutateAction(addShipmentPhoto);
   const [stranded, setStranded] = useState<StashedPhoto[]>([]);
   const [strandedMsg, setStrandedMsg] = useState('');
-  const refreshStranded = async () => setStranded((await readStash()).filter(s => s.order_id === orderId));
+  const refreshStranded = async () => {
+    const { photos, readOk } = await readStash();
+    setStranded(photos.filter(s => s.order_id === orderId));
+    if (!readOk) setStrandedMsg('Warning: saved photos on this device could not be read — this list may be incomplete. Reload the page to retry.');
+  };
   useEffect(() => { if (open) { setStrandedMsg(''); refreshStranded(); } // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, orderId]);
   const retryStranded = async (s: StashedPhoto, fallbackShipmentId: number | null) => {
@@ -1733,7 +1737,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                               {s.shipment_id != null ? 'Retry' : 'Attach'}
                             </Button>
                             <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Discard this saved photo"
-                              onClick={async () => { if (window.confirm('Discard this saved photo? It has not been uploaded anywhere.')) { await stashRemove(s.key); refreshStranded(); } }}>×</button>
+                              onClick={async () => {
+                                if (!window.confirm('Discard this saved photo? It has not been uploaded anywhere.')) return;
+                                const durable = await stashRemove(s.key);
+                                await refreshStranded();
+                                if (!durable) setStrandedMsg('Discarded from view, but this device’s storage is unavailable — the photo may reappear after a reload; discard it again then.');
+                              }}>×</button>
                           </span>
                         );
                       })}

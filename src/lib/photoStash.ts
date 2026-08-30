@@ -111,14 +111,19 @@ const importLegacy = async (): Promise<void> => {
   } catch { /* leave the legacy key in place; retried next read */ legacyImported = false; }
 };
 
-export const readStash = async (): Promise<StashedPhoto[]> => {
+// readOk=false means the DURABLE store could not be read: photos saved
+// earlier may exist but be invisible. Callers must warn rather than
+// present an empty recovery UI as "no saved photos".
+export type StashReadResult = { photos: StashedPhoto[]; readOk: boolean };
+export const readStash = async (): Promise<StashReadResult> => {
   await importLegacy();
   let persisted: StashedPhoto[] = [];
-  try { persisted = await idbOp('readonly', s => s.getAll() as IDBRequest<StashedPhoto[]>); } catch { persisted = []; }
+  let readOk = true;
+  try { persisted = await idbOp('readonly', s => s.getAll() as IDBRequest<StashedPhoto[]>); } catch { persisted = []; readOk = false; }
   const merged = new Map<string, StashedPhoto>();
   for (const p of persisted) if (!memRemoved.has(p.key)) merged.set(p.key, p);
   for (const [k, v] of memPhotos) merged.set(k, v);
-  return [...merged.values()];
+  return { photos: [...merged.values()], readOk };
 };
 
 // true = durably persisted; false = page-lifetime memory only
