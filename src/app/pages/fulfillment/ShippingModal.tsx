@@ -690,6 +690,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // recovered shipment must reach the same postconditions as a happy-path
   // one, or Base44 silently lacks its tracking until someone notices.
   const shipmentLanded = async (s: ShipmentRow, carrier: string, tracking: string) => {
+    // consume pending captures on EVERY landing path — including draft
+    // recovery (retryFinalize / recoverByTxn / retryPurchase), which
+    // never ran the new-shipment attach. A photo taken for the open box
+    // must not stay unbound and drift to a later shipment. Idempotent:
+    // the new-shipment paths already attached theirs, so this no-ops.
+    await uploadPendingPhotos(s.id);
     const items = (s.items || []).map(i => ({ order_item_id: Number(i.order_item_id), qty: String(i.qty), sku: i.sku_code }));
     onShipped((s.items || []).map(i => ({ product_id: Number(i.product_id), qty: Number(i.qty) })));
     reloadPackable(); reloadShipments(); reload();
@@ -1102,6 +1108,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                       : <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => retryPurchase(s)}>Check Shippo & retry</Button>}
                     <Input placeholder="transaction id" value={recoverTxn[s.id] || ''} onChange={e => setRecoverTxn(m => ({ ...m, [s.id]: e.target.value }))} className="h-7 w-44 text-xs font-mono" />
                     <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => recoverByTxn(s)}>Recover</Button>
+                    <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={photoBusy} onClick={() => capturePhotos(s.id)}>+ photo</Button>
                     {!pendingFinalize[s.id] && (
                       <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" onClick={() => deleteDraft(s)}>Delete draft</Button>
                     )}
