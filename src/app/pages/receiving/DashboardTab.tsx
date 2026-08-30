@@ -245,34 +245,54 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
   const confirmContentsAndReceive = async () => {
     const p = scanModal?.pkg;
     if (!p) return;
-    setSmBusy(true); setSmMsg('');
+    setSmMsg('');
+    // VALIDATE EVERYTHING BEFORE WRITING ANYTHING — a validation problem
+    // must never leave earlier corrections half-saved
+    const edits: { product_id: number; qty: string; sku: string }[] = [];
+    for (const it of p.items || []) {
+      const v = (scanQty[it.id] ?? '').trim();
+      if (v === String(Number(it.qty))) continue;
+      if (!/^\d+(?:\.\d{1,2})?$/.test(v) || !(Number(v) > 0)) {
+        setSmMsg(`${it.sku_code}: count must be a positive number (to drop a line entirely, use the package card's remove instead).`);
+        return;
+      }
+      edits.push({ product_id: Number(it.product_id), qty: v, sku: it.sku_code });
+    }
+    // a half-filled add row is a blocking error, never silently dropped —
+    // the operator interacted with it, so receiving without it would
+    // undercount inventory without warning
+    const addProduct = scanAddLine.product.trim();
+    const addQty = scanAddLine.qty.trim();
+    if (addProduct !== '' || addQty !== '') {
+      if (addProduct === '' || addQty === '') {
+        setSmMsg('The add-product row is half filled — pick the product AND its count, or clear both.');
+        return;
+      }
+      if (!/^\d+(?:\.\d{1,2})?$/.test(addQty) || !(Number(addQty) > 0)) {
+        setSmMsg('The added line needs a positive count (max 2 decimals).');
+        return;
+      }
+      edits.push({ product_id: Number(addProduct), qty: addQty, sku: 'added line' });
+    }
+    setSmBusy(true);
+    // each upsert is its own audited write; a mid-sequence refusal (the
+    // other admin received the package) leaves EARLIER corrections saved —
+    // the message says exactly how many, never "nothing happened"
+    let applied = 0;
     try {
-      for (const it of p.items || []) {
-        const v = (scanQty[it.id] ?? '').trim();
-        if (v === String(Number(it.qty))) continue;
-        if (!/^\d+(?:\.\d{1,2})?$/.test(v) || !(Number(v) > 0)) {
-          setSmMsg(`${it.sku_code}: count must be a positive number (to drop a line entirely, use the package card's remove instead).`);
-          return;
-        }
-        const r = await doAddItem({ package_id: p.id, product_id: it.product_id, qty: v, actor: userName }) as unknown[] | null;
+      for (const e of edits) {
+        const r = await doAddItem({ package_id: p.id, product_id: e.product_id, qty: e.qty, actor: userName }) as unknown[] | null;
         if (!okRes(r)) {
-          setSmMsg('Count correction not saved — the package may have been received in another session. Nothing was received; reload and retry.');
+          setSmMsg(`Stopped at ${e.sku}: the package refused the write (likely received in another session). ${applied > 0 ? `${applied} earlier count correction${applied > 1 ? 's were' : ' was'} ALREADY SAVED to the package; ` : ''}nothing was received. The list refreshed — re-open to see the current state.`);
           afterChange();
           return;
         }
-      }
-      if (scanAddLine.product && scanAddLine.qty.trim()) {
-        if (!/^\d+(?:\.\d{1,2})?$/.test(scanAddLine.qty.trim()) || !(Number(scanAddLine.qty) > 0)) {
-          setSmMsg('The added line needs a positive count (max 2 decimals).');
-          return;
-        }
-        const r = await doAddItem({ package_id: p.id, product_id: Number(scanAddLine.product), qty: scanAddLine.qty.trim(), actor: userName }) as unknown[] | null;
-        if (!okRes(r)) { setSmMsg('Extra line not added — the package may have been received in another session.'); afterChange(); return; }
+        applied += 1;
       }
       const ok = await receivePkg(p);
       setScanMsg(ok
         ? `Received ${p.tracking_number}.`
-        : 'NOT received — the package changed since this page loaded (already received, corrected, or emptied elsewhere). Check its card; the list has refreshed.');
+        : `NOT received — the package changed since this page loaded.${applied > 0 ? ` ${applied} count correction${applied > 1 ? 's were' : ' was'} already saved to it.` : ''} Check its card; the list has refreshed.`);
       setScanModal(null);
     } finally {
       setSmBusy(false);
