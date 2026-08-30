@@ -327,6 +327,14 @@ export function FulfillmentPage() {
         const k = l.date ?? '';
         groups.set(k, [...(groups.get(k) ?? []), l]);
       }
+      // the ordering app stores shipped_date as display text ("Aug 28,
+      // 2026") — the fn wants YYYY-MM-DD, so normalize here; an
+      // unparseable date falls back to '' (recorded now() + "date
+      // unknown" note) rather than refusing the whole record
+      const isoDate = (s: string): string => {
+        const t = Date.parse(s);
+        return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-CA') : '';
+      };
       let recorded = 0;
       for (const [date, lines] of groups) {
         const note = `Recorded from ordering app (status "${adoptInfo?.status ?? ''}"; ${date
@@ -335,7 +343,7 @@ export function FulfillmentPage() {
         const res = await doAdopt({
           order_id: adopting.id, group_buy_id: groupBuyId,
           items: JSON.stringify(lines.map(l => ({ order_item_id: l.order_item_id, qty: l.adopt_qty }))),
-          shipped_date: date, note, actor: userName,
+          shipped_date: date ? isoDate(date) : '', note, actor: userName,
         }) as unknown[] | null;
         if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
           setAdoptMsg(recorded > 0
