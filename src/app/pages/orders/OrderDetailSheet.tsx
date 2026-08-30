@@ -127,6 +127,11 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   // entries replay against their original shipment; unbound (recovered)
   // ones attach to the newest live shipment on explicit click.
   const [doAddShipPhoto] = useMutateAction(addShipmentPhoto);
+  // read action invoked imperatively (getOrderTxRefs precedent): the
+  // attach target must come from a JUST-IN-TIME authoritative read at
+  // click time — another admin may have created or voided boxes since
+  // the sheet's rows rendered
+  const [fetchShipRowsJit] = useMutateAction(listOrderShipments);
   const [stranded, setStranded] = useState<StashedPhoto[]>([]);
   const [strandedMsg, setStrandedMsg] = useState('');
   const refreshStranded = async () => {
@@ -136,9 +141,17 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   };
   useEffect(() => { if (open) { setStrandedMsg(''); refreshStranded(); } // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, orderId]);
-  const retryStranded = async (s: StashedPhoto, fallbackShipmentId: number | null) => {
+  const retryStranded = async (s: StashedPhoto) => {
     const wasBound = s.shipment_id != null;
-    const target = s.shipment_id ?? fallbackShipmentId;
+    let target = s.shipment_id;
+    if (target == null) {
+      // resolve the newest LIVE shipment fresh, never from cached rows
+      try {
+        const res = await fetchShipRowsJit({ order_id: orderId }) as { id: number; refund_status: string | null }[] | null;
+        const live = (Array.isArray(res) ? res : []).filter(r => r.refund_status !== 'SUCCESS');
+        target = live.reduce<number | null>((acc, r) => (acc == null || Number(r.id) > acc ? Number(r.id) : acc), null);
+      } catch { setStrandedMsg('Could not load this order’s shipments — try again.'); return; }
+    }
     if (target == null) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
     // bind FIRST, before any network work: a committed insert with a
     // lost response must replay against THIS shipment later, never
@@ -1726,14 +1739,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {stranded.map(s => {
-                        const fallback = shipRows.filter(r => r.refund_status !== 'SUCCESS').reduce<number | null>((acc, r) => (acc == null || r.id > acc ? r.id : acc), null);
                         return (
                           <span key={s.key} className="relative flex flex-col items-center gap-1">
                             <img src={s.thumb} alt="stranded package photo" className="h-12 w-12 object-cover rounded border cursor-pointer"
                               title={s.shipment_id != null ? `Failed upload for shipment #${s.shipment_id}` : 'Pending photo not attached to any shipment'}
                               onClick={() => setViewShipPhoto(s.full)} />
                             <Button size="sm" variant="outline" className="h-5 px-1.5 text-[10px]" disabled={saving}
-                              onClick={() => retryStranded(s, fallback)}>
+                              onClick={() => retryStranded(s)}>
                               {s.shipment_id != null ? 'Retry' : 'Attach'}
                             </Button>
                             <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Discard this saved photo"
