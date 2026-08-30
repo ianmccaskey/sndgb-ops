@@ -220,8 +220,12 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
       const matchedIdsFor = (cands: string[]) =>
         new Set(packages.filter(p => !p.tracking_mangled && matchTracking(cands, String(p.tracking_number || '')) != null).map(p => p.id));
       const perText = texts.map(t => ({ raw: t, cands: trackingCandidates(t) }));
+      // "tracking-like" is judged by SHAPE (any candidate of plausible
+      // tracking length — every real carrier number is 12+ chars), not by
+      // whether we recognize the carrier or have the package logged: an
+      // unlogged label from ANY carrier in the frame must count
       const trackingLike = perText.filter(x =>
-        x.cands.length > 0 && (x.cands.some(c => candidateCarrier(c) != null) || matchedIdsFor(x.cands).size > 0));
+        x.cands.some(c => c.length >= 12) || matchedIdsFor(x.cands).size > 0);
       if (trackingLike.length > 1) {
         const idSets = trackingLike.map(x => matchedIdsFor(x.cands));
         const union = new Set(idSets.flatMap(s => [...s]));
