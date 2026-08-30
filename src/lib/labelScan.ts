@@ -45,6 +45,15 @@ export async function decodeCarrierLabel(file: File): Promise<string[]> {
   if (!file.type.startsWith('image/')) throw new Error(`"${file.name}" is not an image.`);
   const bitmap = await createImageBitmap(file).catch(() => null);
   if (!bitmap) throw new Error(`Could not read "${file.name}" as an image.`);
+  // decoding runs on the main thread (no worker in this stack), so the
+  // workload is bounded three ways: the source is downscaled to <=2000px
+  // before ZXing sees it (drawScaledRotated), a WALL-CLOCK budget stops
+  // the whole search, and the loop YIELDS between passes so the page
+  // keeps painting instead of freezing in one long task
+  const DEADLINE_MS = 4000;
+  const started = performance.now();
+  const overBudget = () => performance.now() - started > DEADLINE_MS;
+  const yieldToUi = () => new Promise<void>(r => setTimeout(r, 0));
   try {
     const hints = new Map();
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.ITF]);
@@ -53,6 +62,7 @@ export async function decodeCarrierLabel(file: File): Promise<string[]> {
     const texts = new Set<string>();
     for (const maxEdge of [2000, 1200]) {
       for (const rot of [0, 90] as const) {
+        if (overBudget()) return [...texts];
         const canvas = drawScaledRotated(bitmap, maxEdge, rot);
         // mask-and-rescan: after each decode, blank the found barcode and
         // scan again so a routing/service barcode cannot shadow the
@@ -64,6 +74,8 @@ export async function decodeCarrierLabel(file: File): Promise<string[]> {
         const seenHere = new Set<string>();
         let repeats = 0;
         for (let pass = 0; pass < 8; pass++) {
+          if (overBudget()) return [...texts];
+          await yieldToUi();
           try {
             const bb = new BinaryBitmap(new HybridBinarizer(new HTMLCanvasElementLuminanceSource(canvas)));
             const res = reader.decode(bb, hints);
