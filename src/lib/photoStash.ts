@@ -9,32 +9,35 @@ import type { CapturedPhoto } from '@/lib/imageCapture';
  * (ShippingModal's pending section, OrderDetailSheet's stranded-photo
  * recovery) are only views over this queue.
  *
+ * Storage is IndexedDB, not localStorage: full images run ~900KB each
+ * and a shipment allows 5, which would exhaust the ~5MB per-origin
+ * localStorage budget exactly when uploads fail in bulk — the case the
+ * stash exists for. IndexedDB budgets are orders of magnitude larger,
+ * and each photo is its OWN record (keyPath 'key'), so put/delete are
+ * atomic per entry with no shared-array read-modify-write to clobber —
+ * concurrent flows in one tab and across tabs cannot overwrite each
+ * other's entries. Entries stashed under the old localStorage key are
+ * imported once and the key cleared.
+ *
  *   shipment_id = number: a failed upload bound to that shipment,
  *     auto-replayed (replay=true) when the ship dialog reopens, and
- *     retryable from the order detail sheet after the order leaves the
- *     fulfillment queue.
+ *     retryable from the order detail sheet forever.
  *   shipment_id = null: order-scoped pending. Fresh captures (the box
  *     being packed right now) auto-attach to the shipment the operator
  *     creates. recovered=true entries — photos refused by the shipment
  *     they were CAPTURED FOR — NEVER auto-attach; each needs an
  *     explicit per-photo operator choice.
- *   key: unique per entry; every mutation is a SYNCHRONOUS fresh
- *     read -> mutate -> write keyed by it, so overlapping async flows
- *     in one tab cannot clobber each other with stale snapshots (JS
- *     sync blocks are atomic). Cross-tab overlap on one browser
- *     profile keeps a millisecond residual window — localStorage has
- *     no CAS — accepted for a two-admin tool on separate machines.
  *   actor: who CAPTURED the photo — a different admin may run the
  *     retry on a shared browser, and uploads must carry the original
  *     capturer or the audit trail would misattribute provenance.
  *
- * When persistence itself fails (private mode, origin quota full), the
- * module keeps the DELTA against what localStorage actually holds — an
- * override map (newest version per key) plus removal tombstones — and
- * readStash merges the persisted snapshot through it, so updates AND
- * removals survive a failed write. The delta is page-lifetime only,
- * and callers surface that honestly via the boolean the write ops
- * return (true = durably persisted).
+ * When IndexedDB itself is unavailable (rare: some private modes,
+ * storage-blocked browsers), operations fall back to a page-lifetime
+ * memory overlay — overrides per key plus removal tombstones, merged
+ * into every read — and return false so callers tell the operator the
+ * photo is NOT durable instead of lying. The server side is the last
+ * line regardless: same-content dedupe means a re-offered photo can
+ * never duplicate.
  */
 export type StashedPhoto = CapturedPhoto & {
   shipment_id: number | null;
@@ -45,43 +48,94 @@ export type StashedPhoto = CapturedPhoto & {
   recovered?: boolean;
 };
 
-const STASH_KEY = 'sndgb.pendingShipPhotos';
-
 export const newStashKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-let memOverrides = new Map<string, StashedPhoto>();
-let memRemovals = new Set<string>();
+const DB_NAME = 'sndgb-photo-stash';
+const STORE = 'photos';
+const LEGACY_KEY = 'sndgb.pendingShipPhotos';
 
-const readPersisted = (): StashedPhoto[] => {
-  try { return JSON.parse(localStorage.getItem(STASH_KEY) || '[]') as StashedPhoto[]; } catch { return []; }
+let dbPromise: Promise<IDBDatabase> | null = null;
+const openDb = (): Promise<IDBDatabase> => {
+  if (!dbPromise) {
+    dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+      try {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE, { keyPath: 'key' });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+        req.onblocked = () => reject(new Error('blocked'));
+      } catch (e) { reject(e); }
+    });
+    dbPromise.catch(() => { dbPromise = null; });
+  }
+  return dbPromise;
 };
 
-export const readStash = (): StashedPhoto[] => {
+const idbOp = <T,>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> =>
+  openDb().then(db => new Promise<T>((resolve, reject) => {
+    try {
+      const tx = db.transaction(STORE, mode);
+      const req = run(tx.objectStore(STORE));
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    } catch (e) { reject(e); }
+  }));
+
+// page-lifetime fallback when IndexedDB is unavailable: newest state per
+// key plus removal tombstones, merged into every read
+const memPhotos = new Map<string, StashedPhoto>();
+const memRemoved = new Set<string>();
+
+// one-time import of entries stashed by the old localStorage version
+let legacyImported = false;
+const importLegacy = async (): Promise<void> => {
+  if (legacyImported) return;
+  legacyImported = true;
+  try {
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (!raw) return;
+    const items = JSON.parse(raw) as StashedPhoto[];
+    for (const i of items) {
+      if (i && typeof i.key === 'string') await idbOp('readwrite', s => s.put(i));
+    }
+    localStorage.removeItem(LEGACY_KEY);
+  } catch { /* leave the legacy key in place; retried next read */ legacyImported = false; }
+};
+
+export const readStash = async (): Promise<StashedPhoto[]> => {
+  await importLegacy();
+  let persisted: StashedPhoto[] = [];
+  try { persisted = await idbOp('readonly', s => s.getAll() as IDBRequest<StashedPhoto[]>); } catch { persisted = []; }
   const merged = new Map<string, StashedPhoto>();
-  for (const p of readPersisted()) if (!memRemovals.has(p.key)) merged.set(p.key, p);
-  for (const [k, v] of memOverrides) merged.set(k, v);
+  for (const p of persisted) if (!memRemoved.has(p.key)) merged.set(p.key, p);
+  for (const [k, v] of memPhotos) merged.set(k, v);
   return [...merged.values()];
 };
 
-// low-level commit; true = every entry durably persisted
-const commitStash = (items: StashedPhoto[]): boolean => {
+// true = durably persisted; false = page-lifetime memory only
+export const stashUpsert = async (entry: StashedPhoto): Promise<boolean> => {
+  memRemoved.delete(entry.key);
   try {
-    localStorage.setItem(STASH_KEY, JSON.stringify(items));
-    memOverrides = new Map();
-    memRemovals = new Set();
+    await idbOp('readwrite', s => s.put(entry));
+    memPhotos.delete(entry.key);
     return true;
   } catch {
-    const itemKeys = new Set(items.map(i => i.key));
-    memOverrides = new Map(items.map(i => [i.key, i]));
-    memRemovals = new Set(readPersisted().map(p => p.key).filter(k => !itemKeys.has(k)));
+    memPhotos.set(entry.key, entry);
     return false;
   }
 };
 
-// per-entry ops: each re-reads the latest queue synchronously, so a slow
-// async flow never writes back a stale snapshot
-export const stashUpsert = (entry: StashedPhoto): boolean =>
-  commitStash([...readStash().filter(s => s.key !== entry.key), entry]);
-
-export const stashRemove = (key: string): boolean =>
-  commitStash(readStash().filter(s => s.key !== key));
+// true = durably removed; false = removal held only in page memory
+export const stashRemove = async (key: string): Promise<boolean> => {
+  memPhotos.delete(key);
+  try {
+    await idbOp('readwrite', s => s.delete(key));
+    memRemoved.delete(key);
+    return true;
+  } catch {
+    memRemoved.add(key);
+    return false;
+  }
+};

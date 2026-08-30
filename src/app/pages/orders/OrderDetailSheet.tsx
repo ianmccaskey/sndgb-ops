@@ -129,7 +129,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doAddShipPhoto] = useMutateAction(addShipmentPhoto);
   const [stranded, setStranded] = useState<StashedPhoto[]>([]);
   const [strandedMsg, setStrandedMsg] = useState('');
-  const refreshStranded = () => setStranded(readStash().filter(s => s.order_id === orderId));
+  const refreshStranded = async () => setStranded((await readStash()).filter(s => s.order_id === orderId));
   useEffect(() => { if (open) { setStrandedMsg(''); refreshStranded(); } // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, orderId]);
   const retryStranded = async (s: StashedPhoto, fallbackShipmentId: number | null) => {
@@ -137,16 +137,17 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     const target = s.shipment_id ?? fallbackShipmentId;
     if (target == null) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
     try {
-      // bind FIRST, synchronously: a committed insert with a lost response
-      // must replay against THIS shipment later, never migrate to a
-      // different "newest" box (same durable-attach contract as the modal)
-      stashUpsert({ ...s, shipment_id: target });
+      // bind FIRST, before any network work: a committed insert with a
+      // lost response must replay against THIS shipment later, never
+      // migrate to a different "newest" box (the modal's durable-attach
+      // contract)
+      await stashUpsert({ ...s, shipment_id: target });
       // a bound entry is an automatic replay (the insert may have already
       // committed); an unbound attach here is a deliberate operator act
       const res = await doAddShipPhoto({ shipment_id: target, image_data: s.full, thumb_data: s.thumb, actor: s.actor || userName, replay: wasBound }) as unknown[] | null;
       const ok = Array.isArray(res) ? res.length > 0 : !!res;
       if (ok) {
-        const removed = stashRemove(s.key);
+        const removed = await stashRemove(s.key);
         // a failed removal (storage unavailable) is harmless: the server's
         // order-scoped same-content dedupe recognizes a re-offer of this
         // photo and returns the existing row instead of duplicating
@@ -158,9 +159,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         // the photo was deliberately removed) — mirror the ship dialog:
         // the entry becomes unbound + recovered, so "Attach" to a live
         // shipment is offered instead of retrying a dead one forever
-        stashUpsert({ ...s, shipment_id: null, recovered: true });
+        await stashUpsert({ ...s, shipment_id: null, recovered: true });
         setStrandedMsg('Its original shipment refused this photo (deleted, voided, quota full, or it was removed on purpose) — it is now attachable: use "Attach" to put it on the newest live shipment, or discard it.');
-      } else setStrandedMsg('The shipment refused this photo (quota full, voided, or it was previously removed on purpose) — remove it here if it is no longer needed.');
+      } else setStrandedMsg('The shipment refused this photo (quota full, voided, already on another box of this order, or previously removed on purpose) — remove it here if it is no longer needed.');
     } catch { setStrandedMsg('Upload failed — the photo stays saved on this device; retry.'); }
     refreshStranded();
   };
@@ -1726,7 +1727,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                               {s.shipment_id != null ? 'Retry' : 'Attach'}
                             </Button>
                             <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Discard this saved photo"
-                              onClick={() => { if (window.confirm('Discard this saved photo? It has not been uploaded anywhere.')) { stashRemove(s.key); refreshStranded(); } }}>×</button>
+                              onClick={async () => { if (window.confirm('Discard this saved photo? It has not been uploaded anywhere.')) { await stashRemove(s.key); refreshStranded(); } }}>×</button>
                           </span>
                         );
                       })}
