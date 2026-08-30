@@ -222,7 +222,13 @@ export type ShippoRate = {
 
 const ALLOWED_PROVIDERS = ['USPS', 'UPS'];
 
-export async function getRates(http: ShippoHttp, key: string, from: ShippoAddress, to: ShippoAddress, parcel: ShippoParcel): Promise<{ rates: ShippoRate[]; allRateCount: number; messages: string[] }> {
+/** Declared-value insurance riding on the shipment: rates quoted from an
+ * insured shipment carry the insurance through to the purchased label
+ * (Shippo bills the premium with the label). amount is the INSURED VALUE
+ * of the contents, not the premium. */
+export type ShippoInsurance = { amount: string; currency: 'USD' };
+
+export async function getRates(http: ShippoHttp, key: string, from: ShippoAddress, to: ShippoAddress, parcel: ShippoParcel, insurance?: ShippoInsurance | null): Promise<{ rates: ShippoRate[]; allRateCount: number; messages: string[] }> {
   let body: unknown;
   // rate creation costs nothing and every label depends on it — retry
   // EVERY failure with the old client's depth (4 attempts, 0.8/1.6/3.2s;
@@ -231,7 +237,10 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
   // hints in the final message, after the retry policy has run.
   for (let attempt = 0; ; attempt++) {
     try {
-      body = unwrap(await http.post(key.trim(), '/shipments/', { address_from: from, address_to: to, parcels: [parcel], async: false }));
+      body = unwrap(await http.post(key.trim(), '/shipments/', {
+        address_from: from, address_to: to, parcels: [parcel], async: false,
+        ...(insurance ? { extra: { insurance: { amount: insurance.amount, currency: insurance.currency } } } : {}),
+      }));
       break;
     } catch (e: unknown) {
       if (attempt >= 3) {

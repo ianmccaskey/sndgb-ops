@@ -34,6 +34,7 @@ function listFulfillmentQueue() {
              o.contact_name, o.contact_email::text AS contact_email, o.contact_phone,
              o.address_line1, o.address_line2, o.city, o.state_code, o.postal_code,
              o.hold_shipping, o.customer_note, o.admin_note,
+             o.shipping_insurance_usd, o.shipping_insurance_override_usd,
              r.recon_status,
              -- items WE pack; vendor-direct lines live in direct_items_summary
              COALESCE(it.items_summary, '') AS items_summary,

@@ -52,6 +52,7 @@ import type { RxAddress } from '@/app/pages/receiving/shared';
 type PackableLine = {
   order_item_id: number; product_id: number; sku_code: string; product_name: string;
   product_external_id: string | null; unit_weight_oz: string | null; digital: boolean;
+  unit_price_usd: string | null;
   effective_qty: string; attributed_qty: string; shipped_qty: string; remaining_qty: string;
   direct_ship: boolean; direct_fulfilled_at: string | null;
 };
@@ -73,6 +74,7 @@ export type QueueOrder = {
   contact_name: string | null; contact_email: string | null; contact_phone: string | null;
   address_line1: string | null; address_line2: string | null; city: string | null;
   state_code: string | null; postal_code: string | null; customer_note: string | null;
+  shipping_insurance_usd: string | null; shipping_insurance_override_usd: string | null;
 };
 
 const QTY_RE = /^\d+(?:\.\d{1,2})?$/;
@@ -513,6 +515,23 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(qtys), packable.length, weightTouched]);
 
+  // ---- insurance: the customer's upstream insurance fee (override wins)
+  // decides the DEFAULT; the insured value is this box's contents at
+  // order prices, editable like the weight (freeze on manual edit) ----
+  const insuranceFee = Number(order.shipping_insurance_override_usd ?? order.shipping_insurance_usd ?? 0);
+  const customerInsured = insuranceFee > 0;
+  const [insureBox, setInsureBox] = useState(customerInsured);
+  const [insuredValue, setInsuredValue] = useState('');
+  const [insuredTouched, setInsuredTouched] = useState(false);
+  const calcInsuredValue = () => {
+    const v = chosen.reduce((s, c) => s + Number(c.qty || 0) * Number(c.line.unit_price_usd || 0), 0);
+    return v > 0 ? (Math.round(v * 100) / 100).toFixed(2) : '';
+  };
+  useEffect(() => {
+    if (!insuredTouched) setInsuredValue(calcInsuredValue());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(qtys), packable.length, insuredTouched]);
+
   // preselect the app-wide default ship-from, and SELF-HEAL a selection
   // that no longer resolves to an active address (the other admin archived
   // it or moved the default mid-session) — falling back to the current
@@ -560,7 +579,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     city: sn(fromRow.city), state: sn(fromRow.state), zip: sn(fromRow.zip),
     country: sn(fromRow.country), phone: sn(fromRow.phone), email: sn(fromRow.email),
   } : null;
-  const quoteSig = JSON.stringify({ shipFrom, from: fromSig, to: expectedTo, dims, weight, chosen: chosen.map(c => [c.line.order_item_id, c.qty]) });
+  const quoteSig = JSON.stringify({ shipFrom, from: fromSig, to: expectedTo, dims, weight, ins: insureBox ? insuredValue.trim() : '', chosen: chosen.map(c => [c.line.order_item_id, c.qty]) });
   useEffect(() => {
     if (ratesResult && ratesResult.sig !== quoteSig) { setRatesResult(null); setPickedRate(''); setPurchaseMsg(''); }
   }, [quoteSig, ratesResult]);
@@ -576,6 +595,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (!QTY_RE.test(dims[k].trim()) || !(Number(dims[k]) > 0)) { setMsg('Box dimensions must be positive numbers (inches).'); return; }
     }
     if (!QTY_RE.test(weight.trim()) || !(Number(weight) > 0)) { setMsg('Weight must be a positive number (lb).'); return; }
+    if (insureBox && (!QTY_RE.test(insuredValue.trim()) || !(Number(insuredValue) > 0))) {
+      setMsg('Insured value must be a positive dollar amount (or untick Insure).'); return;
+    }
     setRatesLoading(true);
     try {
       const res = await getRates(shippoHttp, shippoKey, {
@@ -585,7 +607,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       }, shipTo, {
         length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(),
         distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb',
-      });
+      }, insureBox ? { amount: insuredValue.trim(), currency: 'USD' } : null);
       setRatesResult({ ...res, sig: quoteSig });
     } catch (e: unknown) {
       setMsg(e instanceof Error ? e.message : 'Failed to fetch rates');
@@ -697,7 +719,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           order_id: order.id, group_buy_id: groupBuyId ?? '',
           ship_from_address_id: Number(shipFrom),
           expected_from: JSON.stringify(expectedFrom), expected_to: JSON.stringify(expectedTo),
-          parcel: JSON.stringify({ length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(), distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb' }),
+          parcel: JSON.stringify({
+            length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(),
+            distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb',
+            ...(insureBox ? { insurance_amount_usd: insuredValue.trim() } : {}),
+          }),
           carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
           rate_amount: rate.amount, rate_currency: rate.currency, shippo_rate_id: rate.object_id,
           items: JSON.stringify(chosen.map(c => ({ order_item_id: String(c.line.order_item_id), qty: c.qty }))),
@@ -1127,6 +1153,22 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 <Input placeholder="Weight lb" value={weight} onChange={e => { setWeight(e.target.value); setWeightTouched(true); }} className="h-9 w-24" />
                 {weightTouched && (
                   <button className="text-xs text-muted-foreground underline" onClick={() => { setWeightTouched(false); }}>recalc</button>
+                )}
+                <label className="flex items-center gap-1.5 text-xs cursor-pointer" title={customerInsured
+                  ? `The customer paid ${fmtUSD(insuranceFee)} shipping insurance on this order — the label is insured by default`
+                  : 'This order has no customer insurance fee — tick to insure anyway'}>
+                  <input type="checkbox" checked={insureBox} onChange={e => setInsureBox(e.target.checked)} />
+                  Insure{customerInsured && <span className="rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1 py-0.5 uppercase">paid {fmtUSD(insuranceFee)}</span>}
+                </label>
+                {insureBox && (
+                  <>
+                    <Input placeholder="Value $" value={insuredValue}
+                      onChange={e => { setInsuredValue(e.target.value); setInsuredTouched(true); }} className="h-9 w-24"
+                      title="Declared value of THIS box's contents — the premium is billed by Shippo with the label" />
+                    {insuredTouched && (
+                      <button className="text-xs text-muted-foreground underline" onClick={() => { setInsuredTouched(false); }}>recalc</button>
+                    )}
+                  </>
                 )}
               </>
             )}
