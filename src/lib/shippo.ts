@@ -295,6 +295,12 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
     messages: (b?.messages || [])
       .filter(m => {
         const joined = [m.source, m.code, m.text].filter(Boolean).join(' ');
+        // known-inconsequential informational alerts are silenced even
+        // for allowed carriers (operator-confirmed noise): UPS 110920
+        // (commercial->residential reclassification) and 110971
+        // (invoice may vary from reference rates) fire on nearly every
+        // residential quote and say nothing actionable
+        if (/\b(110920|110971)\b/.test(joined)) return false;
         // \b can't see through underscores (shippo_ups_account), so the
         // allowed-carrier test runs on a separator-normalized copy — a
         // UPS/USPS account failure in token form MUST survive
