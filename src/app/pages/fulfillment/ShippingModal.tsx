@@ -514,16 +514,22 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   }, [JSON.stringify(qtys), packable.length, weightTouched]);
 
   const fromRow = addresses.find(a => String(a.id) === shipFrom) || null;
+  // row boundary: the transport re-types digit-only text (ZIPs, phones)
+  // as JS numbers — Shippo 400s a numeric zip ("Invalid input type for
+  // field: zip") and the draft CAS compares jsonb content where 92122
+  // and "92122" differ — so every address field is re-strung here and
+  // only strung values enter payloads and CAS snapshots
+  const s = (v: unknown): string => (v == null ? '' : String(v));
   const shipTo: ShippoAddress | null = order.address_line1 ? {
-    name: order.contact_name || order.customer_name, street1: order.address_line1,
-    street2: order.address_line2 || undefined as unknown as string,
-    city: order.city || '', state: order.state_code || '', zip: order.postal_code || '', country: 'US',
-    phone: order.contact_phone || undefined as unknown as string,
-    email: order.contact_email || undefined as unknown as string,
+    name: s(order.contact_name) || s(order.customer_name), street1: s(order.address_line1),
+    street2: s(order.address_line2) || undefined as unknown as string,
+    city: s(order.city), state: s(order.state_code), zip: s(order.postal_code), country: 'US',
+    phone: s(order.contact_phone) || undefined as unknown as string,
+    email: s(order.contact_email) || undefined as unknown as string,
   } : null;
   const expectedTo = {
-    street1: order.address_line1 || '', street2: order.address_line2 || '',
-    city: order.city || '', state: order.state_code || '', zip: order.postal_code || '',
+    street1: s(order.address_line1), street2: s(order.address_line2),
+    city: s(order.city), state: s(order.state_code), zip: s(order.postal_code),
   };
 
   // rate signature: ship-from CONTENTS + ship-to + dims/weight + the CHOSEN
@@ -547,9 +553,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     setRatesLoading(true);
     try {
       const res = await getRates(shippoHttp, shippoKey, {
-        name: fromRow.name, street1: fromRow.street1, street2: fromRow.street2 || undefined as unknown as string,
-        city: fromRow.city, state: fromRow.state, zip: fromRow.zip, country: fromRow.country || 'US',
-        phone: fromRow.phone || undefined as unknown as string, email: fromRow.email || undefined as unknown as string,
+        name: s(fromRow.name), street1: s(fromRow.street1), street2: s(fromRow.street2) || undefined as unknown as string,
+        city: s(fromRow.city), state: s(fromRow.state), zip: s(fromRow.zip), country: s(fromRow.country) || 'US',
+        phone: s(fromRow.phone) || undefined as unknown as string, email: s(fromRow.email) || undefined as unknown as string,
       }, shipTo, {
         length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(),
         distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb',
@@ -644,9 +650,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const lineError = validateChosen();
       if (lineError) { setPurchaseMsg(lineError + ' Nothing was purchased.'); return; }
       const expectedFrom = {
-        name: fromRow.name, street1: fromRow.street1, street2: fromRow.street2,
-        city: fromRow.city, state: fromRow.state, zip: fromRow.zip,
-        country: fromRow.country, phone: fromRow.phone, email: fromRow.email,
+        name: s(fromRow.name), street1: s(fromRow.street1), street2: s(fromRow.street2),
+        city: s(fromRow.city), state: s(fromRow.state), zip: s(fromRow.zip),
+        country: s(fromRow.country), phone: s(fromRow.phone), email: s(fromRow.email),
       };
       // 1. DRAFT FIRST, atomic with its attribution — the server re-proves
       //    every gate row-locked (remaining, money, ship-to, ship-from)
@@ -744,9 +750,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const lineError = validateChosen();
       if (lineError) { setMsg(lineError); return; }
       const expectedFrom = fromRow ? {
-        name: fromRow.name, street1: fromRow.street1, street2: fromRow.street2,
-        city: fromRow.city, state: fromRow.state, zip: fromRow.zip,
-        country: fromRow.country, phone: fromRow.phone, email: fromRow.email,
+        name: s(fromRow.name), street1: s(fromRow.street1), street2: s(fromRow.street2),
+        city: s(fromRow.city), state: s(fromRow.state), zip: s(fromRow.zip),
+        country: s(fromRow.country), phone: s(fromRow.phone), email: s(fromRow.email),
       } : null;
       let recordedId: number | null = null;
       try {
