@@ -42,6 +42,7 @@ function listFulfillmentQueue() {
              COALESCE(it.remaining_packable_qty, 0) AS remaining_packable_qty,
              COALESCE(it.shipped_packable_qty, 0) AS shipped_packable_qty,
              COALESCE(it.packable_json, '[]'::jsonb) AS packable_json,
+             COALESCE(it.upstream_check_json, '[]'::jsonb) AS upstream_check_json,
              COALESCE(it.direct_items_summary, '') AS direct_items_summary,
              COALESCE(it.direct_outstanding_summary, '') AS direct_outstanding_summary,
              COALESCE(it.direct_outstanding_ids, '') AS direct_outstanding_ids,
@@ -86,6 +87,15 @@ function listFulfillmentQueue() {
                                             'remaining', GREATEST(COALESCE(oi.qty_override, oi.qty) - att.attributed, 0)))
                  FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital
                          AND COALESCE(oi.qty_override, oi.qty) - att.attributed > 0) AS packable_json,
+               -- per-line FINALIZED evidence for the upstream check, keyed
+               -- by the ordering app's product id — includes fully-drafted
+               -- lines (packable_json drops them), because a draft is not
+               -- shipped evidence
+               jsonb_agg(jsonb_build_object('ext', p.external_id,
+                                            'effective', COALESCE(oi.qty_override, oi.qty),
+                                            'shipped', LEAST(att.shipped, COALESCE(oi.qty_override, oi.qty))))
+                 FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital
+                         AND p.external_id IS NOT NULL) AS upstream_check_json,
                -- digital lines are excluded from the DIRECT side too: even a
                -- (mis)flagged digital+direct combination is not vendor
                -- shipping work and must not enter the direct queue or the

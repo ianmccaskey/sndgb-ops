@@ -34,6 +34,7 @@ type QueueRow = QueueOrder & {
   items_summary: string; item_count: string;
   remaining_summary: string; remaining_packable_qty: string; shipped_packable_qty: string;
   packable_json: { product_id: number; sku: string; remaining: number | string }[] | null;
+  upstream_check_json: { ext: string; effective: number | string; shipped: number | string }[] | null;
   direct_items_summary: string; direct_outstanding_summary: string;
   direct_outstanding_ids: string; all_direct: boolean; direct_outstanding: boolean;
   shipment_state: string | null; shipment_count: string;
@@ -211,14 +212,24 @@ export function FulfillmentPage() {
   const mismatchTitle = (r: QueueRow) => r.all_direct
     ? `The ordering app marks this order "${upstreamStatusOf(r)}" but its vendor-shipped items are not marked sent here — use "Vendor shipped" on the Direct ship tab`
     : `The ordering app marks this order "${upstreamStatusOf(r)}" but no shipment is fully recorded here — open Ship and record the carrier + tracking (manual entry)`;
-  // partially_shipped upstream with NO FINALIZED local shipment = at
-  // least one box exists that this app knows nothing about. Only
-  // finalized shipped quantity counts as consistent — a draft/packed box
-  // is different (unshipped) work and must NOT suppress the warning.
+  // partially_shipped upstream, checked PER ITEM against finalized local
+  // evidence: an upstream-shipped item whose local line has no finalized
+  // shipped quantity is an unrecorded box — an unrelated older local box
+  // (or a mere draft) on some OTHER line must not suppress the warning.
+  // Items that don't map to a local line fall back to the order-level
+  // finalized check.
   const partialMismatch = (r: QueueRow): boolean => {
-    const s = upstreamStatusOf(r);
-    if (!s || !upstreamPartial(s)) return false;
+    const info = upstreamInfoOf(r);
+    if (!info || !upstreamPartial(info.status)) return false;
     if (r.all_direct && !r.direct_outstanding) return false;
+    const locals = r.upstream_check_json || [];
+    const mapped = info.shipped.filter(u => locals.some(l => String(l.ext) === u.pid));
+    if (mapped.length > 0) {
+      return mapped.some(u => {
+        const l = locals.find(x => String(x.ext) === u.pid)!;
+        return Number(l.effective) > 0 && !(Number(l.shipped) > 0);
+      });
+    }
     return !(Number(r.shipped_packable_qty) > 0);
   };
   const partialTitle = (r: QueueRow) => r.all_direct
