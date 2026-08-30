@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import saveReceiveAddress from '@/actions/receiving/saveReceiveAddress';
 import setAddressActive from '@/actions/receiving/setAddressActive';
+import setDefaultShipFrom from '@/actions/receiving/setDefaultShipFrom';
 import setDestinationActive from '@/actions/receiving/setDestinationActive';
 import saveDestination from '@/actions/receiving/saveDestination';
 import { useApp } from '@/app/AppContext';
@@ -45,8 +46,9 @@ function AddressForm({ title, hint, onSave, msg }: {
   );
 }
 
-function AddressList({ title, items, onToggle }: {
+function AddressList({ title, items, onToggle, onMakeDefault }: {
   title: string; items: RxAddress[]; onToggle?: (a: RxAddress) => void;
+  onMakeDefault?: (a: RxAddress) => void;
 }) {
   return (
     <Card>
@@ -55,16 +57,31 @@ function AddressList({ title, items, onToggle }: {
         {items.map(a => (
           <div key={a.id} className="flex items-start justify-between gap-2 border-b last:border-0 pb-2">
             <div className="min-w-0 text-sm">
-              <div className="font-medium">{a.label}{!a.active && <span className="ml-1 text-xs font-normal text-muted-foreground">(archived)</span>}</div>
+              <div className="font-medium">
+                {a.label}
+                {a.is_default_ship_from && <span className="ml-1.5 rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The Ship dialog preselects this address">default ship-from</span>}
+                {!a.active && <span className="ml-1 text-xs font-normal text-muted-foreground">(archived)</span>}
+              </div>
               <div className="text-xs text-muted-foreground">
                 {a.name} · {a.street1}{a.street2 ? `, ${a.street2}` : ''}, {a.city}, {a.state} {a.zip}
               </div>
+              {onMakeDefault && !a.phone && a.active && (
+                <div className="text-[11px] text-amber-700">No phone — Shippo refuses label purchases without a ship-from phone; update this label above with one.</div>
+              )}
             </div>
-            {onToggle && (
-              <Button size="sm" variant="ghost" className="h-7 text-xs shrink-0" onClick={() => onToggle(a)}>
-                {a.active ? 'Archive' : 'Restore'}
-              </Button>
-            )}
+            <span className="flex gap-1 shrink-0">
+              {onMakeDefault && a.active && !a.is_default_ship_from && (
+                <Button size="sm" variant="ghost" className="h-7 text-xs" title="Make the Ship dialog preselect this address"
+                  onClick={() => onMakeDefault(a)}>
+                  Make default
+                </Button>
+              )}
+              {onToggle && (
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => onToggle(a)}>
+                  {a.active ? 'Archive' : 'Restore'}
+                </Button>
+              )}
+            </span>
           </div>
         ))}
         {items.length === 0 && <p className="text-xs text-muted-foreground">None yet.</p>}
@@ -80,6 +97,7 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
   const { userName } = useApp();
   const [doSaveAddress] = useMutateAction(saveReceiveAddress);
   const [doSetActive] = useMutateAction(setAddressActive);
+  const [doSetDefault] = useMutateAction(setDefaultShipFrom);
   const [doSetDestActive] = useMutateAction(setDestinationActive);
   const [doSaveDest] = useMutateAction(saveDestination);
   const [addrMsg, setAddrMsg] = useState('');
@@ -116,7 +134,17 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
         <AddressForm title="Add / update receive address" msg={addrMsg} onSave={save('address')}
           hint="Saving an existing label updates that address. Receive addresses are the ship-from on transfer labels — every field Shippo needs is required." />
         <AddressList title="Receive addresses" items={addresses}
-          onToggle={async a => { await doSetActive({ id: a.id, active: !a.active, actor: userName }); reloadAddresses(); }} />
+          onToggle={async a => { await doSetActive({ id: a.id, active: !a.active, actor: userName }); reloadAddresses(); }}
+          onMakeDefault={async a => {
+            setAddrMsg('');
+            try {
+              const res = await doSetDefault({ address_id: a.id, actor: userName }) as unknown[] | null;
+              if (!(Array.isArray(res) ? res.length > 0 : !!res)) setAddrMsg('Not set — the address must be active.');
+            } catch (e: unknown) {
+              setAddrMsg(e instanceof Error ? e.message : 'Failed to set the default ship-from');
+            }
+            reloadAddresses();
+          }} />
       </div>
       <div className="space-y-4">
         <AddressForm title="Add / update saved destination" msg={destMsg} onSave={save('dest')}

@@ -256,7 +256,14 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
   return {
     rates: all.filter(r => ALLOWED_PROVIDERS.includes((r.provider || '').toUpperCase())),
     allRateCount: all.length,
-    messages: (b?.messages || []).map(m => [m.source, m.code, m.text].filter(Boolean).join(' ')).filter(Boolean),
+    // messages about carriers we never show (DHL master account, Sendle /
+    // Deutsche Post / Canada Post "carrier account doesn't support ..."
+    // noise) are dropped; anything mentioning UPS/USPS, and any message
+    // that is NOT a carrier-account notice (address warnings etc.), stays
+    messages: (b?.messages || [])
+      .map(m => [m.source, m.code, m.text].filter(Boolean).join(' '))
+      .filter(Boolean)
+      .filter(m => /\b(ups|usps)\b/i.test(m) || !/(carrier|master) account/i.test(m)),
   };
 }
 

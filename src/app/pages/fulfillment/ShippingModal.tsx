@@ -513,6 +513,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(qtys), packable.length, weightTouched]);
 
+  // preselect the app-wide default ship-from until the operator picks one
+  useEffect(() => {
+    if (shipFrom) return;
+    const d = addresses.find(a => a.active && a.is_default_ship_from);
+    if (d) setShipFrom(String(d.id));
+  }, [addresses, shipFrom]);
   const fromRow = addresses.find(a => String(a.id) === shipFrom) || null;
   // row boundary: the transport re-types digit-only text (ZIPs, phones)
   // as JS numbers — Shippo 400s a numeric zip ("Invalid input type for
@@ -647,6 +653,14 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     try {
       const rate = ratesResult?.rates.find(r => r.object_id === pickedRate);
       if (!rate || !shipTo || !fromRow) { setPurchaseMsg('Pick a rate first.'); return; }
+      // Shippo refuses purchases whose address_from has no phone
+      // ("address_from.phone must not be empty") — refuse HERE, before a
+      // draft is created, so the fix is one field instead of a
+      // draft-recovery loop
+      if (!s(fromRow.phone).trim()) {
+        setPurchaseMsg(`"${fromRow.label}" has no phone — Shippo refuses label purchases without a ship-from phone. Add one on Receiving > Addresses (it goes to the carrier, not onto the label), then re-fetch rates.`);
+        return;
+      }
       // belt for races the invalidation effect can't win
       if (ratesResult!.sig !== quoteSig) {
         setPurchaseMsg('The shipment details changed after these rates were fetched — re-fetch rates.');
@@ -1069,9 +1083,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             <Select value={shipFrom} onValueChange={setShipFrom}>
               <SelectTrigger className="h-9 w-56"><SelectValue placeholder="Ship from…" /></SelectTrigger>
               <SelectContent>
-                {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}</SelectItem>)}
+                {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}{a.is_default_ship_from ? ' (default)' : ''}</SelectItem>)}
               </SelectContent>
             </Select>
+            {!manualMode && fromRow && !s(fromRow.phone).trim() && (
+              <span className="text-[11px] text-amber-700">No phone on "{fromRow.label}" — Shippo refuses purchases without one; add it on Receiving &gt; Addresses (carrier contact only, not printed on the label).</span>
+            )}
             {!manualMode && (
               <>
                 <Input placeholder="L in" value={dims.length} onChange={e => setDims(d => ({ ...d, length: e.target.value }))} className="h-9 w-20" />
