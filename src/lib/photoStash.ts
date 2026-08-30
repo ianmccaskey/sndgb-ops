@@ -95,7 +95,11 @@ const idbOp = <T,>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDB
 const memPhotos = new Map<string, StashedPhoto>();
 const memRemoved = new Set<string>();
 
-// one-time import of entries stashed by the old localStorage version
+// one-time import of entries stashed by the old localStorage versions.
+// Earlier stash shapes lacked key/actor/recovered — synthesize what is
+// missing rather than dropping what may be the only copy of a capture;
+// only rows with no image payload at all are skipped (warned, nothing
+// recoverable in them).
 let legacyImported = false;
 const importLegacy = async (): Promise<void> => {
   if (legacyImported) return;
@@ -103,10 +107,23 @@ const importLegacy = async (): Promise<void> => {
   try {
     const raw = localStorage.getItem(LEGACY_KEY);
     if (!raw) return;
-    const items = JSON.parse(raw) as StashedPhoto[];
+    const items = JSON.parse(raw) as Partial<StashedPhoto>[];
+    let skipped = 0;
     for (const i of items) {
-      if (i && typeof i.key === 'string') await idbOp('readwrite', s => s.put(i));
+      if (!i || typeof i.full !== 'string' || typeof i.thumb !== 'string' || typeof i.order_id !== 'number') { skipped += 1; continue; }
+      const entry: StashedPhoto = {
+        full: i.full,
+        thumb: i.thumb,
+        shipment_id: typeof i.shipment_id === 'number' ? i.shipment_id : null,
+        order_id: i.order_id,
+        ts: typeof i.ts === 'number' ? i.ts : Date.now(),
+        actor: typeof i.actor === 'string' ? i.actor : '', // '' -> callers fall back to the current user
+        key: typeof i.key === 'string' ? i.key : newStashKey(),
+        recovered: i.recovered === true,
+      };
+      await idbOp('readwrite', s => s.put(entry));
     }
+    if (skipped > 0) console.warn(`photoStash: skipped ${skipped} malformed legacy stash record(s) with no image payload`);
     localStorage.removeItem(LEGACY_KEY);
   } catch { /* leave the legacy key in place; retried next read */ legacyImported = false; }
 };
