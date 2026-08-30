@@ -733,7 +733,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         if (e instanceof ShippoPurchaseRefusedError && claimedAt) {
           await doClearLease({ shipment_id: draftId, claimed_at: claimedAt, actor: userName }).catch(() => null);
         }
-        setPurchaseMsg((e instanceof Error ? e.message : 'Purchase failed') + ' — the draft is saved below; retry or delete it there.');
+        // an address_from refusal is baked into the RATE (Shippo froze the
+        // ship-from at quote time) — retrying the same rate can never
+        // succeed, so say so instead of inviting a retry loop
+        setPurchaseMsg((e instanceof Error ? e.message : 'Purchase failed')
+          + (e instanceof ShippoPurchaseRefusedError && /address_from/i.test(e.message)
+            ? ' — this rate was quoted with the ship-from as it was then; fixing the address does NOT fix the rate. Delete the draft below (it verifies no label first) and re-fetch rates.'
+            : ' — the draft is saved below; retry or delete it there.'));
         reloadShipments();
         return;
       }
@@ -908,7 +914,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         setRowMsg(m => ({ ...m, [s.id]: `Label purchased (${result.transactionId}) but saving failed — ${result.labelUrl} — use Retry save.` }));
       }
     } catch (e: unknown) {
-      setRowMsg(m => ({ ...m, [s.id]: e instanceof Error ? e.message : 'Purchase failed' }));
+      const msg = e instanceof Error ? e.message : 'Purchase failed';
+      // same rate-is-frozen truth on the retry path: a draft quoted while
+      // the ship-from lacked a phone (or had any address_from problem)
+      // refuses FOREVER on its stored rate — deleting and re-quoting is
+      // the only fix, so the message must not suggest another retry
+      setRowMsg(m => ({
+        ...m,
+        [s.id]: msg + (e instanceof ShippoPurchaseRefusedError && /address_from/i.test(msg)
+          ? ' This draft\'s rate is frozen with the ship-from as it was quoted — fixing the address does NOT fix the rate. Delete this draft (Delete verifies no label first) and re-fetch rates.'
+          : ''),
+      }));
     } finally {
       purchaseInFlight.current = false;
     }

@@ -256,15 +256,18 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
   return {
     rates: all.filter(r => ALLOWED_PROVIDERS.includes((r.provider || '').toUpperCase())),
     allRateCount: all.length,
-    // messages naming a carrier we never show (DHL, Sendle, Deutsche
-    // Post, Canada Post, ...) are dropped; UPS/USPS messages and every
-    // message naming NO carrier (generic account errors, address
-    // warnings) stay — a genuine UPS/USPS account failure must surface
+    // UPS/USPS messages ALWAYS stay (account failures included). For the
+    // rest, drop other-carrier noise two ways: structurally — Shippo's
+    // own account tokens (shippo_<carrier>_account / <CARRIER>_SHIPPO_TIER)
+    // for any non-UPS/USPS carrier, which catches carriers we never
+    // enumerated — plus a name blocklist for prose mentions. A message
+    // naming no carrier at all (generic errors, address warnings) stays.
     messages: (b?.messages || [])
       .filter(m => {
         const joined = [m.source, m.code, m.text].filter(Boolean).join(' ');
         if (/\b(ups|usps)\b/i.test(joined)) return true;
-        return !/dhl|sendle|deutsche|canada|couriersplease|fastway|globegistics|asendia|hermes|parcelforce|purolator|canpar|ontrac|lasership|aramex|tnt|royal ?mail|gls\b/i.test(joined);
+        if (/shippo_(?!ups\b|usps\b)[a-z0-9_]+_(account|master)|[A-Za-z0-9]+_SHIPPO_TIER/i.test(joined)) return false;
+        return !/dhl|fedex|sendle|deutsche|canada|couriersplease|fastway|globegistics|asendia|hermes|evri|parcelforce|purolator|canpar|ontrac|lasership|aramex|tnt|royal ?mail|\bgls\b|\bdpd\b|australia ?post|chronopost|colissimo|poste\b/i.test(joined);
       })
       .map(m => [m.source, m.code, m.text].filter(Boolean).join(' '))
       .filter(Boolean),
