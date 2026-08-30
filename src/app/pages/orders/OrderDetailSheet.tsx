@@ -20,7 +20,7 @@ import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
 import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
 import getShipmentPhoto from '@/actions/fulfillment/getShipmentPhoto';
 import addShipmentPhoto from '@/actions/fulfillment/addShipmentPhoto';
-import { readStash, stashRemove, stashUpsert } from '@/lib/photoStash';
+import { readStash, stashGet, stashRemove, stashUpsert } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
@@ -135,7 +135,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [stranded, setStranded] = useState<StashedPhoto[]>([]);
   const [strandedMsg, setStrandedMsg] = useState('');
   const refreshStranded = async () => {
-    const { photos, readOk } = await readStash();
+    if (orderId == null) { setStranded([]); return; }
+    const { photos, readOk } = await readStash(orderId);
     // only TRULY stranded entries belong here: bound failed uploads and
     // explicitly recovered photos. A fresh unbound pending capture is the
     // ship dialog's domain (it rides the next shipment created THERE) —
@@ -147,6 +148,16 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   useEffect(() => { if (open) { setStrandedMsg(''); refreshStranded(); } // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, orderId]);
   const retryStranded = async (s: StashedPhoto) => {
+    // re-read first: another tab may have discarded, attached, or
+    // reclassified this entry since the list rendered — never act on a
+    // stale snapshot
+    const cur = await stashGet(s.key);
+    if (!cur) { setStrandedMsg('This photo was already handled (attached or discarded) in another tab.'); refreshStranded(); return; }
+    if (cur.shipment_id !== s.shipment_id || !!cur.recovered !== !!s.recovered) {
+      setStrandedMsg('This photo changed in another tab — the list has been refreshed; try again.');
+      refreshStranded();
+      return;
+    }
     const wasBound = s.shipment_id != null;
     let target = s.shipment_id;
     if (target == null) {

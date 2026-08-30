@@ -18,7 +18,7 @@ import deleteShipmentPhoto from '@/actions/fulfillment/deleteShipmentPhoto';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { compressImageToDataUrl } from '@/lib/imageCapture';
 import type { CapturedPhoto } from '@/lib/imageCapture';
-import { newStashKey, readStash, stashUpsert, stashRemove } from '@/lib/photoStash';
+import { newStashKey, readStash, stashGet, stashUpsert, stashRemove } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
 import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
@@ -166,7 +166,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // explicit operator removal. ----
   const [pendingPhotos, setPendingPhotos] = useState<StashedPhoto[]>([]);
   const refreshPendingView = async () => {
-    const { photos, readOk } = await readStash();
+    const { photos, readOk } = await readStash(order.id);
     setPendingPhotos(photos.filter(s => s.order_id === order.id && s.shipment_id === null));
     if (!readOk) setPhotoMsg('Warning: saved photos on this device could not be read — the pending list may be incomplete. Reload the page to retry.');
   };
@@ -198,13 +198,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (stashRetried.current) return;
     stashRetried.current = true;
     (async () => {
-      const { photos: all, readOk } = await readStash();
-      setPendingPhotos(all.filter(s => s.order_id === order.id && s.shipment_id === null));
+      const { photos: all, readOk } = await readStash(order.id);
+      setPendingPhotos(all.filter(s => s.shipment_id === null));
       if (!readOk) setPhotoMsg('Warning: saved photos on this device could not be read — pending photos and failed-upload retries may be missing. Reload the page to retry.');
-      const bound = all.filter(s => s.order_id === order.id && s.shipment_id !== null);
+      const bound = all.filter(s => s.shipment_id !== null);
       if (bound.length === 0) return;
       let recovered = 0, moved = 0, kept = 0, allDurable = true;
       for (const s of bound) {
+        // re-read the entry first: another tab may have discarded or
+        // reclassified it since the snapshot — never override that
+        const cur = await stashGet(s.key);
+        if (!cur || cur.shipment_id !== s.shipment_id) continue;
         // replay=true: the server refuses to resurrect an image the
         // operator explicitly deleted from that shipment
         const r = await tryUpload(s.shipment_id as number, s, s.actor || userName, true);
@@ -297,16 +301,20 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const uploadPendingPhotos = async (shipmentId: number) => {
     // recovered entries are excluded: evidence never migrates to a
     // different box without the operator's explicit per-photo "use"
-    const { photos: stashPhotos, readOk: pendReadOk } = await readStash();
-    const mine = stashPhotos.filter(s => s.order_id === order.id && s.shipment_id === null && !s.recovered);
+    const { photos: stashPhotos, readOk: pendReadOk } = await readStash(order.id);
+    const mine = stashPhotos.filter(s => s.shipment_id === null && !s.recovered);
     const readWarning = pendReadOk ? '' : 'Warning: saved photos on this device could not be read — some pending photos may not have attached; reopen this dialog to retry.';
     if (mine.length === 0) { if (readWarning) setPhotoMsg(readWarning); return; }
     let refused = 0, errored = 0, attached = 0, allDurable = true;
     for (const s of mine) {
-      // bind FIRST, synchronously: if the insert commits but the tab dies
-      // before we hear back, the entry replays against THIS shipment on
-      // reopen (deduped server-side) instead of riding a later box as an
-      // ordinary pending photo — cross-shipment migration is impossible
+      // re-read first: another tab may have discarded, attached, or
+      // reclassified this entry since the snapshot — skip if so
+      const cur = await stashGet(s.key);
+      if (!cur || cur.shipment_id !== null || cur.recovered) continue;
+      // bind FIRST: if the insert commits but the tab dies before we hear
+      // back, the entry replays against THIS shipment on reopen (deduped
+      // server-side) instead of riding a later box as an ordinary pending
+      // photo — cross-shipment migration is impossible
       if (!(await stashUpsert({ ...s, shipment_id: shipmentId }))) allDurable = false;
       const r = await tryUpload(shipmentId, s, s.actor || userName);
       if (r === 'ok') {

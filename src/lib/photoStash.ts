@@ -52,6 +52,7 @@ export const newStashKey = () => `${Date.now()}-${Math.random().toString(36).sli
 
 const DB_NAME = 'sndgb-photo-stash';
 const STORE = 'photos';
+const ORDER_INDEX = 'by_order';
 const LEGACY_KEY = 'sndgb.pendingShipPhotos';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -59,9 +60,15 @@ const openDb = (): Promise<IDBDatabase> => {
   if (!dbPromise) {
     dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
       try {
-        const req = indexedDB.open(DB_NAME, 1);
+        const req = indexedDB.open(DB_NAME, 2);
         req.onupgradeneeded = () => {
-          if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE, { keyPath: 'key' });
+          const db = req.result;
+          const store = db.objectStoreNames.contains(STORE)
+            ? req.transaction!.objectStore(STORE)
+            : db.createObjectStore(STORE, { keyPath: 'key' });
+          // order-scoped reads: the hot path must scale with the order
+          // being worked, never with the device's total photo backlog
+          if (!store.indexNames.contains(ORDER_INDEX)) store.createIndex(ORDER_INDEX, 'order_id');
         };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
@@ -151,17 +158,36 @@ const importLegacy = async (): Promise<void> => {
 
 // readOk=false means the DURABLE store could not be read: photos saved
 // earlier may exist but be invisible. Callers must warn rather than
-// present an empty recovery UI as "no saved photos".
+// present an empty recovery UI as "no saved photos". Reads are
+// ORDER-SCOPED via the by_order index — only the active order's rows
+// (each holding a multi-hundred-KB full image) ever materialize.
 export type StashReadResult = { photos: StashedPhoto[]; readOk: boolean };
-export const readStash = async (): Promise<StashReadResult> => {
+export const readStash = async (orderId: number): Promise<StashReadResult> => {
   await importLegacy();
   let persisted: StashedPhoto[] = [];
   let readOk = true;
-  try { persisted = await idbOp('readonly', s => s.getAll() as IDBRequest<StashedPhoto[]>); } catch { persisted = []; readOk = false; }
+  try {
+    persisted = await idbOp('readonly', s =>
+      s.index(ORDER_INDEX).getAll(IDBKeyRange.only(orderId)) as IDBRequest<StashedPhoto[]>);
+  } catch { persisted = []; readOk = false; }
   const merged = new Map<string, StashedPhoto>();
   for (const p of persisted) if (!memRemoved.has(p.key)) merged.set(p.key, p);
-  for (const [k, v] of memPhotos) merged.set(k, v);
+  for (const [k, v] of memPhotos) if (v.order_id === orderId) merged.set(k, v);
   return { photos: [...merged.values()], readOk };
+};
+
+// Re-read ONE entry by key — the guard callers run immediately before
+// binding/uploading, so a stale snapshot cannot override a newer
+// discard or reclassification made in another tab. null = the entry no
+// longer exists (or the durable store cannot confirm it) — abort.
+export const stashGet = async (key: string): Promise<StashedPhoto | null> => {
+  if (memRemoved.has(key)) return null;
+  const mem = memPhotos.get(key);
+  if (mem) return mem;
+  try {
+    const row = await idbOp('readonly', s => s.get(key) as IDBRequest<StashedPhoto | undefined>);
+    return row ?? null;
+  } catch { return null; }
 };
 
 // true = durably persisted; false = page-lifetime memory only
