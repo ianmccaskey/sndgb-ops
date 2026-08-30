@@ -90,6 +90,8 @@ type ItemRow = {
   // the label WE bought for this direct line (joined from the transfer
   // log through transfers.direct_order_item_id — never a copied value)
   direct_carrier: string | null; direct_tracking_number: string | null;
+  // the VENDOR's label, entered when marking the line vendor-shipped
+  direct_vendor_carrier: string | null; direct_vendor_tracking: string | null;
 };
 type PaymentRow = {
   id: number; method: string; tx_hash: string | null; receipt_ref: string | null;
@@ -1232,7 +1234,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     setSaving(true); setCompMsg('');
     try {
       const res = await doMarkDirectFulfilled({
-        order_id: o.id, item_id: String(it.id), expected_ids: '', fulfilled, actor: userName,
+        order_id: o.id, item_id: String(it.id), expected_ids: '', fulfilled,
+        vendor_carrier: '', vendor_tracking: '', actor: userName,
       }) as unknown[] | null;
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Nothing to change on that line.');
       reloadItems();
@@ -1531,6 +1534,11 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         {it.direct_tracking_number && (
                           <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap" title="Tracking from the transfer label bought for this line">
                             {(it.direct_carrier || '').toUpperCase()} {it.direct_tracking_number}
+                          </span>
+                        )}
+                        {!it.direct_tracking_number && it.direct_vendor_tracking && (
+                          <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap" title="The vendor's tracking, entered when this line was marked vendor shipped">
+                            {(it.direct_vendor_carrier || '').toUpperCase()} {String(it.direct_vendor_tracking)}
                           </span>
                         )}
                       </span>

@@ -6,12 +6,15 @@ import { action } from '@uibakery/data';
  * outstanding. Three targeting modes:
  *  - item_id: exactly ONE line (order-sheet control) — partial vendor
  *    shipments, e.g. two direct SKUs from different vendors.
- *  - fulfilled=true + expected_ids (CSV): the bulk queue button. ANCHORED to
- *    the ids whose summary the operator confirmed: only those rows stamp,
- *    and if the order's outstanding set changed meanwhile (an import added
- *    or reset a direct line) the whole call refuses (zero rows) so the
- *    operator re-confirms against fresh data — the same stale-confirmation
- *    anchor pattern as the vendor over-buy override.
+ *  - fulfilled=true + expected_ids (CSV): the queue dialog's CHOSEN lines
+ *    (a subset is fine — the operator picks which lines the vendor's box
+ *    covered). ANCHORED all-or-nothing: every chosen id must still be an
+ *    outstanding direct line; if ANY changed meanwhile (import reset,
+ *    removal, already stamped elsewhere) the whole call refuses (zero
+ *    rows) so the operator re-confirms — one shared tracking must never
+ *    stamp onto half its lines. Optional vendor_carrier/vendor_tracking
+ *    record the VENDOR's label on the stamped lines (canonical compact
+ *    tracking, lowercase carrier); undo clears them.
  *  - fulfilled=false + blank item_id: undo across the order's fulfilled
  *    lines. Deliberately un-anchored — undoing only ADDS work back to the
  *    queue, the safe direction.
@@ -30,7 +33,9 @@ function markOrderDirectFulfilled() {
       ), inp AS (
         SELECT NULLIF({{params.item_id}}::text, '')::bigint AS item_id,
                string_to_array(NULLIF({{params.expected_ids}}::text, ''), ',')::bigint[] AS exp_ids,
-               {{params.fulfilled}}::boolean AS fulfilled
+               {{params.fulfilled}}::boolean AS fulfilled,
+               NULLIF(LOWER(TRIM({{params.vendor_carrier}}::text)), '') AS v_carrier,
+               NULLIF(regexp_replace(UPPER(TRIM({{params.vendor_tracking}}::text)), '\\s', '', 'g'), '') AS v_tracking
         FROM lck
       ), upd AS (
         UPDATE order_items oi SET
@@ -39,7 +44,11 @@ function markOrderDirectFulfilled() {
           -- releases whichever transfer owned it — either way this
           -- pointer clears, so the order sheet never resurrects an old
           -- label's tracking through a manual mark
-          direct_fulfilled_transfer_id = NULL
+          direct_fulfilled_transfer_id = NULL,
+          -- the vendor's label: recorded on stamp (when given), cleared on
+          -- undo — an unstamped line never carries vendor tracking
+          direct_vendor_carrier = CASE WHEN inp.fulfilled THEN inp.v_carrier ELSE NULL END,
+          direct_vendor_tracking = CASE WHEN inp.fulfilled THEN inp.v_tracking ELSE NULL END
         FROM inp, orders o
         WHERE oi.order_id = {{params.order_id}}::bigint
           AND o.id = oi.order_id
@@ -55,19 +64,25 @@ function markOrderDirectFulfilled() {
           AND (
             -- one specific line
             (inp.item_id IS NOT NULL AND oi.id = inp.item_id)
-            -- bulk fulfill: only the confirmed ids...
+            -- chosen-lines fulfill: only the confirmed ids...
             OR (inp.item_id IS NULL AND inp.fulfilled
                 AND inp.exp_ids IS NOT NULL
                 AND oi.id = ANY(inp.exp_ids)
-                -- ...and only while the confirmed set IS the outstanding set —
-                -- a line that appeared or reset since the confirmation makes
-                -- the whole call refuse rather than stamp unseen work
+                -- ...and only while EVERY confirmed id is still an
+                -- outstanding direct line — a chosen line that reset,
+                -- vanished, or got stamped elsewhere refuses the WHOLE
+                -- call (all-or-nothing: one shared tracking must never
+                -- stamp onto half its lines). A subset of the order's
+                -- outstanding lines is legitimate — unchosen lines simply
+                -- stay outstanding.
                 AND NOT EXISTS (
-                  SELECT 1 FROM order_items oj
-                  WHERE oj.order_id = {{params.order_id}}::bigint
-                    AND oj.direct_ship AND oj.direct_fulfilled_at IS NULL
-                    AND oj.removed_at IS NULL
-                    AND NOT (oj.id = ANY(inp.exp_ids))
+                  SELECT 1 FROM unnest(inp.exp_ids) eid
+                  LEFT JOIN order_items ok
+                    ON ok.id = eid
+                   AND ok.order_id = {{params.order_id}}::bigint
+                   AND ok.direct_ship AND ok.direct_fulfilled_at IS NULL
+                   AND ok.removed_at IS NULL
+                  WHERE ok.id IS NULL
                 ))
             -- bulk undo: every fulfilled line (adds work back — safe)
             OR (inp.item_id IS NULL AND NOT inp.fulfilled)
@@ -80,7 +95,9 @@ function markOrderDirectFulfilled() {
              {{params.actor}}::text,
              jsonb_build_object('order_id', {{params.order_id}}::bigint,
                                 'item_ids', (SELECT jsonb_agg(upd.id) FROM upd),
-                                'fulfilled', {{params.fulfilled}}::boolean)
+                                'fulfilled', {{params.fulfilled}}::boolean,
+                                'vendor_carrier', (SELECT inp.v_carrier FROM inp),
+                                'vendor_tracking', (SELECT inp.v_tracking FROM inp))
       WHERE EXISTS (SELECT 1 FROM upd)
       RETURNING row_pk AS id
     `,

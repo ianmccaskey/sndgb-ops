@@ -399,18 +399,60 @@ export function FulfillmentPage() {
     setFilterIds(s => { const n = new Set(s); if (n.has(pid)) n.delete(pid); else n.add(pid); return n; });
   };
 
+  // ---- vendor-shipped dialog: pick WHICH direct lines the vendor's box
+  // covered (subset allowed) and optionally record the vendor's carrier +
+  // tracking on them; the stamp is anchored all-or-nothing to the chosen
+  // ids so one shared tracking never lands on half its lines ----
+  const [directing, setDirecting] = useState<QueueRow | null>(null);
+  const [rawDirectLines, directLinesLoading] = useLoadAction(getPackableItems,
+    ['direct', directing?.id ?? 0], { order_id: directing?.id ?? 0 }, { enabled: !!directing });
+  type DirectLine = { order_item_id: number; sku_code: string; effective_qty: string; direct_ship: boolean; direct_fulfilled_at: string | null };
+  const directLines = useMemo(() =>
+    rows<DirectLine>(rawDirectLines).filter(l => l.direct_ship && !l.direct_fulfilled_at),
+    [rawDirectLines]);
+  const [directChecked, setDirectChecked] = useState<Set<number>>(new Set());
+  const [dvCarrier, setDvCarrier] = useState('');
+  const [dvTracking, setDvTracking] = useState('');
+  const [directBusy, setDirectBusy] = useState(false);
+  const [directMsg, setDirectMsg] = useState('');
+  useEffect(() => {
+    // fresh dialog: everything checked, fields cleared
+    setDirectChecked(new Set(directLines.map(l => Number(l.order_item_id))));
+    setDvCarrier(''); setDvTracking(''); setDirectMsg('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directing?.id, JSON.stringify(directLines.map(l => l.order_item_id))]);
+  const runVendorShipped = async () => {
+    if (!directing || directChecked.size === 0) return;
+    if (dvTracking.trim() && !dvCarrier.trim()) { setDirectMsg('Enter the carrier for that tracking number (or clear it).'); return; }
+    setDirectBusy(true); setDirectMsg('');
+    try {
+      const res = await doMarkDirect({
+        order_id: directing.id, item_id: '',
+        expected_ids: Array.from(directChecked).sort((a, b) => a - b).join(','),
+        fulfilled: true, vendor_carrier: dvCarrier, vendor_tracking: dvTracking, actor: userName,
+      }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+        setDirectMsg('Not marked — a chosen line changed since this list loaded (reset, removed, or stamped in another session). Close and re-open.');
+        return;
+      }
+      setDirecting(null);
+      reload();
+    } catch (e: unknown) {
+      setDirectMsg(e instanceof Error ? e.message : 'Failed to mark vendor shipped');
+    } finally {
+      setDirectBusy(false);
+    }
+  };
+
   const markDirect = async (r: QueueRow, fulfilled: boolean) => {
-    if (fulfilled && !window.confirm(`Mark the vendor-shipped items of ${r.order_number} as sent?\n\n${r.direct_outstanding_summary}`)) return;
+    if (fulfilled) { setDirecting(r); return; }
     setSaving(true); setError('');
     try {
-      // the confirmed ids travel with the call: the stamp is anchored to
-      // exactly what the dialog listed, and refuses if lines changed since
       const res = await doMarkDirect({
-        order_id: r.id, item_id: '',
-        expected_ids: fulfilled ? r.direct_outstanding_ids : '',
-        fulfilled, actor: userName,
+        order_id: r.id, item_id: '', expected_ids: '',
+        fulfilled, vendor_carrier: '', vendor_tracking: '', actor: userName,
       }) as unknown[] | null;
-      if (fulfilled && !(Array.isArray(res) ? res.length > 0 : !!res)) {
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
         setError(`${r.order_number}'s direct lines changed since this list loaded — list refreshed, please check and try again.`);
       }
       reload();
@@ -770,6 +812,49 @@ export function FulfillmentPage() {
           </TableBody>
         </Table>
       </div>
+
+      {/* vendor-shipped dialog: choose which direct lines the vendor's
+          box covered + optionally record the vendor's tracking on them */}
+      <Dialog open={!!directing} onOpenChange={o => { if (!o) setDirecting(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Vendor shipped — {directing?.order_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="text-xs text-muted-foreground">
+              Tick the lines this vendor shipment covered — unticked lines stay in the Direct ship tab. The tracking (optional) is the
+              vendor's label and is recorded on every ticked line; ship separate boxes one at a time, each with its own tracking.
+            </p>
+            {directLinesLoading && <p className="text-xs text-muted-foreground">Loading lines…</p>}
+            {!directLinesLoading && directLines.length === 0 && (
+              <p className="text-xs text-amber-700">No outstanding direct lines — they may have been marked in another session.</p>
+            )}
+            {directLines.length > 0 && (
+              <div className="border rounded-lg divide-y">
+                {directLines.map(l => (
+                  <label key={l.order_item_id} className="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer">
+                    <input type="checkbox" checked={directChecked.has(Number(l.order_item_id))}
+                      onChange={e => setDirectChecked(s => { const n = new Set(s); if (e.target.checked) n.add(Number(l.order_item_id)); else n.delete(Number(l.order_item_id)); return n; })} />
+                    <span className="font-medium">{l.sku_code}</span>
+                    <span className="text-muted-foreground">× {fmtNum(Number(l.effective_qty))}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2 items-center">
+              <Input placeholder="Carrier (optional)" value={dvCarrier} onChange={e => setDvCarrier(e.target.value)} className="h-8 w-36" />
+              <Input placeholder="Tracking (optional)" value={dvTracking} onChange={e => setDvTracking(e.target.value)} className="h-8 flex-1 min-w-40 font-mono" />
+            </div>
+            {directMsg && <p className="text-xs text-red-600">{directMsg}</p>}
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDirecting(null)}>Cancel</Button>
+              <Button size="sm" disabled={directBusy || directLinesLoading || directChecked.size === 0} onClick={runVendorShipped}>
+                {directBusy ? 'Marking…' : `Mark ${directChecked.size} line${directChecked.size === 1 ? '' : 's'} vendor shipped`}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* adopt-upstream dialog: turns the ordering app's shipped facts
           into a local finalized shipment (no tracking) so those
