@@ -524,6 +524,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [insuredValue, setInsuredValue] = useState('');
   const [insuredTouched, setInsuredTouched] = useState(false);
   const calcInsuredValue = () => {
+    // house rule (Ian): coverage = $100 per $1 of insurance fee the
+    // customer paid ($7 fee -> $700 insured). Orders with no fee (manual
+    // tick) fall back to this box's contents value at order prices.
+    if (insuranceFee > 0) return (Math.round(insuranceFee * 100 * 100) / 100).toFixed(2);
     const v = chosen.reduce((s, c) => s + Number(c.qty || 0) * Number(c.line.unit_price_usd || 0), 0);
     return v > 0 ? (Math.round(v * 100) / 100).toFixed(2) : '';
   };
@@ -1164,7 +1168,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   <>
                     <Input placeholder="Value $" value={insuredValue}
                       onChange={e => { setInsuredValue(e.target.value); setInsuredTouched(true); }} className="h-9 w-24"
-                      title="Declared value of THIS box's contents — the premium is billed by Shippo with the label" />
+                      title="Insured (declared) value — $100 of coverage per $1 of insurance the customer paid; the premium is billed by Shippo with the label" />
                     {insuredTouched && (
                       <button className="text-xs text-muted-foreground underline" onClick={() => { setInsuredTouched(false); }}>recalc</button>
                     )}
