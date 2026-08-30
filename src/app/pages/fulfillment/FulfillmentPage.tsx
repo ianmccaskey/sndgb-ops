@@ -9,7 +9,7 @@ import listProducts from '@/actions/products/listProducts';
 import { useApp } from '@/app/AppContext';
 import { useShippoHttp } from '@/lib/useShippoHttp';
 import { isTestKey } from '@/lib/shippo';
-import { B44_DEFAULT_APP_ID, listB44Orders } from '@/lib/base44';
+import { B44_DEFAULT_APP_ID, getB44Order, listB44Orders } from '@/lib/base44';
 import { rows } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -225,9 +225,16 @@ export function FulfillmentPage() {
     const locals = r.upstream_check_json || [];
     const mapped = info.shipped.filter(u => locals.some(l => String(l.ext) === u.pid));
     if (mapped.length > 0) {
+      // quantity-deficit aware: local finalized shipped must cover the
+      // upstream-shipped quantity (capped at local effective); unusable
+      // upstream quantities fall back to the any-coverage check
       return mapped.some(u => {
         const l = locals.find(x => String(x.ext) === u.pid)!;
-        return Number(l.effective) > 0 && !(Number(l.shipped) > 0);
+        const eff = Number(l.effective);
+        if (!(eff > 0)) return false;
+        const shipped = Number(l.shipped);
+        const target = Number.isFinite(u.qty) && u.qty > 0 ? Math.min(u.qty, eff) : null;
+        return target != null ? shipped < target : !(shipped > 0);
       });
     }
     return !(Number(r.shipped_packable_qty) > 0);
@@ -292,6 +299,26 @@ export function FulfillmentPage() {
     if (undatedCount > 0 && !adoptConfirmed) return;
     setAdoptBusy(true); setAdoptMsg('');
     try {
+      // confirm-time freshness: re-read THIS upstream order and require
+      // the facts the adoption set was built from to still hold — the
+      // other admin may have corrected the ordering app since the check
+      const fresh = await getB44Order(cfg, String(adopting.external_id || ''));
+      const freshStatus = String(fresh.status ?? '');
+      const freshShipped = (Array.isArray(fresh.items) ? fresh.items : [])
+        .filter(it => it.shipped_date != null && String(it.shipped_date) !== '' && it.product_id != null)
+        .map(it => ({ pid: String(it.product_id), date: String(it.shipped_date), qty: Number(it.quantity ?? 0) }));
+      const stale = adoptLines.some(l => {
+        if (l.date == null) return !upstreamShippedLike(freshStatus);
+        const entries = freshShipped.filter(x => x.pid === String(l.product_external_id));
+        const dates = Array.from(new Set(entries.map(e => e.date)));
+        if (dates.length !== 1 || dates[0] !== l.date) return true;
+        const upQty = entries.reduce((s, e) => s + (Number.isFinite(e.qty) && e.qty > 0 ? e.qty : 0), 0);
+        return upQty + 1e-9 < Number(l.adopt_qty);
+      });
+      if (stale) {
+        setAdoptMsg('The ordering app changed since the check ran — nothing was recorded. Close, run "Check ordering app" again, and re-open.');
+        return;
+      }
       // one shipment row PER upstream ship date, each carrying its true
       // shipped_at; undated lines (order-level evidence) become their own
       // row stamped now() with the note saying the date is unknown

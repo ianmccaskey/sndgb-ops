@@ -8,7 +8,6 @@ import listDestinations from '@/actions/receiving/listDestinations';
 import listProducts from '@/actions/products/listProducts';
 import listShippingVendors from '@/actions/receiving/listShippingVendors';
 import updatePackageTracking from '@/actions/receiving/updatePackageTracking';
-import markPackageReceived from '@/actions/receiving/markPackageReceived';
 import { trackPackage, isTestKey } from '@/lib/shippo';
 import { useShippoHttp } from '@/lib/useShippoHttp';
 import { useApp } from '@/app/AppContext';
@@ -26,13 +25,14 @@ import type { RxAddress, Pkg, InvRow, TransferRow, CatalogProduct, VendorRow } f
  * Receiving: what's coming, where it is, and whether it was transferred.
  * Entirely OUTSIDE the money subsystem — nothing here touches P&L, recon,
  * or vendor ledgers. Shippo calls run browser-side (CORS-verified) with
- * the key from Settings; TEST keys simulate tracking, so auto-receive is
- * suppressed in test mode (fake DELIVERED must never move real inventory).
+ * the key from Settings. Tracking refreshes NEVER receive a package:
+ * carrier-DELIVERED means it is on the porch; receiving = the operator
+ * opened it and confirmed contents (explicit Receive / label scan).
  * Shared types + display helpers live in ./shared.ts.
  */
 
 export function ReceivingPage() {
-  const { userName, settings, groupBuyId } = useApp();
+  const { settings, groupBuyId } = useApp();
   const shippoKey = settings.shippo_api_key || '';
   const testMode = shippoKey !== '' && isTestKey(shippoKey);
   const shippoHttp = useShippoHttp();
@@ -74,7 +74,6 @@ export function ReceivingPage() {
   const vendors = rows<VendorRow>(rawVendors);
 
   const [doUpdateTracking] = useMutateAction(updatePackageTracking);
-  const [doMarkReceived] = useMutateAction(markPackageReceived);
 
   // ---- tracking refresh engine (shared by per-package and refresh-all) ----
   const [refreshingIds, setRefreshingIds] = useState<Set<number>>(new Set());
@@ -98,18 +97,10 @@ export function ReceivingPage() {
       if (!(Array.isArray(wrote) ? wrote.length > 0 : !!wrote)) {
         return 'This package\'s carrier/tracking was corrected in another session — refresh skipped; reload the page.';
       }
-      // auto-receive ONLY on a live key: test tokens simulate DELIVERED and
-      // must never move real inventory. Checked against BOTH the fresh fetch
-      // and the row's prior status, so a package stuck DELIVERED-but-
-      // unreceived (a previously failed auto-receive) recovers on any
-      // refresh instead of being stranded. A manual un-receive sets
-      // auto_receive_suppressed so it STICKS — the action also refuses
-      // 'auto' mode DB-side while suppressed (this check just avoids the
-      // pointless call).
-      if (!testMode && !p.received_at && !p.auto_receive_suppressed && (r.status === 'DELIVERED' || p.tracking_status === 'DELIVERED')) {
-        await doMarkReceived({ package_id: p.id, carrier: p.carrier, tracking_number: p.tracking_number, actor: userName, mode: 'auto' });
-        reloadInventory();
-      }
+      // NO auto-receive (removed 2026-08-30 per Ian): carrier-DELIVERED
+      // means the box is on the porch, not that its contents were opened
+      // and confirmed — receiving is ALWAYS the explicit Receive action
+      // (or label scan). The refresh only updates the tracking display.
       return r.error;
     } catch (e: unknown) {
       return e instanceof Error ? e.message : 'Refresh failed';
@@ -120,8 +111,8 @@ export function ReceivingPage() {
 
   const refreshAll = async () => {
     // skip only truly terminal rows (received). DELIVERED-but-unreceived
-    // stays IN the set: it means an earlier auto-receive failed (or test
-    // mode), and skipping it would strand inventory understated forever.
+    // stays IN the set — the operator has not opened/confirmed it yet,
+    // and later tracking events (returns, exceptions) still matter.
     const targets = packages.filter(p => p.committed_at && !p.received_at);
     if (targets.length === 0) { setRefreshAllProgress('Nothing to refresh.'); return; }
     // a non-null return is a package that did NOT get a clean refresh
@@ -153,7 +144,7 @@ export function ReceivingPage() {
         </p>
         {testMode && (
           <p className="text-xs rounded border border-amber-300 bg-amber-50 text-amber-900 p-2 mt-2">
-            Shippo TEST MODE — tracking data is simulated and auto-receive is OFF. Labels purchased are test labels.
+            Shippo TEST MODE — tracking data is simulated. Labels purchased are test labels.
           </p>
         )}
         {!shippoKey && (
