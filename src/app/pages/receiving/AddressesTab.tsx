@@ -134,7 +134,12 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
         <AddressForm title="Add / update receive address" msg={addrMsg} onSave={save('address')}
           hint="Saving an existing label updates that address. Receive addresses are the ship-from on transfer labels — every field Shippo needs is required." />
         <AddressList title="Receive addresses" items={addresses}
-          onToggle={async a => { await doSetActive({ id: a.id, active: !a.active, actor: userName }); reloadAddresses(); }}
+          onToggle={async a => {
+            if (a.active && a.is_default_ship_from
+              && !window.confirm(`"${a.label}" is the default ship-from — archiving releases the default, and the Ship dialog will stop preselecting an address until you pick a new one. Archive anyway?`)) return;
+            await doSetActive({ id: a.id, active: !a.active, actor: userName });
+            reloadAddresses();
+          }}
           onMakeDefault={async a => {
             setAddrMsg('');
             try {

@@ -14,15 +14,25 @@ function setDefaultShipFrom() {
       WITH inp AS (
         SELECT NULLIF({{params.address_id}}::text, '')::bigint AS aid, {{params.actor}}::text AS actor
       ),
+      -- the target is proven eligible (exists + active, row-locked) BEFORE
+      -- anything is cleared: an archived/stale/invalid target refuses with
+      -- the existing default untouched
+      tgt AS (
+        SELECT ra.id, ra.label
+        FROM receive_addresses ra, inp
+        WHERE ra.id = inp.aid AND ra.active
+        FOR UPDATE OF ra
+      ),
       clr AS (
         UPDATE receive_addresses SET is_default_ship_from = false
-        WHERE is_default_ship_from AND id <> (SELECT aid FROM inp)
+        WHERE is_default_ship_from AND id <> (SELECT id FROM tgt)
+          AND EXISTS (SELECT 1 FROM tgt)
         RETURNING id
       ),
       setr AS (
         UPDATE receive_addresses ra SET is_default_ship_from = true
-        FROM inp
-        WHERE ra.id = inp.aid AND ra.active
+        FROM tgt
+        WHERE ra.id = tgt.id
         RETURNING ra.id, ra.label
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
