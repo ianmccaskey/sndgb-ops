@@ -1101,6 +1101,14 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {ph.recovered && (
                       <button className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-amber-100 text-amber-900 border border-amber-400 px-1.5 text-[9px] leading-tight" title="Allow this photo to attach to the next shipment you create"
                         onClick={async () => {
+                          // a landing already snapshotted its pending set —
+                          // flipping a recovered photo back to ordinary
+                          // pending NOW would miss that box and ride the
+                          // next one instead
+                          if (purchaseInFlight.current || manualBusy || landingRef.current || remoteLandingActive(order.id)) {
+                            setPhotoMsg('A shipment is being created right now — wait for it to finish, then press "use" (or attach the photo to the new shipment row directly).');
+                            return;
+                          }
                           const res = await stashMutateIf(ph.key, { shipment_id: null, recovered: true }, { ...ph, recovered: false });
                           await refreshPendingView();
                           if (!res.ok) setPhotoMsg('This photo could not be updated (it changed in another tab, or this device’s storage is unavailable) — try again, or reload the page.');

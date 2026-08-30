@@ -55,13 +55,18 @@ if (!channel && typeof window !== 'undefined') {
   } catch { /* no window events: single-tab environment */ }
 }
 
+// live send health: a failed announce means other tabs may no longer
+// see this tab's activity — coordAvailable() reflects it immediately so
+// callers downgrade to conservative classification instead of assuming
+// coordination that is not actually happening
+let sendHealthy = true;
 export const announce = (kind: CoordKind, orderId: number, active: boolean): void => {
   const msg: CoordMsg = { kind, order_id: orderId, active, tab: TAB_ID };
   if (channel) {
-    try { channel.postMessage(msg); } catch { /* channel closed */ }
+    try { channel.postMessage(msg); sendHealthy = true; } catch { sendHealthy = false; }
     return;
   }
-  try { localStorage.setItem(LS_MSG_KEY, JSON.stringify({ ...msg, nonce: Math.random() })); } catch { /* storage down: single-tab behavior */ }
+  try { localStorage.setItem(LS_MSG_KEY, JSON.stringify({ ...msg, nonce: Math.random() })); sendHealthy = true; } catch { sendHealthy = false; }
 };
 
 const anyActive = (kind: CoordKind, orderId: number): boolean => {
@@ -99,6 +104,9 @@ export const announceHold = (kind: CoordKind, orderId: number): (() => void) => 
 // (conservative capture classification), never assume single-tab.
 let lsProbe: boolean | null = null;
 export const coordAvailable = (): boolean => {
+  // not a sticky startup probe: a transport that existed but whose most
+  // recent send FAILED counts as unavailable until a send succeeds again
+  if (!sendHealthy) return false;
   if (channel) return true;
   if (lsProbe == null) {
     try {
