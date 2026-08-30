@@ -174,9 +174,11 @@ export function FulfillmentPage() {
   // hard-DROP the snapshot on any source-identity change (not just hide
   // it): switching campaigns or editing settings and switching back must
   // never resurrect an old check as if it were current
+  // show only the rows the check flagged (badge rows) — banner-toggled
+  const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
   useEffect(() => {
     checkReq.current++;
-    setUpstream(null); setCheckError(''); setChecking(false);
+    setUpstream(null); setCheckError(''); setChecking(false); setShowFlaggedOnly(false);
   }, [groupBuyId, groupBuy?.external_id, cfg.appId, cfg.token]);
   const upstreamLive = upstream
     && upstream.forGroupBuyId === groupBuyId
@@ -375,6 +377,11 @@ export function FulfillmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, sessionActive, stage, showPartials, JSON.stringify(pool)]);
   const sessionHiddenCount = sessionActive && stage === 'ready' ? queue.length - displayQueue.length : 0;
+  // flagged-only narrows AFTER the session filter; inert without a live
+  // snapshot (the toggle resets when the snapshot drops)
+  const visibleQueue = upstreamLive && showFlaggedOnly
+    ? displayQueue.filter(r => upstreamMismatch(r) || partialMismatch(r))
+    : displayQueue;
   // counted over the whole loaded stage, not the session-filtered view — a
   // session must not hide the existence of unrecorded-shipped orders.
   // listFulfillmentQueue caps at 1000 rows; at the cap the stage may be
@@ -604,8 +611,14 @@ export function FulfillmentPage() {
           )}
           <span className="text-muted-foreground">Switch to the All tab for coverage across every stage.</span>
           <span className="ml-auto flex gap-1">
+            {(mismatchCount > 0 || partialMismatchCount > 0) && (
+              <Button size="sm" variant={showFlaggedOnly ? 'default' : 'outline'} className="h-6 px-2 text-xs"
+                onClick={() => setShowFlaggedOnly(v => !v)}>
+                {showFlaggedOnly ? 'Show all orders' : 'Show flagged only'}
+              </Button>
+            )}
             <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={checking} onClick={checkUpstream}>Refresh</Button>
-            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setUpstream(null)}>Clear</Button>
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => { setUpstream(null); setShowFlaggedOnly(false); }}>Clear</Button>
           </span>
         </div>
       )}
@@ -631,7 +644,7 @@ export function FulfillmentPage() {
 
       {/* mobile: cards (same data, packing-first) */}
       <div className="md:hidden space-y-2">
-        {displayQueue.map(r => (
+        {visibleQueue.map(r => (
           <div key={r.id} className="rounded-lg border p-3 space-y-1.5">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
@@ -669,8 +682,8 @@ export function FulfillmentPage() {
             {r.tracking_numbers && <p className="text-[11px] font-mono text-muted-foreground break-all">{r.tracking_numbers}</p>}
           </div>
         ))}
-        {displayQueue.length === 0 && (
-          <p className="text-center text-muted-foreground py-6 text-sm">Nothing in this stage{filterIds.size > 0 ? ' matching the product filter' : ''}.</p>
+        {visibleQueue.length === 0 && (
+          <p className="text-center text-muted-foreground py-6 text-sm">{showFlaggedOnly && upstreamLive ? 'No flagged orders in this stage — "Show all orders" in the banner restores the full list.' : `Nothing in this stage${filterIds.size > 0 ? ' matching the product filter' : ''}.`}</p>
         )}
       </div>
 
@@ -689,7 +702,7 @@ export function FulfillmentPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {displayQueue.map(r => (
+            {visibleQueue.map(r => (
               <TableRow key={r.id}>
                 <TableCell className="font-medium whitespace-nowrap">
                   {r.order_number}
@@ -751,8 +764,8 @@ export function FulfillmentPage() {
                 </TableCell>
               </TableRow>
             ))}
-            {displayQueue.length === 0 && (
-              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">Nothing in this stage{filterIds.size > 0 ? ' matching the product filter (filters match REMAINING work to pack)' : ''}.</TableCell></TableRow>
+            {visibleQueue.length === 0 && (
+              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">{showFlaggedOnly && upstreamLive ? 'No flagged orders in this stage — "Show all orders" in the banner restores the full list.' : `Nothing in this stage${filterIds.size > 0 ? ' matching the product filter (filters match REMAINING work to pack)' : ''}.`}</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
