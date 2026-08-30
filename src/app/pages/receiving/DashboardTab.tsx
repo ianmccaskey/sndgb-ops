@@ -197,6 +197,146 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
   const [scanBusy, setScanBusy] = useState(false);
   const [scanMsg, setScanMsg] = useState('');
   const scanInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ---- scan triage modal: one interactive dialog for the three scan
+  // outcomes (exact match -> contents check; likely match -> confirm the
+  // association first; no match -> log a new package keeping the scanned
+  // tracking). Every write still goes through the existing audited
+  // actions; the modal only orchestrates them. ----
+  const [scanModal, setScanModal] = useState<{ kind: 'exact' | 'suffix' | 'none'; pkg: Pkg | null; scanned: string } | null>(null);
+  const [scanStep, setScanStep] = useState<'associate' | 'contents' | 'create'>('contents');
+  // contents step: item id -> corrected count (prefilled with logged counts)
+  const [scanQty, setScanQty] = useState<Record<number, string>>({});
+  const [scanAddLine, setScanAddLine] = useState<ItemLine>({ product: '', qty: '' });
+  // create step (no-match): address/vendor/carrier/tracking/lines — the
+  // scanned tracking prefills and stays EDITABLE (a mis-scan is corrected
+  // here, not re-photographed)
+  const [smAddr, setSmAddr] = useState('');
+  const [smVendor, setSmVendor] = useState('');
+  const [smCarrier, setSmCarrier] = useState('');
+  const [smCarrierOther, setSmCarrierOther] = useState('');
+  const [smTracking, setSmTracking] = useState('');
+  const [smLines, setSmLines] = useState<ItemLine[]>([{ product: '', qty: '' }]);
+  const [smMsg, setSmMsg] = useState('');
+  const [smBusy, setSmBusy] = useState(false);
+
+  const seedCreateForm = (scanned: string) => {
+    setSmAddr(''); setSmVendor('');
+    // structural carrier guess: 1Z = UPS, IMpb shape = USPS-like; FedEx
+    // and everything else stay unguessed for the operator to pick
+    const g = candidateCarrier(scanned);
+    setSmCarrier(g === 'ups' ? 'ups' : g === 'usps_like' ? 'usps' : '');
+    setSmCarrierOther('');
+    setSmTracking(scanned);
+    setSmLines([{ product: '', qty: '' }]);
+  };
+  const openScanModal = (kind: 'exact' | 'suffix' | 'none', pkg: Pkg | null, scanned: string) => {
+    setSmMsg(''); setScanAddLine({ product: '', qty: '' });
+    if (pkg) setScanQty(Object.fromEntries((pkg.items || []).map(i => [i.id, String(Number(i.qty))])));
+    if (kind === 'none') { setScanStep('create'); seedCreateForm(scanned); }
+    else if (kind === 'suffix') setScanStep('associate');
+    else setScanStep('contents');
+    setScanModal({ kind, pkg, scanned });
+  };
+  const okRes = (r: unknown): boolean => Array.isArray(r) ? r.length > 0 : !!r;
+
+  // contents step confirm: apply count corrections (audited upserts on the
+  // still-unreceived package), then receive
+  const confirmContentsAndReceive = async () => {
+    const p = scanModal?.pkg;
+    if (!p) return;
+    setSmBusy(true); setSmMsg('');
+    try {
+      for (const it of p.items || []) {
+        const v = (scanQty[it.id] ?? '').trim();
+        if (v === String(Number(it.qty))) continue;
+        if (!/^\d+(?:\.\d{1,2})?$/.test(v) || !(Number(v) > 0)) {
+          setSmMsg(`${it.sku_code}: count must be a positive number (to drop a line entirely, use the package card's remove instead).`);
+          return;
+        }
+        const r = await doAddItem({ package_id: p.id, product_id: it.product_id, qty: v, actor: userName }) as unknown[] | null;
+        if (!okRes(r)) {
+          setSmMsg('Count correction not saved — the package may have been received in another session. Nothing was received; reload and retry.');
+          afterChange();
+          return;
+        }
+      }
+      if (scanAddLine.product && scanAddLine.qty.trim()) {
+        if (!/^\d+(?:\.\d{1,2})?$/.test(scanAddLine.qty.trim()) || !(Number(scanAddLine.qty) > 0)) {
+          setSmMsg('The added line needs a positive count (max 2 decimals).');
+          return;
+        }
+        const r = await doAddItem({ package_id: p.id, product_id: Number(scanAddLine.product), qty: scanAddLine.qty.trim(), actor: userName }) as unknown[] | null;
+        if (!okRes(r)) { setSmMsg('Extra line not added — the package may have been received in another session.'); afterChange(); return; }
+      }
+      const ok = await receivePkg(p);
+      setScanMsg(ok
+        ? `Received ${p.tracking_number}.`
+        : 'NOT received — the package changed since this page loaded (already received, corrected, or emptied elsewhere). Check its card; the list has refreshed.');
+      setScanModal(null);
+    } finally {
+      setSmBusy(false);
+      afterChange();
+    }
+  };
+
+  // create step confirm: log the package from the scan (address + contents
+  // typed here, tracking kept/corrected), commit it, and receive it — with
+  // honest partial-progress messages if a later step refuses
+  const logAndReceive = async () => {
+    setSmMsg('');
+    const lines = smLines.filter(l => l.product || l.qty.trim());
+    const carrierTok = smCarrier === '__other__' ? smCarrierOther.trim().toLowerCase() : smCarrier;
+    if (!smAddr) { setSmMsg('Pick the receive address this package arrived at.'); return; }
+    if (smVendor && !vendors.some(v => v.shippable && String(v.id) === smVendor)) { setSmMsg('The selected vendor is not available in this campaign.'); return; }
+    if (!carrierTok) { setSmMsg('Pick the carrier (FedEx labels are not auto-guessed).'); return; }
+    if (!smTracking.trim()) { setSmMsg('Tracking number required — correct the scanned value if it read wrong.'); return; }
+    if (lines.length === 0) { setSmMsg('Add at least one product line — the contents feed inventory.'); return; }
+    for (const l of lines) {
+      if (!l.product) { setSmMsg('Every line needs a product.'); return; }
+      if (!/^\d+(?:\.\d{1,2})?$/.test(l.qty.trim()) || !(Number(l.qty) > 0)) { setSmMsg('Every line needs a positive count (max 2 decimals).'); return; }
+    }
+    if (new Set(lines.map(l => l.product)).size !== lines.length) { setSmMsg('The same product appears on two lines — combine them.'); return; }
+    setSmBusy(true);
+    try {
+      let res: unknown[] | null;
+      try {
+        res = await doCreate({
+          expected_label: '',
+          receive_address_id: Number(smAddr), vendor_id: smVendor || '',
+          group_buy_id: groupBuyId ?? '',
+          carrier: carrierTok, tracking_number: smTracking.trim(), note: 'Logged from label scan',
+          items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
+          actor: userName,
+        }) as unknown[] | null;
+      } catch (e: unknown) {
+        const m = e instanceof Error ? e.message : '';
+        setSmMsg(m.includes('inbound_packages_active_tracking_uniq')
+          ? 'An ACTIVE package with this carrier + tracking already exists — it may be the one you scanned; close and check the cards.'
+          : (m || 'Failed to create the package.') + ' Nothing was saved; retry.');
+        return;
+      }
+      const pkgId = Array.isArray(res) && res.length > 0 ? Number((res[0] as { id: string }).id) : null;
+      if (!pkgId) { setSmMsg('Not created — check the address is active and the vendor ships in this campaign. Nothing was saved.'); return; }
+      const committed = await doCommit({ package_id: pkgId, actor: userName }) as unknown[] | null;
+      if (!okRes(committed)) {
+        setSmMsg('Package logged as a DRAFT but committing refused — finish from its card below.');
+        afterChange();
+        setScanModal(null);
+        return;
+      }
+      const received = await doReceive({ package_id: pkgId, carrier: carrierTok, tracking_number: smTracking.trim(), actor: userName, mode: 'manual' }) as unknown[] | null;
+      if (!okRes(received)) {
+        setScanMsg('Package logged and committed but the receive refused — mark it received from its card.');
+      } else {
+        setScanMsg(`Logged and received ${smTracking.trim().toUpperCase()}.`);
+      }
+      setScanModal(null);
+      afterChange();
+    } finally {
+      setSmBusy(false);
+    }
+  };
   const onScanPicked = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setScanBusy(true); setScanMsg('');
@@ -271,17 +411,8 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
           setScanMsg(`The barcode's format does not match the package's logged carrier (${(p.carrier || '').toUpperCase()}) — check the label and the package, then receive from its card.`);
           return;
         }
-        const contents = (p.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ') || 'no items';
-        // receiving = opened + contents confirmed, so the prompt IS a
-        // contents check, not just an identity check
-        if (window.confirm(`Receive ${p.tracking_number}\nCarrier: ${(p.carrier || '').toUpperCase()}${p.vendor_code ? ` · Vendor: ${p.vendor_code}` : ''}\nAddress: ${p.address_label}\n\nOpen the package and verify its contents:\n${contents}\n\nOK confirms the contents check and marks it RECEIVED.`)) {
-          const ok = await receivePkg(p);
-          setScanMsg(ok
-            ? `Received ${p.tracking_number}.`
-            : 'NOT received — the package changed since this page loaded (already received, corrected, or emptied elsewhere). Check its card; the list has refreshed.');
-        } else {
-          setScanMsg('Not received — contents not confirmed. Scan again or use the card once verified.');
-        }
+        // exact identity → straight to the interactive contents check
+        openScanModal('exact', p, exactCand || candidates[0]);
       } else if (openExact.length > 1) {
         setScanMsg(`The scan matches ${openExact.length} open packages (${openExact.map(x => x.p.tracking_number).join(', ')}) — receive the right one from its card.`);
       } else if (open.length === 1 && matchedAll.length === 1) {
@@ -292,21 +423,11 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
         // (both numbers shown side by side), then verifies contents,
         // then it receives. Never silent.
         const p = open[0].p;
-        const stored = String(p.tracking_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
         const scanned = candidates.find(c => matchTracking([c], String(p.tracking_number || '')) != null) || candidates[0];
-        if (!window.confirm(`LIKELY match — not exact.\n${p.tracking_number} (${(p.carrier || '').toUpperCase()}${p.vendor_code ? ` · Vendor: ${p.vendor_code}` : ''}, ${p.address_label})\n\nScanned: ${scanned}\nLogged:  ${stored}\n\nCompare the label's number to the logged number. Is this the same package?`)) {
-          setScanMsg('Not received — if the label matches a different package, receive it from its card.');
-          return;
-        }
-        const contents = (p.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ') || 'no items';
-        if (window.confirm(`Now open the package and verify its contents:\n${contents}\n\nOK confirms the contents check and marks ${p.tracking_number} RECEIVED.`)) {
-          const ok = await receivePkg(p);
-          setScanMsg(ok
-            ? `Received ${p.tracking_number}.`
-            : 'NOT received — the package changed since this page loaded (already received, corrected, or emptied elsewhere). Check its card; the list has refreshed.');
-        } else {
-          setScanMsg('Not received — contents not confirmed. Receive from the card once verified.');
-        }
+        // likely match (FedEx precursor digits etc.) → the modal's
+        // associate step: confirm the suggestion, or log as new keeping
+        // the scanned number
+        openScanModal('suffix', p, scanned);
       } else if (open.length > 1 || (open.length === 1 && !matchedAll.some(x => x.p.received_at) && !matchedAll.some(x => !x.p.committed_at))) {
         // several suffix candidates, or one open suffix row shadowed by
         // other matches that are neither received nor drafts — ambiguous
@@ -317,7 +438,9 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
       } else if (matchedAll.some(x => !x.p.committed_at)) {
         setScanMsg(`${matchedAll.find(x => !x.p.committed_at)!.p.tracking_number} is still a DRAFT — commit it on its card, then scan again.`);
       } else {
-        setScanMsg(`Scanned ${candidates[0]} — no logged package matches. Log the package first, then scan to receive it.`);
+        // nothing logged matches → the modal's create step: log it right
+        // here, keeping (and if needed correcting) the scanned tracking
+        openScanModal('none', null, candidates[0]);
       }
     } catch (e: unknown) {
       setScanMsg(e instanceof Error ? e.message : 'Scan failed — try another photo.');
@@ -526,7 +649,142 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
             onChange={e => onScanPicked(e.target.files)} />
           {refreshAllProgress && <span className="text-xs text-muted-foreground">{refreshAllProgress}</span>}
         </div>
-        {scanMsg && <p className={`text-xs ${scanMsg.startsWith('Received ') ? 'text-green-700' : 'text-amber-700'}`}>{scanMsg}</p>}
+        {scanMsg && <p className={`text-xs ${scanMsg.startsWith('Received ') || scanMsg.startsWith('Logged and received') ? 'text-green-700' : 'text-amber-700'}`}>{scanMsg}</p>}
+
+        {/* scan triage modal */}
+        <Dialog open={!!scanModal} onOpenChange={o => { if (!o) setScanModal(null); }}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>
+                {scanStep === 'associate' ? 'Likely match — confirm the package'
+                  : scanStep === 'contents' ? `Receive ${scanModal?.pkg?.tracking_number ?? ''}`
+                  : 'Log scanned package'}
+              </DialogTitle>
+            </DialogHeader>
+
+            {scanStep === 'associate' && scanModal?.pkg && (
+              <div className="space-y-3 text-sm">
+                <p className="text-xs text-muted-foreground">
+                  The scanned barcode is not an exact match (FedEx labels carry extra prefix digits) but relates to this logged package:
+                </p>
+                <div className="border rounded-lg p-2 text-xs space-y-1">
+                  <p className="font-medium">{scanModal.pkg.tracking_number} · {(scanModal.pkg.carrier || '').toUpperCase()}</p>
+                  <p className="text-muted-foreground">{scanModal.pkg.vendor_code ? `Vendor ${scanModal.pkg.vendor_code} · ` : ''}{scanModal.pkg.address_label}</p>
+                  <p className="text-muted-foreground">Contents: {(scanModal.pkg.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ') || 'none'}</p>
+                  <p className="font-mono">Scanned: {scanModal.scanned}</p>
+                  <p className="font-mono">Logged:&nbsp; {String(scanModal.pkg.tracking_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '')}</p>
+                </div>
+                {smMsg && <p className="text-xs text-red-600">{smMsg}</p>}
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => setScanModal(null)}>Cancel</Button>
+                  <Button size="sm" variant="outline" onClick={() => { seedCreateForm(scanModal.scanned); setScanStep('create'); setSmMsg(''); }}>
+                    Not this one — log as new
+                  </Button>
+                  <Button size="sm" onClick={() => { setScanStep('contents'); setSmMsg(''); }}>Yes — this package</Button>
+                </div>
+              </div>
+            )}
+
+            {scanStep === 'contents' && scanModal?.pkg && (
+              <div className="space-y-3 text-sm">
+                <p className="text-xs text-muted-foreground">
+                  Open the package and verify the counts — correct any that differ before receiving. Corrections save to the package (audited) and feed inventory.
+                </p>
+                <div className="border rounded-lg divide-y">
+                  {(scanModal.pkg.items || []).map(i => (
+                    <div key={i.id} className="flex items-center gap-2 px-2 py-1.5 text-xs">
+                      <span className="font-medium">{i.sku_code}</span>
+                      {String(Number(i.qty)) !== (scanQty[i.id] ?? '').trim() && (
+                        <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5" title="Changed from the logged count">was {fmtNum(i.qty)}</span>
+                      )}
+                      <span className="ml-auto flex items-center gap-1.5">
+                        count:
+                        <Input value={scanQty[i.id] ?? ''} onChange={e => setScanQty(q => ({ ...q, [i.id]: e.target.value }))}
+                          className="h-7 w-20 text-xs text-right" inputMode="decimal" />
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Select value={scanAddLine.product} onValueChange={v => setScanAddLine(l => ({ ...l, product: v }))}>
+                    <SelectTrigger className="h-8 flex-1 min-w-36 text-xs"><SelectValue placeholder="Add a product that was inside…" /></SelectTrigger>
+                    <SelectContent>
+                      {products.filter(pr => !(scanModal.pkg?.items || []).some(i => Number(i.product_id) === pr.id)).map(pr => (
+                        <SelectItem key={pr.id} value={String(pr.id)}>{pr.sku_code}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input placeholder="Qty" value={scanAddLine.qty} onChange={e => setScanAddLine(l => ({ ...l, qty: e.target.value }))} className="h-8 w-16 text-xs" inputMode="decimal" />
+                </div>
+                {smMsg && <p className="text-xs text-red-600">{smMsg}</p>}
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => setScanModal(null)}>Cancel</Button>
+                  <Button size="sm" disabled={smBusy} onClick={confirmContentsAndReceive}>
+                    {smBusy ? 'Receiving…' : 'Counts verified — mark received'}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {scanStep === 'create' && scanModal && (
+              <div className="space-y-3 text-sm">
+                <p className="text-xs text-muted-foreground">
+                  No logged package matches this label. Log it here — the scanned tracking is kept (correct it if it read wrong), then it is committed and received in one go.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Select value={smAddr} onValueChange={setSmAddr}>
+                    <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Receive address…" /></SelectTrigger>
+                    <SelectContent>
+                      {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={smVendor} onValueChange={setSmVendor}>
+                    <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Vendor (optional)…" /></SelectTrigger>
+                    <SelectContent>
+                      {vendors.filter(v => v.shippable).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={smCarrier} onValueChange={setSmCarrier}>
+                    <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Carrier…" /></SelectTrigger>
+                    <SelectContent>
+                      {CARRIERS.map(c => <SelectItem key={c.token} value={c.token}>{c.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {smCarrier === '__other__' && (
+                    <Input placeholder="Shippo carrier token" value={smCarrierOther} onChange={e => setSmCarrierOther(e.target.value)} className="h-9 text-xs" />
+                  )}
+                  <Input placeholder="Tracking (from scan — editable)" value={smTracking} onChange={e => setSmTracking(e.target.value)}
+                    className="h-9 text-xs font-mono sm:col-span-2" />
+                </div>
+                <div className="space-y-1.5">
+                  {smLines.map((l, idx) => (
+                    <div key={idx} className="flex items-center gap-1.5">
+                      <Select value={l.product} onValueChange={v => setSmLines(ls => ls.map((x, i2) => i2 === idx ? { ...x, product: v } : x))}>
+                        <SelectTrigger className="h-8 flex-1 text-xs"><SelectValue placeholder="Product…" /></SelectTrigger>
+                        <SelectContent>
+                          {products.map(pr => <SelectItem key={pr.id} value={String(pr.id)}>{pr.sku_code}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Input placeholder="Qty" value={l.qty} onChange={e => setSmLines(ls => ls.map((x, i2) => i2 === idx ? { ...x, qty: e.target.value } : x))}
+                        className="h-8 w-16 text-xs" inputMode="decimal" />
+                      {smLines.length > 1 && (
+                        <button className="p-0.5 opacity-60 hover:opacity-100" onClick={() => setSmLines(ls => ls.filter((_, i2) => i2 !== idx))}>✕</button>
+                      )}
+                    </div>
+                  ))}
+                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSmLines(ls => [...ls, { product: '', qty: '' }])}>+ line</Button>
+                </div>
+                {smMsg && <p className="text-xs text-red-600">{smMsg}</p>}
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => setScanModal(null)}>Cancel</Button>
+                  <Button size="sm" disabled={smBusy} onClick={logAndReceive}>
+                    {smBusy ? 'Saving…' : 'Log, commit & receive'}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
         <div className="flex flex-wrap gap-1.5">
           {products.filter(pr => packages.some(p => (p.items || []).some(i => Number(i.product_id) === pr.id))).map(pr => {
             const on = productFilter.has(pr.id);
