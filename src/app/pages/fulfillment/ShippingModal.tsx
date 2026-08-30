@@ -278,14 +278,18 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           const ph = await compressImageToDataUrl(f);
           // the capture is the only copy — it enters the DURABLE stash
           // before anything else is attempted
-          // a shipment that landed while this capture was compressing
-          // already snapshotted its pending set — these photos become
-          // RECOVERED (explicit placement) so they cannot silently ride
-          // the NEXT box
-          const missedLanding = landedDuringCapture.current;
-          const entry: StashedPhoto = { ...ph, shipment_id: null, order_id: order.id, ts: Date.now(), actor: userName, key: newStashKey(), ...(missedLanding ? { recovered: true } : {}) };
+          const entry: StashedPhoto = { ...ph, shipment_id: null, order_id: order.id, ts: Date.now(), actor: userName, key: newStashKey() };
           if (photoTarget.current === 'pending') {
-            if (!(await stashUpsert(entry))) errors.push(`${f.name}: kept for this shipment, but this device's storage is unavailable — it survives only while this page stays open.`);
+            // a shipment that landed while this capture was compressing
+            // already snapshotted its pending set — such photos become
+            // RECOVERED (explicit placement) so they cannot silently ride
+            // the NEXT box. Applies ONLY to pending captures: a direct
+            // row-attach below is explicitly bound to its chosen shipment
+            // and has no drift risk (and its CAS states assume
+            // recovered: false).
+            const missedLanding = landedDuringCapture.current;
+            const pendingEntry = missedLanding ? { ...entry, recovered: true } : entry;
+            if (!(await stashUpsert(pendingEntry))) errors.push(`${f.name}: kept for this shipment, but this device's storage is unavailable — it survives only while this page stays open.`);
             else if (missedLanding) errors.push(`${f.name}: a shipment was created while this photo was processing — it is kept as a "recovered" photo: press "use" to allow it onto the next shipment, or attach it to a shipment row directly.`);
             await refreshPendingView();
           } else {
