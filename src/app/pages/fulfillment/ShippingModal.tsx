@@ -1105,18 +1105,28 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {packLines.map(l => (
-                  <TableRow key={l.order_item_id}>
-                    <TableCell className="text-xs"><span className="font-medium">{l.sku_code}</span> <span className="text-muted-foreground">{l.product_name}</span></TableCell>
-                    <TableCell className="text-right">{fmtNum(l.effective_qty)}</TableCell>
-                    <TableCell className="text-right">{fmtNum(l.shipped_qty)}{Number(l.attributed_qty) > Number(l.shipped_qty) && <span className="block text-[10px] text-muted-foreground">+{fmtNum(Number(l.attributed_qty) - Number(l.shipped_qty))} in draft</span>}</TableCell>
-                    <TableCell className="text-right font-medium">{fmtNum(l.remaining_qty)}</TableCell>
-                    <TableCell>
-                      <Input value={qtys[Number(l.order_item_id)] ?? ''} className="h-7 w-20 text-xs"
-                        onChange={e => setQtys(q => ({ ...q, [Number(l.order_item_id)]: e.target.value }))} />
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {packLines.map(l => {
+                  // color-code shipped progress per line: green = fully
+                  // shipped, amber = partially shipped, plain = untouched
+                  const eff = Number(l.effective_qty), shp = Number(l.shipped_qty);
+                  const state = eff > 0 && shp >= eff ? 'full' : shp > 0 ? 'part' : 'none';
+                  return (
+                    <TableRow key={l.order_item_id} className={state === 'full' ? 'bg-green-50' : state === 'part' ? 'bg-amber-50' : undefined}>
+                      <TableCell className="text-xs">
+                        <span className="font-medium">{l.sku_code}</span> <span className="text-muted-foreground">{l.product_name}</span>
+                        {state === 'full' && <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">shipped</span>}
+                        {state === 'part' && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">{fmtNum(shp)}/{fmtNum(eff)} shipped</span>}
+                      </TableCell>
+                      <TableCell className="text-right">{fmtNum(l.effective_qty)}</TableCell>
+                      <TableCell className="text-right">{fmtNum(l.shipped_qty)}{Number(l.attributed_qty) > Number(l.shipped_qty) && <span className="block text-[10px] text-muted-foreground">+{fmtNum(Number(l.attributed_qty) - Number(l.shipped_qty))} in draft</span>}</TableCell>
+                      <TableCell className="text-right font-medium">{fmtNum(l.remaining_qty)}</TableCell>
+                      <TableCell>
+                        <Input value={qtys[Number(l.order_item_id)] ?? ''} className="h-7 w-20 text-xs"
+                          onChange={e => setQtys(q => ({ ...q, [Number(l.order_item_id)]: e.target.value }))} />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
                 {directLines.map(l => (
                   <TableRow key={l.order_item_id} className="opacity-60">
                     <TableCell className="text-xs"><span className="font-medium">{l.sku_code}</span> <span className="rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">direct</span></TableCell>

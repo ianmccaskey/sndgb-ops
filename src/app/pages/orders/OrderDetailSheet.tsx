@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import getOrder from '@/actions/orders/getOrder';
 import getOrderItems from '@/actions/orders/getOrderItems';
@@ -46,7 +46,7 @@ import { B44_DEFAULT_APP_ID, getB44Order, updateB44Order } from '@/lib/base44';
 import { normalizeTxHash, canonicalTxRef } from '@/lib/parseOrderImport';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
-import { fmtUSD, fmtDateTime } from '@/lib/fmt';
+import { fmtUSD, fmtDateTime, fmtNum } from '@/lib/fmt';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -277,6 +277,18 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     digital: boolean;
   };
   const shipRows = rows<ShipRow>(rawShipRows).map(s => ({ ...s, tracking_number: s.tracking_number == null ? null : String(s.tracking_number) }));
+  // per-line FINALIZED shipped quantity (voided/refunded boxes excluded) —
+  // drives the shipped/partial badges and row tinting on the item list
+  const shippedByItem = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const s of shipRows) {
+      if (!s.finalized_at || s.refund_status === 'SUCCESS') continue;
+      for (const si of s.items || []) {
+        m.set(Number(si.order_item_id), (m.get(Number(si.order_item_id)) || 0) + Number(si.qty || 0));
+      }
+    }
+    return m;
+  }, [shipRows]);
 
   const [doUpdate] = useMutateAction(updateOrderAdmin);
   const [doOverride] = useMutateAction(addOverride);
@@ -1453,8 +1465,17 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
 
               <div>
                 <h3 className="font-semibold mb-1">Items</h3>
-                {items.map(it => (
-                  <div key={it.id} className="py-0.5">
+                {items.map(it => {
+                  // finalized-shipped progress for packable lines: green =
+                  // whole line shipped, amber = part of it, plain = none.
+                  // Direct lines keep their own vendor chips; removed
+                  // lines keep their strike-through.
+                  const lineShipped = shippedByItem.get(Number(it.id)) || 0;
+                  const lineEff = effQty(it);
+                  const shipState = it.removed_at || it.direct_ship || !(lineShipped > 0) ? 'none'
+                    : lineShipped >= lineEff ? 'full' : 'part';
+                  return (
+                  <div key={it.id} className={`py-0.5 ${shipState === 'full' ? 'bg-green-50 rounded px-1 -mx-1' : shipState === 'part' ? 'bg-amber-50 rounded px-1 -mx-1' : ''}`}>
                     <div className="flex justify-between items-center gap-2">
                       <span className="flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
                         <span className={`truncate ${it.removed_at ? 'line-through text-muted-foreground' : ''}`}>
@@ -1463,6 +1484,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             <span className="text-amber-700" title={`Ordering app: ${Number(it.qty)}`}> (edited)</span>
                           )}
                         </span>
+                        {shipState === 'full' && (
+                          <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Every unit of this line is in a finalized shipment">shipped</span>
+                        )}
+                        {shipState === 'part' && (
+                          <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title={`${fmtNum(lineShipped)} of ${fmtNum(lineEff)} units are in finalized shipments — the rest is still to pack`}>{fmtNum(lineShipped)}/{fmtNum(lineEff)} shipped</span>
+                        )}
                         {it.removed_at && (
                           <span className="rounded bg-red-100 text-red-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                             title="Removed in this app — the ordering app still carries it until you push">
@@ -1571,7 +1598,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
                 {compMsg && <p className="text-xs text-red-600 mt-1">{compMsg}</p>}
                 <div className="flex flex-wrap gap-1.5 mt-2 items-center">
                   <Select value={addSku} onValueChange={v => { setAddSku(v); setAddMsg(''); }}>
