@@ -284,10 +284,13 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
         }
       } else if (openExact.length > 1) {
         setScanMsg(`The scan matches ${openExact.length} open packages (${openExact.map(x => x.p.tracking_number).join(', ')}) — receive the right one from its card.`);
-      } else if (open.length === 1) {
-        // ONE suffix relation: SUGGEST it — the operator confirms identity
-        // against the physical label (both numbers shown side by side),
-        // then verifies contents, then it receives. Never silent.
+      } else if (open.length === 1 && matchedAll.length === 1) {
+        // ONE suffix relation AND no other match of any kind (an exact
+        // match on a received/draft row would explain the scan better —
+        // those fall through to their own messages below): SUGGEST it —
+        // the operator confirms identity against the physical label
+        // (both numbers shown side by side), then verifies contents,
+        // then it receives. Never silent.
         const p = open[0].p;
         const stored = String(p.tracking_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
         const scanned = candidates.find(c => matchTracking([c], String(p.tracking_number || '')) != null) || candidates[0];
@@ -304,8 +307,10 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
         } else {
           setScanMsg('Not received — contents not confirmed. Receive from the card once verified.');
         }
-      } else if (open.length > 1) {
-        setScanMsg(`The scan LIKELY corresponds to ${open.map(x => `${x.p.tracking_number} (${(x.p.carrier || '').toUpperCase()})`).join(', ')} but is not an exact match and cannot pick between them — verify the label's number and receive from the right card.`);
+      } else if (open.length > 1 || (open.length === 1 && !matchedAll.some(x => x.p.received_at) && !matchedAll.some(x => !x.p.committed_at))) {
+        // several suffix candidates, or one open suffix row shadowed by
+        // other matches that are neither received nor drafts — ambiguous
+        setScanMsg(`The scan LIKELY corresponds to ${open.map(x => `${x.p.tracking_number} (${(x.p.carrier || '').toUpperCase()})`).join(', ')} but is not an exact match and cannot pick safely — verify the label's number and receive from the right card.`);
       } else if (matchedAll.some(x => x.p.received_at)) {
         const r = matchedAll.find(x => x.p.received_at)!.p;
         setScanMsg(`${r.tracking_number} is already received (${fmtDateTime(r.received_at!)} by ${r.received_by}).`);
