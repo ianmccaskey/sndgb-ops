@@ -54,10 +54,15 @@ export async function decodeCarrierLabel(file: File): Promise<string[]> {
   const started = performance.now();
   const overBudget = () => performance.now() - started > DEADLINE_MS;
   const yieldToUi = () => new Promise<void>(r => setTimeout(r, 0));
-  const bitmap = await (file.size > 1_500_000
-    ? createImageBitmap(file, { resizeWidth: 2000, resizeQuality: 'high' }).catch(() => createImageBitmap(file))
-    : createImageBitmap(file)
-  ).catch(() => null);
+  // ALWAYS request bounded dimensions — compressed byte size says nothing
+  // about pixel count, so no size heuristic gates this. Engines that
+  // reject the options bag (legacy Safari) fall back to a plain load:
+  // an accepted residual, since refusing to scan there entirely would be
+  // worse than a slow scan, and every current phone browser supports the
+  // resize options.
+  const bitmap = await createImageBitmap(file, { resizeWidth: 2000, resizeQuality: 'high' })
+    .catch(() => createImageBitmap(file))
+    .catch(() => null);
   if (!bitmap) throw new Error(`Could not read "${file.name}" as an image.`);
   try {
     const hints = new Map();

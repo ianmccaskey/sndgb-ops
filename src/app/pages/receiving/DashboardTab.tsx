@@ -226,6 +226,14 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
         setScanMsg(`The scan matches packages on different carriers (${matchedAll.map(x => `${(x.p.carrier || '').toUpperCase()} ${x.p.tracking_number}`).join('; ')}) — check the label's carrier and receive from the right card.`);
         return;
       }
+      // multiple EXACT matches on the same carrier — rows differing only
+      // by punctuation, or a recycled number beside a received row — mean
+      // the label cannot distinguish them: ambiguous regardless of state
+      const exactAll = matchedAll.filter(x => x.kind === 'exact');
+      if (exactAll.length > 1) {
+        setScanMsg(`The scan matches ${exactAll.length} logged packages exactly (${exactAll.map(x => `${x.p.tracking_number}${x.p.received_at ? ' [received]' : ''}`).join('; ')}) — the label cannot distinguish them; receive from the right card.`);
+        return;
+      }
       const open = matchedAll.filter(x => !x.p.received_at && x.p.committed_at);
       const openExact = open.filter(x => x.kind === 'exact');
       if (openExact.length === 1) {
