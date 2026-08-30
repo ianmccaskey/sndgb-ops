@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { RefreshCw, Truck, AlertTriangle, ScanLine, Printer } from 'lucide-react';
 import { decodeCarrierLabel, trackingCandidates, matchTracking, candidateCarrier, carrierCompatible } from '@/lib/labelScan';
-import { printPackageLabel, niimbotSupported, niimbotConnected } from '@/lib/niimbotPrint';
+import { openPrinterPage, niimbotSupported } from '@/lib/niimbotPrint';
 import type { PackageLabelData } from '@/lib/niimbotPrint';
 import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday } from './shared';
 import type { RxAddress, Pkg, CatalogProduct, VendorRow } from './shared';
@@ -237,37 +237,25 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
     });
   };
   const [printJob, setPrintJob] = useState<PackageLabelData | null>(null);
-  const [printBusy, setPrintBusy] = useState(false);
   const [printMsg, setPrintMsg] = useState('');
-  // after a receive: auto-print when the printer is already connected;
-  // otherwise queue the job behind a tap (the chooser needs a gesture)
-  const queueLabelPrint = async (label: PackageLabelData) => {
+  // after a receive: queue the label behind ONE tap — the app's iframe
+  // cannot use Web Bluetooth, so the tap opens the printer helper popup
+  // (top-level window) which prints and closes itself; a popup can only
+  // open from a gesture, hence never fully automatic here
+  const queueLabelPrint = (label: PackageLabelData) => {
     if (!autoPrint || !niimbotSupported()) return;
     setPrintMsg('');
-    if (niimbotConnected()) {
-      try {
-        await printPackageLabel(label);
-        setPrintMsg(`Printed label for ${label.tracking}.`);
-        setPrintJob(null);
-        return;
-      } catch (e: unknown) {
-        setPrintMsg(e instanceof Error ? e.message : 'Print failed.');
-      }
-    }
     setPrintJob(label);
   };
-  const runPrintJob = async () => {
+  const runPrintJob = () => {
     if (!printJob) return;
-    setPrintBusy(true); setPrintMsg('');
-    try {
-      await printPackageLabel(printJob);
-      setPrintMsg(`Printed label for ${printJob.tracking}.`);
-      setPrintJob(null);
-    } catch (e: unknown) {
-      setPrintMsg(e instanceof Error ? e.message : 'Print failed — tap Print to retry.');
-    } finally {
-      setPrintBusy(false);
+    setPrintMsg('');
+    if (!openPrinterPage(printJob)) {
+      setPrintMsg('The printer page was blocked — allow pop-ups for this site, then tap Print again.');
+      return;
     }
+    setPrintMsg(`Printer page opened for ${printJob.tracking} — it prints automatically once the B1 is paired.`);
+    setPrintJob(null);
   };
 
   const seedCreateForm = (scanned: string) => {
@@ -751,8 +739,8 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
         {printJob && (
           <div className="rounded-lg border border-green-300 bg-green-50 px-3 py-1.5 text-xs flex flex-wrap items-center gap-2">
             <span className="text-green-900 font-medium">Received — print the package label ({printJob.tracking}).</span>
-            <Button size="sm" className="h-7 text-xs" disabled={printBusy} onClick={runPrintJob}>
-              <Printer className="w-3.5 h-3.5 mr-1" /> {printBusy ? 'Printing…' : 'Print label'}
+            <Button size="sm" className="h-7 text-xs" onClick={runPrintJob}>
+              <Printer className="w-3.5 h-3.5 mr-1" /> Print label
             </Button>
             <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPrintJob(null)}>Dismiss</Button>
           </div>

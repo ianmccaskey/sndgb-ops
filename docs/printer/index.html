@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Niimbot Label Printer</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #0f1117; color: #e5e7eb; }
+  h1 { font-size: 16px; margin: 0 0 12px; }
+  canvas { background: #fff; border-radius: 6px; width: 100%; max-width: 384px; image-rendering: pixelated; }
+  button { font-size: 16px; padding: 12px 18px; border-radius: 8px; border: 0; background: #7c3aed; color: #fff; width: 100%; max-width: 384px; margin-top: 12px; }
+  button:disabled { opacity: .5; }
+  #msg { font-size: 13px; margin-top: 10px; min-height: 18px; }
+  .ok { color: #4ade80; } .err { color: #fbbf24; }
+</style>
+</head>
+<body>
+<h1>Niimbot B1 — package label</h1>
+<canvas id="label" width="384" height="240"></canvas>
+<button id="print" disabled>Loading…</button>
+<p id="msg"></p>
+<script type="module">
+/*
+ * SND GB Ops printer helper. The app opens this page in a POPUP (the
+ * app itself runs in an iframe whose permissions policy blocks Web
+ * Bluetooth) with the label payload in the URL FRAGMENT — fragments are
+ * never sent to any server, so no package data leaves the phone.
+ * Payload: base64url(JSON) of { tracking, carrier, vendor, address,
+ * items: [{sku, qty}], date }.
+ *
+ * First use: tap Print -> Chrome's Bluetooth chooser -> pick the B1.
+ * Chrome remembers the grant (getDevices), so later opens auto-connect
+ * and print with no chooser; the page closes itself after success.
+ */
+import { NiimbotBluetoothClient, ImageEncoder, LabelType } from "https://esm.sh/@mmote/niimbluelib@0.0.1-alpha.43";
+
+const msg = (t, cls) => { const el = document.getElementById("msg"); el.textContent = t; el.className = cls || ""; };
+const btn = document.getElementById("print");
+
+function readPayload() {
+  try {
+    const raw = location.hash.slice(1);
+    if (!raw) return null;
+    const json = atob(raw.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(decodeURIComponent(escape(json)));
+  } catch { return null; }
+}
+
+function draw(d) {
+  const canvas = document.getElementById("label");
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "white"; ctx.fillRect(0, 0, 384, 240);
+  ctx.fillStyle = "black";
+  ctx.font = "bold 22px sans-serif";
+  ctx.fillText(`${(d.carrier || "").toUpperCase()}${d.vendor ? `  ·  ${d.vendor}` : ""}`, 6, 24);
+  ctx.font = "18px sans-serif";
+  ctx.fillText(`${d.address || ""}  ·  ${d.date || new Date().toLocaleDateString()}`, 6, 46);
+  ctx.font = "bold 26px monospace";
+  const t = (d.tracking || "").toUpperCase();
+  if (t.length <= 20) ctx.fillText(t, 6, 78);
+  else { ctx.fillText(t.slice(0, Math.ceil(t.length / 2)), 6, 76); ctx.fillText(t.slice(Math.ceil(t.length / 2)), 6, 102); }
+  ctx.fillRect(6, 112, 372, 2);
+  ctx.font = "20px sans-serif";
+  const items = d.items || [];
+  const lines = items.slice(0, 5).map(i => `${i.sku}  x ${i.qty}`);
+  if (items.length > 5) lines.push(`+ ${items.length - 5} more`);
+  let y = 136;
+  for (const line of lines) { ctx.fillText(line, 6, y); y += 22; }
+  return canvas;
+}
+
+async function connectClient() {
+  const client = new NiimbotBluetoothClient();
+  // silent reconnect first: Chrome persists the device grant from the
+  // first chooser, so later prints need no tap-through
+  try {
+    if (navigator.bluetooth?.getDevices) {
+      const devices = await navigator.bluetooth.getDevices();
+      if (devices.length > 0 && client.connectToDevice) {
+        try { await client.connectToDevice(devices[0]); await client.fetchPrinterInfo(); return client; } catch { /* fall through to chooser */ }
+      }
+    }
+  } catch { /* getDevices unsupported — chooser path */ }
+  await client.connect();
+  await client.fetchPrinterInfo();
+  return client;
+}
+
+async function doPrint(d) {
+  btn.disabled = true; btn.textContent = "Connecting…";
+  let client;
+  try {
+    client = await connectClient();
+  } catch (e) {
+    msg(`Could not connect (${e?.message || "chooser cancelled or printer off"}) — turn the B1 on and tap Print.`, "err");
+    btn.disabled = false; btn.textContent = "Print label";
+    return;
+  }
+  try {
+    btn.textContent = "Printing…";
+    const encoded = ImageEncoder.encodeCanvas(draw(d), "left");
+    const taskType = client.getPrintTaskType() || "B1";
+    const task = client.abstraction.newPrintTask(taskType, { totalPages: 1, density: 3, labelType: LabelType.WithGaps });
+    try {
+      await task.printInit();
+      await task.printPage(encoded, 1);
+      await task.waitForFinished();
+    } finally {
+      try { await task.printEnd(); } catch {}
+    }
+    msg("Printed ✓ — closing…", "ok");
+    btn.textContent = "Printed ✓";
+    setTimeout(() => window.close(), 1200);
+  } catch (e) {
+    msg(`Print failed (${e?.message || "connection lost"}) — check the B1 and tap Print.`, "err");
+    btn.disabled = false; btn.textContent = "Print label";
+  } finally {
+    try { await client.disconnect(); } catch {}
+  }
+}
+
+const payload = readPayload();
+if (!payload) {
+  msg("No label data — open this page from the app's Print button.", "err");
+  btn.textContent = "No label data";
+} else {
+  draw(payload);
+  btn.disabled = false;
+  btn.textContent = "Print label";
+  btn.addEventListener("click", () => doPrint(payload));
+  // if a grant already exists, print immediately without a tap
+  if (navigator.bluetooth?.getDevices) {
+    navigator.bluetooth.getDevices().then(devs => { if (devs.length > 0) doPrint(payload); }).catch(() => {});
+  }
+}
+</script>
+</body>
+</html>
