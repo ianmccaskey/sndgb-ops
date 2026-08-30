@@ -272,18 +272,40 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
           return;
         }
         const contents = (p.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ') || 'no items';
-        if (window.confirm(`Receive ${p.tracking_number}\nCarrier: ${(p.carrier || '').toUpperCase()}${p.vendor_code ? ` · Vendor: ${p.vendor_code}` : ''}\nAddress: ${p.address_label}\nContents: ${contents}\n\nOK marks it received.`)) {
+        // receiving = opened + contents confirmed, so the prompt IS a
+        // contents check, not just an identity check
+        if (window.confirm(`Receive ${p.tracking_number}\nCarrier: ${(p.carrier || '').toUpperCase()}${p.vendor_code ? ` · Vendor: ${p.vendor_code}` : ''}\nAddress: ${p.address_label}\n\nOpen the package and verify its contents:\n${contents}\n\nOK confirms the contents check and marks it RECEIVED.`)) {
           const ok = await receivePkg(p);
           setScanMsg(ok
             ? `Received ${p.tracking_number}.`
             : 'NOT received — the package changed since this page loaded (already received, corrected, or emptied elsewhere). Check its card; the list has refreshed.');
+        } else {
+          setScanMsg('Not received — contents not confirmed. Scan again or use the card once verified.');
         }
       } else if (openExact.length > 1) {
         setScanMsg(`The scan matches ${openExact.length} open packages (${openExact.map(x => x.p.tracking_number).join(', ')}) — receive the right one from its card.`);
-      } else if (open.length > 0) {
-        // suffix relations only: never auto-received — the number on the
-        // label must be verified by eye against the card
-        setScanMsg(`The scan LIKELY corresponds to ${open.map(x => `${x.p.tracking_number} (${(x.p.carrier || '').toUpperCase()})`).join(', ')} but is not an exact match — verify the label's number and receive from the card.`);
+      } else if (open.length === 1) {
+        // ONE suffix relation: SUGGEST it — the operator confirms identity
+        // against the physical label (both numbers shown side by side),
+        // then verifies contents, then it receives. Never silent.
+        const p = open[0].p;
+        const stored = String(p.tracking_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const scanned = candidates.find(c => matchTracking([c], String(p.tracking_number || '')) != null) || candidates[0];
+        if (!window.confirm(`LIKELY match — not exact.\n${p.tracking_number} (${(p.carrier || '').toUpperCase()}${p.vendor_code ? ` · Vendor: ${p.vendor_code}` : ''}, ${p.address_label})\n\nScanned: ${scanned}\nLogged:  ${stored}\n\nCompare the label's number to the logged number. Is this the same package?`)) {
+          setScanMsg('Not received — if the label matches a different package, receive it from its card.');
+          return;
+        }
+        const contents = (p.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ') || 'no items';
+        if (window.confirm(`Now open the package and verify its contents:\n${contents}\n\nOK confirms the contents check and marks ${p.tracking_number} RECEIVED.`)) {
+          const ok = await receivePkg(p);
+          setScanMsg(ok
+            ? `Received ${p.tracking_number}.`
+            : 'NOT received — the package changed since this page loaded (already received, corrected, or emptied elsewhere). Check its card; the list has refreshed.');
+        } else {
+          setScanMsg('Not received — contents not confirmed. Receive from the card once verified.');
+        }
+      } else if (open.length > 1) {
+        setScanMsg(`The scan LIKELY corresponds to ${open.map(x => `${x.p.tracking_number} (${(x.p.carrier || '').toUpperCase()})`).join(', ')} but is not an exact match and cannot pick between them — verify the label's number and receive from the right card.`);
       } else if (matchedAll.some(x => x.p.received_at)) {
         const r = matchedAll.find(x => x.p.received_at)!.p;
         setScanMsg(`${r.tracking_number} is already received (${fmtDateTime(r.received_at!)} by ${r.received_by}).`);
