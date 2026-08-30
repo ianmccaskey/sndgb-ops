@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listFulfillmentQueue from '@/actions/fulfillment/listFulfillmentQueue';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
+import getPackableItems from '@/actions/fulfillment/getPackableItems';
+import adoptUpstreamShipment from '@/actions/fulfillment/adoptUpstreamShipment';
 import listReceiveAddresses from '@/actions/receiving/listReceiveAddresses';
 import listProducts from '@/actions/products/listProducts';
 import { useApp } from '@/app/AppContext';
@@ -16,6 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { fmtNum } from '@/lib/fmt';
 import { StatusPill } from '@/components/StatusPill';
@@ -123,7 +126,10 @@ export function FulfillmentPage() {
   // discipline as the Import pull. ----
   const [upstream, setUpstream] = useState<{
     forGroupBuyId: number; appId: string; gbExternalId: string; token: string;
-    at: string; total: number; statusById: Record<string, string>;
+    at: string; total: number;
+    // per upstream order: status + which item product ids carry a
+    // shipped_date there (the ordering app tracks shipment per ITEM)
+    byId: Record<string, { status: string; shipped: { pid: string; date: string }[] }>;
   } | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState('');
@@ -146,9 +152,16 @@ export function FulfillmentPage() {
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Ordering app check timed out after 30 seconds — try again.')), 30000)),
       ]);
       if (req !== checkReq.current) return;
-      const statusById: Record<string, string> = {};
-      for (const o of orders) statusById[String(o.id)] = String(o.status ?? '');
-      setUpstream({ ...source, at: new Date().toLocaleTimeString(), total: orders.length, statusById });
+      const byId: Record<string, { status: string; shipped: { pid: string; date: string }[] }> = {};
+      for (const o of orders) {
+        byId[String(o.id)] = {
+          status: String(o.status ?? ''),
+          shipped: (Array.isArray(o.items) ? o.items : [])
+            .filter(it => it.shipped_date != null && String(it.shipped_date) !== '' && it.product_id != null)
+            .map(it => ({ pid: String(it.product_id), date: String(it.shipped_date) })),
+        };
+      }
+      setUpstream({ ...source, at: new Date().toLocaleTimeString(), total: orders.length, byId });
     } catch (e: unknown) {
       if (req !== checkReq.current) return;
       setCheckError(e instanceof Error ? e.message : 'Failed to check the ordering app');
@@ -180,8 +193,9 @@ export function FulfillmentPage() {
   const upstreamPartial = (s: string) => s.trim().toLowerCase() === 'partially_shipped';
   const upstreamShipAdjacent = (s: string) => !upstreamShippedLike(s) && !upstreamPartial(s) && /ship|deliver/i.test(s);
   const LOCAL_SHIPPED = new Set(['shipped', 'delivered', 'reshipped']);
-  const upstreamStatusOf = (r: QueueRow): string | undefined =>
-    upstreamLive && r.external_id ? upstreamLive.statusById[String(r.external_id)] : undefined;
+  const upstreamInfoOf = (r: QueueRow) =>
+    upstreamLive && r.external_id ? upstreamLive.byId[String(r.external_id)] : undefined;
+  const upstreamStatusOf = (r: QueueRow): string | undefined => upstreamInfoOf(r)?.status;
   const upstreamMismatch = (r: QueueRow): boolean => {
     const s = upstreamStatusOf(r);
     if (!s || !upstreamShippedLike(s)) return false;
@@ -208,6 +222,59 @@ export function FulfillmentPage() {
   const partialTitle = (r: QueueRow) => r.all_direct
     ? 'The ordering app marks this order "partially_shipped" but nothing is recorded here — mark the sent vendor items via "Vendor shipped" on the Direct ship tab'
     : 'The ordering app marks this order "partially_shipped" but nothing is recorded here — open Ship and record the already-shipped box (manual entry, with its quantities)';
+
+  // ---- adopt an upstream shipment: turn the ordering app's per-item
+  // shipped facts into a local finalized shipment record (no tracking,
+  // carrier 'upstream') so those quantities leave "remaining to pack"
+  // and cannot be shipped again ----
+  const [adopting, setAdopting] = useState<QueueRow | null>(null);
+  const [rawAdoptLines, adoptLinesLoading] = useLoadAction(getPackableItems,
+    [adopting?.id ?? 0], { order_id: adopting?.id ?? 0 }, { enabled: !!adopting });
+  const [doAdopt] = useMutateAction(adoptUpstreamShipment);
+  const [adoptBusy, setAdoptBusy] = useState(false);
+  const [adoptMsg, setAdoptMsg] = useState('');
+  type AdoptLine = {
+    order_item_id: number; sku_code: string; product_external_id: string | null;
+    digital: boolean; direct_ship: boolean; remaining_qty: string;
+  };
+  const adoptInfo = adopting ? upstreamInfoOf(adopting) : undefined;
+  const adoptFull = !!adoptInfo && upstreamShippedLike(adoptInfo.status);
+  const adoptLines = useMemo(() => {
+    if (!adopting || !adoptInfo) return [] as (AdoptLine & { date: string | null })[];
+    return rows<AdoptLine>(rawAdoptLines)
+      .filter(l => !l.direct_ship && !l.digital && Number(l.remaining_qty) > 0)
+      .map(l => ({
+        ...l,
+        date: adoptInfo.shipped.find(x => x.pid === String(l.product_external_id))?.date ?? null,
+      }))
+      // full upstream status adopts every remaining line; partial adopts
+      // only lines the ordering app marks item-shipped
+      .filter(l => adoptFull || l.date != null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adopting, rawAdoptLines, adoptFull, JSON.stringify(adoptInfo?.shipped)]);
+  const runAdopt = async () => {
+    if (!adopting || groupBuyId == null || adoptLines.length === 0) return;
+    setAdoptBusy(true); setAdoptMsg('');
+    try {
+      const dates = Array.from(new Set(adoptLines.map(l => l.date).filter(Boolean))) as string[];
+      const note = `Recorded from ordering app (status "${adoptInfo?.status ?? ''}"${dates.length > 0 ? `; item shipped dates ${dates.join(', ')}` : ''}) — no tracking; adopted via the upstream check.`;
+      const res = await doAdopt({
+        order_id: adopting.id, group_buy_id: groupBuyId,
+        items: JSON.stringify(adoptLines.map(l => ({ order_item_id: l.order_item_id, qty: String(l.remaining_qty) }))),
+        note, actor: userName,
+      }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+        setAdoptMsg('Not recorded — the order changed since this list loaded (a draft or box may now cover these items, or the order was cancelled). Close and re-check.');
+        return;
+      }
+      setAdopting(null);
+      reload();
+    } catch (e: unknown) {
+      setAdoptMsg(e instanceof Error ? e.message : 'Failed to record the upstream shipment');
+    } finally {
+      setAdoptBusy(false);
+    }
+  };
 
   const displayQueue = useMemo(() => {
     if (!sessionActive || stage !== 'ready') return queue;
@@ -489,6 +556,10 @@ export function FulfillmentPage() {
                 ) : (
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShipping(r)}>Ship</Button>
                 )}
+                {(upstreamMismatch(r) || partialMismatch(r)) && !r.all_direct && (
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-700" title="Record the ordering app's shipped items as a local shipment"
+                    onClick={() => { setAdoptMsg(''); setAdopting(r); }}>Record here</Button>
+                )}
                 {stage !== 'direct' && r.direct_items_summary && !r.direct_outstanding && (
                   <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" disabled={saving}
                     title="Put the vendor-shipped items back in the Direct ship tab"
@@ -577,6 +648,10 @@ export function FulfillmentPage() {
                         Ship
                       </Button>
                     )}
+                    {(upstreamMismatch(r) || partialMismatch(r)) && !r.all_direct && (
+                      <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-700" title="Record the ordering app's shipped items as a local shipment"
+                        onClick={() => { setAdoptMsg(''); setAdopting(r); }}>Record here</Button>
+                    )}
                     {stage !== 'direct' && r.direct_items_summary && !r.direct_outstanding && (
                       <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" disabled={saving}
                         title="Put the vendor-shipped items back in the Direct ship tab"
@@ -594,6 +669,46 @@ export function FulfillmentPage() {
           </TableBody>
         </Table>
       </div>
+
+      {/* adopt-upstream dialog: turns the ordering app's shipped facts
+          into a local finalized shipment (no tracking) so those
+          quantities leave "remaining to pack" */}
+      <Dialog open={!!adopting} onOpenChange={o => { if (!o) setAdopting(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Record upstream shipment — {adopting?.order_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="text-xs text-muted-foreground">
+              The ordering app marks {adoptFull ? <>this order <span className="font-semibold">"{adoptInfo?.status}"</span></> : <>these items shipped</>}.
+              Recording creates a finalized local shipment (carrier "upstream", <span className="font-semibold">no tracking</span>) so these
+              quantities leave "remaining to pack" and cannot be shipped again. If you have the real carrier + tracking, use Ship &gt; manual entry instead.
+            </p>
+            {adoptLinesLoading && <p className="text-xs text-muted-foreground">Loading items…</p>}
+            {!adoptLinesLoading && adoptLines.length === 0 && (
+              <p className="text-xs text-amber-700">Nothing to record — every matching item is already covered by a local shipment or draft.</p>
+            )}
+            {adoptLines.length > 0 && (
+              <div className="border rounded-lg divide-y">
+                {adoptLines.map(l => (
+                  <div key={l.order_item_id} className="flex items-center gap-2 px-2 py-1.5 text-xs">
+                    <span className="font-medium">{l.sku_code}</span>
+                    <span className="text-muted-foreground">× {fmtNum(Number(l.remaining_qty))}</span>
+                    <span className="ml-auto text-muted-foreground">{l.date ? `shipped upstream ${l.date}` : `order marked ${adoptInfo?.status}`}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {adoptMsg && <p className="text-xs text-red-600">{adoptMsg}</p>}
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setAdopting(null)}>Cancel</Button>
+              <Button size="sm" disabled={adoptBusy || adoptLinesLoading || adoptLines.length === 0} onClick={runAdopt}>
+                {adoptBusy ? 'Recording…' : `Record ${adoptLines.length} item${adoptLines.length === 1 ? '' : 's'} as shipped`}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {shipping && (
         <ShippingModal
