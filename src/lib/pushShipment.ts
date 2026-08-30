@@ -20,9 +20,13 @@
  *    upstream notes (skipped if the exact line already exists).
  *  - status: 'shipped' ONLY when the whole order is fully shipped
  *    (every packable line finalized-covered AND no vendor-direct line
- *    outstanding). Partial shipments leave the upstream status untouched:
- *    the app's status vocabulary for partials is unconfirmed, and pushing
- *    an unknown string could break the ordering app's UI.
+ *    outstanding). Partial shipments set 'partially_shipped' — the
+ *    ordering app's own partial vocabulary, observed live 2026-08-30 —
+ *    but NEVER over a protected status (shipped/delivered/another
+ *    partial marker/any terminal cancel-refund state): a push must not
+ *    downgrade what the other admin recorded, and if she flips the
+ *    status mid-push the verification fails and the idempotent retry
+ *    re-reads and defers to her value.
  */
 import { getB44Order, updateB44Order } from '@/lib/base44';
 import type { B44Config, B44Order, B44OrderItem } from '@/lib/base44';
@@ -104,7 +108,7 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   try {
     await d.appendNote({
       order_id: d.orderId,
-      note: `[${shipDate}] ${d.userName} pushed shipment upstream: ${d.carrier.toUpperCase()} ${d.tracking}; items ${contents || '(none listed)'}; upstream status ${fullyShipped ? "-> 'shipped'" : 'unchanged (partial)'}.`,
+      note: `[${shipDate}] ${d.userName} pushed shipment upstream: ${d.carrier.toUpperCase()} ${d.tracking}; items ${contents || '(none listed)'}; upstream status ${fullyShipped ? "-> 'shipped'" : "-> 'partially_shipped' (unless already shipped/terminal there)"}.`,
       detail: JSON.stringify({ shipment_id: d.shipmentId, tracking: d.tracking, fully_shipped: fullyShipped }),
       actor: d.userName,
     });
@@ -146,8 +150,18 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
     ? upstreamNotes
     : (upstreamNotes ? `${upstreamNotes}\n${trackLine}` : trackLine);
 
+  // partial pushes set the ordering app's own partial marker — but never
+  // over a status that already says shipped-or-beyond or terminal: the
+  // other admin's 'shipped'/'delivered' (or a cancel/refund) must not be
+  // downgraded by a box recorded late, and an existing 'partially_shipped'
+  // needs no churn ('shipped' in the regex also covers it).
+  const upstreamStatus = String(upstream.status ?? '').trim();
+  const statusProtected = /shipped|delivered|cancel|refund|reject|void|denied/i.test(upstreamStatus);
+  const setPartial = !fullyShipped && !statusProtected;
+
   const fields: Record<string, unknown> = { items: mergedItems, notes: mergedNotes };
   if (fullyShipped) fields.status = 'shipped';
+  else if (setPartial) fields.status = 'partially_shipped';
 
   let putError: string | null = null;
   try {
@@ -169,7 +183,9 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
     const expectDates = shipExternalIds.size === 0 ? 0
       : afterItems.filter(it => shipExternalIds.has(String(it.product_id ?? ''))).length;
     const noteOk = String(after.notes ?? '').includes(trackLine);
-    const statusOk = !fullyShipped || String(after.status ?? '') === 'shipped';
+    const statusOk = fullyShipped
+      ? String(after.status ?? '') === 'shipped'
+      : !setPartial || String(after.status ?? '') === 'partially_shipped';
 
     if (noteOk && statusOk && datesLanded >= expectDates) {
       // (4) verified — stamp. The stamp is NOT best-effort when this push
@@ -182,7 +198,7 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
       try {
         const res = await d.markPushed({
           shipment_id: d.shipmentId, actor: d.userName, expected_push_epoch: d.pushEpoch,
-          pushed: JSON.stringify({ tracking: d.tracking, carrier: d.carrier, shipped_date_items: datesLanded, status_set: fullyShipped ? 'shipped' : null }),
+          pushed: JSON.stringify({ tracking: d.tracking, carrier: d.carrier, shipped_date_items: datesLanded, status_set: fullyShipped ? 'shipped' : setPartial ? 'partially_shipped' : null }),
         }) as unknown[] | null;
         stamped = Array.isArray(res) ? res.length > 0 : !!res;
       } catch { stamped = false; }
@@ -190,11 +206,11 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
         await followUp('PUSH VERIFIED upstream but the local completion record did not save (a concurrent change may have intervened) — push again to finish recording.');
         return { ok: false, message: "Upstream verified (status 'shipped' landed) but the LOCAL completion record did not save — use \"Push upstream\" once more to finish recording; the retry is idempotent." };
       }
-      return { ok: true, message: `Pushed to the ordering app: tracking noted${intendedDates > 0 ? `, ${intendedDates} item(s) marked shipped` : ''}${fullyShipped ? ", status -> 'shipped'" : ' (status unchanged — partial)'}.` };
+      return { ok: true, message: `Pushed to the ordering app: tracking noted${intendedDates > 0 ? `, ${intendedDates} item(s) marked shipped` : ''}${fullyShipped ? ", status -> 'shipped'" : setPartial ? ", status -> 'partially_shipped'" : ` (status unchanged — upstream already "${upstreamStatus}")`}.` };
     }
     const what = [
       noteOk ? null : 'tracking note missing',
-      statusOk ? null : "status not 'shipped'",
+      statusOk ? null : `status not '${fullyShipped ? 'shipped' : 'partially_shipped'}'`,
       datesLanded >= expectDates ? null : 'some shipped_date entries missing',
     ].filter(Boolean).join(', ');
     await followUp(`PUSH PARTIAL: verification found ${what}${putError ? ` (transport also reported: ${putError})` : ''} — retry the push.`);

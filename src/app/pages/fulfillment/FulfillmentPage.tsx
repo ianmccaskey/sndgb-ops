@@ -175,7 +175,10 @@ export function FulfillmentPage() {
   // "undeliverable return") and drive bogus manual records. Statuses that
   // merely LOOK shipping-related surface informationally, never as badges.
   const upstreamShippedLike = (s: string) => ['shipped', 'delivered'].includes(s.trim().toLowerCase());
-  const upstreamShipAdjacent = (s: string) => !upstreamShippedLike(s) && /ship|deliver/i.test(s);
+  // discovered live 2026-08-30: the ordering app's partial vocabulary is
+  // 'partially_shipped' — recognized as its own class, never as fully shipped
+  const upstreamPartial = (s: string) => s.trim().toLowerCase() === 'partially_shipped';
+  const upstreamShipAdjacent = (s: string) => !upstreamShippedLike(s) && !upstreamPartial(s) && /ship|deliver/i.test(s);
   const LOCAL_SHIPPED = new Set(['shipped', 'delivered', 'reshipped']);
   const upstreamStatusOf = (r: QueueRow): string | undefined =>
     upstreamLive && r.external_id ? upstreamLive.statusById[String(r.external_id)] : undefined;
@@ -193,6 +196,18 @@ export function FulfillmentPage() {
   const mismatchTitle = (r: QueueRow) => r.all_direct
     ? `The ordering app marks this order "${upstreamStatusOf(r)}" but its vendor-shipped items are not marked sent here — use "Vendor shipped" on the Direct ship tab`
     : `The ordering app marks this order "${upstreamStatusOf(r)}" but no shipment is fully recorded here — open Ship and record the carrier + tracking (manual entry)`;
+  // partially_shipped upstream with NOTHING recorded here = at least one
+  // box exists that this app knows nothing about. A local partial (or
+  // beyond) is already consistent with upstream partial — no flag.
+  const partialMismatch = (r: QueueRow): boolean => {
+    const s = upstreamStatusOf(r);
+    if (!s || !upstreamPartial(s)) return false;
+    if (r.all_direct && !r.direct_outstanding) return false;
+    return (r.shipment_state || 'pending') === 'pending';
+  };
+  const partialTitle = (r: QueueRow) => r.all_direct
+    ? 'The ordering app marks this order "partially_shipped" but nothing is recorded here — mark the sent vendor items via "Vendor shipped" on the Direct ship tab'
+    : 'The ordering app marks this order "partially_shipped" but nothing is recorded here — open Ship and record the already-shipped box (manual entry, with its quantities)';
 
   const displayQueue = useMemo(() => {
     if (!sessionActive || stage !== 'ready') return queue;
@@ -210,6 +225,7 @@ export function FulfillmentPage() {
   // listFulfillmentQueue caps at 1000 rows; at the cap the stage may be
   // truncated, so the banner must not claim clean stage-wide coverage
   const mismatchCount = upstreamLive ? queue.filter(upstreamMismatch).length : 0;
+  const partialMismatchCount = upstreamLive ? queue.filter(partialMismatch).length : 0;
   const queueTruncated = queue.length >= 1000;
   // ship-adjacent-but-unrecognized statuses get named in the banner so a
   // vocabulary change upstream degrades visibly, never silently
@@ -250,6 +266,7 @@ export function FulfillmentPage() {
       {r.draft_needs_recovery && <span className="rounded bg-red-100 text-red-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A draft's Shippo purchase was dispatched but never saved — it may hold a PAID label. Open Ship to recover.">needs recovery</span>}
       {r.push_outstanding && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A shipped box has not been pushed to the ordering app — open Ship and use Push upstream">not pushed</span>}
       {upstreamMismatch(r) && <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={mismatchTitle(r)}>shipped upstream</span>}
+      {partialMismatch(r) && <span className="rounded bg-orange-100 text-orange-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={partialTitle(r)}>partial upstream</span>}
       {sessionActive && stage === 'ready' && packability(r) === 'full' && <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase">packable</span>}
       {sessionActive && stage === 'ready' && packability(r) === 'partial' && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">part-packable</span>}
     </span>
@@ -409,12 +426,15 @@ export function FulfillmentPage() {
       {/* upstream check result — persists until cleared or re-pulled so the
           rose "shipped upstream" badges have a visible legend */}
       {upstreamLive && (
-        <div className={`rounded-lg border px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1 ${mismatchCount > 0 ? 'border-rose-300 bg-rose-50' : queueTruncated ? 'border-amber-300 bg-amber-50' : 'border-green-300 bg-green-50'}`}>
-          <span className={`font-medium ${mismatchCount > 0 ? 'text-rose-900' : queueTruncated ? 'text-amber-900' : 'text-green-900'}`}>
+        <div className={`rounded-lg border px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1 ${mismatchCount > 0 ? 'border-rose-300 bg-rose-50' : (partialMismatchCount > 0 || queueTruncated) ? 'border-amber-300 bg-amber-50' : 'border-green-300 bg-green-50'}`}>
+          <span className={`font-medium ${mismatchCount > 0 ? 'text-rose-900' : (partialMismatchCount > 0 || queueTruncated) ? 'text-amber-900' : 'text-green-900'}`}>
             Ordering app checked at {upstreamLive.at} ({fmtNum(upstreamLive.total)} orders) — {mismatchCount === 0
               ? `no order in this ${filterIds.size > 0 ? 'filtered view' : 'stage'} is marked shipped there without being recorded here.`
               : `${mismatchCount} order${mismatchCount > 1 ? 's' : ''} in this ${filterIds.size > 0 ? 'filtered view' : 'stage'} marked shipped there without being recorded here.`}
           </span>
+          {partialMismatchCount > 0 && (
+            <span className="text-orange-800">{partialMismatchCount} order{partialMismatchCount > 1 ? 's' : ''} partially shipped there with nothing recorded here — see the <span className="rounded bg-orange-100 text-orange-800 text-[10px] font-semibold px-1 py-0.5 uppercase">partial upstream</span> badge.</span>
+          )}
           {queueTruncated && (
             <span className="text-amber-800">Only the first 1000 loaded orders were checked — this stage may hold more; narrow by stage or product filter to cover the rest.</span>
           )}
