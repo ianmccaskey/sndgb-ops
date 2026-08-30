@@ -31,18 +31,37 @@ const remote: Record<CoordKind, Map<string, { order_id: number; ts: number }>> =
 };
 const listeners = new Set<(m: CoordMsg) => void>();
 
-channel?.addEventListener('message', ev => {
-  const m = ev.data as CoordMsg;
+const handleMsg = (m: CoordMsg): void => {
   if (!m || m.tab === TAB_ID) return;
   const map = remote[m.kind];
   if (!map) return;
   if (m.active) map.set(m.tab, { order_id: m.order_id, ts: Date.now() });
   else map.delete(m.tab);
   for (const cb of listeners) { try { cb(m); } catch { /* listener errors never break the channel */ } }
-});
+};
+
+channel?.addEventListener('message', ev => handleMsg(ev.data as CoordMsg));
+
+// fallback transport when BroadcastChannel is unavailable: localStorage
+// 'storage' events fire in every OTHER tab of the origin, carrying the
+// same messages — the cross-tab protection does not silently collapse
+const LS_MSG_KEY = 'sndgb.photoCoordMsg';
+if (!channel && typeof window !== 'undefined') {
+  try {
+    window.addEventListener('storage', ev => {
+      if (ev.key !== LS_MSG_KEY || !ev.newValue) return;
+      try { handleMsg(JSON.parse(ev.newValue) as CoordMsg); } catch { /* malformed */ }
+    });
+  } catch { /* no window events: single-tab environment */ }
+}
 
 export const announce = (kind: CoordKind, orderId: number, active: boolean): void => {
-  try { channel?.postMessage({ kind, order_id: orderId, active, tab: TAB_ID } satisfies CoordMsg); } catch { /* channel closed */ }
+  const msg: CoordMsg = { kind, order_id: orderId, active, tab: TAB_ID };
+  if (channel) {
+    try { channel.postMessage(msg); } catch { /* channel closed */ }
+    return;
+  }
+  try { localStorage.setItem(LS_MSG_KEY, JSON.stringify({ ...msg, nonce: Math.random() })); } catch { /* storage down: single-tab behavior */ }
 };
 
 const anyActive = (kind: CoordKind, orderId: number): boolean => {

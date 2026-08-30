@@ -197,16 +197,29 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const reclassifyBlind = async (photosIn: StashedPhoto[]): Promise<StashedPhoto[]> => {
     const blindTs = readLandingBlindTs(order.id);
     if (blindTs == null) return photosIn;
-    let converted = 0;
+    const okKeys = new Set<string>();
+    // the mark clears only when EVERY targeted row is durably resolved —
+    // a CAS miss or memory-only write keeps it, so the next read retries
+    let allDurablyResolved = true;
     for (const s of photosIn) {
       if (s.shipment_id === null && !s.recovered && s.ts <= blindTs) {
         const res = await stashMutateIf(s.key, { shipment_id: null, recovered: false }, { ...s, recovered: true });
-        if (res.ok) converted += 1;
+        if (res.ok) {
+          okKeys.add(s.key);
+          if (!res.durable) allDurablyResolved = false;
+        } else {
+          // the row changed since the read: converted, attached, or
+          // discarded elsewhere counts as resolved; still unbound-
+          // unrecovered (or unverifiable) does not
+          const cur = await stashGet(s.key);
+          if (cur && cur.shipment_id === null && !cur.recovered) allDurablyResolved = false;
+        }
       }
     }
-    clearLandingBlind(order.id, blindTs);
-    if (converted > 0) setPhotoMsg(`${converted} saved photo(s) predate a shipment created while this device's photo storage was unreadable — they are marked "recovered" for explicit placement.`);
-    return photosIn.map(s => (s.shipment_id === null && !s.recovered && s.ts <= blindTs ? { ...s, recovered: true } : s));
+    if (allDurablyResolved) clearLandingBlind(order.id, blindTs);
+    if (okKeys.size > 0) setPhotoMsg(`${okKeys.size} saved photo(s) predate a shipment created while this device's photo storage was unreadable — they are marked "recovered" for explicit placement.`);
+    // only rows whose CAS actually succeeded render as recovered
+    return photosIn.map(s => (okKeys.has(s.key) ? { ...s, recovered: true } : s));
   };
 
   // 'refused' = the server said no (quota full, shipment voided or gone) —
