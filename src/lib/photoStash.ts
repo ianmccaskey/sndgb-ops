@@ -73,13 +73,20 @@ const openDb = (): Promise<IDBDatabase> => {
   return dbPromise;
 };
 
+// Resolves on the TRANSACTION's oncomplete, never on the request's
+// onsuccess: an IndexedDB request can succeed and its transaction still
+// abort later (quota pressure, late errors). Durability is only real at
+// commit, and every guarantee in the photo flow rides on this boolean.
 const idbOp = <T,>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> =>
   openDb().then(db => new Promise<T>((resolve, reject) => {
     try {
       const tx = db.transaction(STORE, mode);
+      let result: T;
       const req = run(tx.objectStore(STORE));
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      req.onsuccess = () => { result = req.result; };
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(tx.error ?? new Error('idb transaction aborted'));
+      tx.onerror = () => reject(tx.error ?? new Error('idb transaction error'));
     } catch (e) { reject(e); }
   }));
 

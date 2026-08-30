@@ -136,12 +136,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     const wasBound = s.shipment_id != null;
     const target = s.shipment_id ?? fallbackShipmentId;
     if (target == null) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
+    // bind FIRST, before any network work: a committed insert with a
+    // lost response must replay against THIS shipment later, never
+    // migrate to a different "newest" box (the modal's durable-attach
+    // contract). false = page-lifetime only — every message below says so
+    const boundDurable = await stashUpsert({ ...s, shipment_id: target });
     try {
-      // bind FIRST, before any network work: a committed insert with a
-      // lost response must replay against THIS shipment later, never
-      // migrate to a different "newest" box (the modal's durable-attach
-      // contract)
-      await stashUpsert({ ...s, shipment_id: target });
       // a bound entry is an automatic replay (the insert may have already
       // committed); an unbound attach here is a deliberate operator act
       const res = await doAddShipPhoto({ shipment_id: target, image_data: s.full, thumb_data: s.thumb, actor: s.actor || userName, replay: wasBound }) as unknown[] | null;
@@ -159,10 +159,16 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         // the photo was deliberately removed) — mirror the ship dialog:
         // the entry becomes unbound + recovered, so "Attach" to a live
         // shipment is offered instead of retrying a dead one forever
-        await stashUpsert({ ...s, shipment_id: null, recovered: true });
-        setStrandedMsg('Its original shipment refused this photo (deleted, voided, quota full, or it was removed on purpose) — it is now attachable: use "Attach" to put it on the newest live shipment, or discard it.');
-      } else setStrandedMsg('The shipment refused this photo (quota full, voided, already on another box of this order, or previously removed on purpose) — remove it here if it is no longer needed.');
-    } catch { setStrandedMsg('Upload failed — the photo stays saved on this device; retry.'); }
+        const recDurable = await stashUpsert({ ...s, shipment_id: null, recovered: true });
+        setStrandedMsg('Its original shipment refused this photo (deleted, voided, quota full, or it was removed on purpose) — it is now attachable: use "Attach" to put it on the newest live shipment, or discard it.'
+          + (recDurable ? '' : ' Warning: this device’s storage is unavailable — it survives only while this page stays open.'));
+      } else setStrandedMsg('The shipment refused this photo (quota full, voided, already on another box of this order, or previously removed on purpose) — remove it here if it is no longer needed.'
+        + (boundDurable ? '' : ' Warning: this device’s storage is unavailable — it survives only while this page stays open.'));
+    } catch {
+      setStrandedMsg(boundDurable
+        ? 'Upload failed — the photo stays saved on this device; retry.'
+        : 'Upload failed AND this device’s storage is unavailable — the photo survives only while this page stays open. Retry now or re-take it.');
+    }
     refreshStranded();
   };
   const o = firstRow<OrderRow>(rawOrder);
