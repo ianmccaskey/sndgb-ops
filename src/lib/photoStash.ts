@@ -56,25 +56,43 @@ const ORDER_INDEX = 'by_order';
 const LEGACY_KEY = 'sndgb.pendingShipPhotos';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
+const openAttempt = (): Promise<IDBDatabase> =>
+  new Promise<IDBDatabase>((resolve, reject) => {
+    try {
+      const req = indexedDB.open(DB_NAME, 2);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        const store = db.objectStoreNames.contains(STORE)
+          ? req.transaction!.objectStore(STORE)
+          : db.createObjectStore(STORE, { keyPath: 'key' });
+        // order-scoped reads: the hot path must scale with the order
+        // being worked, never with the device's total photo backlog
+        if (!store.indexNames.contains(ORDER_INDEX)) store.createIndex(ORDER_INDEX, 'order_id');
+      };
+      req.onsuccess = () => {
+        // never be the tab that blocks a future schema upgrade: when a
+        // newer version wants in, drop this connection — the next op
+        // reopens at the new version
+        req.result.onversionchange = () => { req.result.close(); dbPromise = null; };
+        resolve(req.result);
+      };
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => reject(new Error('idb upgrade blocked by another tab'));
+    } catch (e) { reject(e); }
+  });
 const openDb = (): Promise<IDBDatabase> => {
   if (!dbPromise) {
-    dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-      try {
-        const req = indexedDB.open(DB_NAME, 2);
-        req.onupgradeneeded = () => {
-          const db = req.result;
-          const store = db.objectStoreNames.contains(STORE)
-            ? req.transaction!.objectStore(STORE)
-            : db.createObjectStore(STORE, { keyPath: 'key' });
-          // order-scoped reads: the hot path must scale with the order
-          // being worked, never with the device's total photo backlog
-          if (!store.indexNames.contains(ORDER_INDEX)) store.createIndex(ORDER_INDEX, 'order_id');
-        };
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-        req.onblocked = () => reject(new Error('blocked'));
-      } catch (e) { reject(e); }
-    });
+    // a v1-era tab that predates the versionchange auto-close can block
+    // the v2 upgrade; retry briefly instead of collapsing straight into
+    // generic storage failure — old tabs usually release within moments
+    dbPromise = (async () => {
+      let lastErr: unknown;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try { return await openAttempt(); } catch (e) { lastErr = e; }
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+      }
+      throw lastErr;
+    })();
     dbPromise.catch(() => { dbPromise = null; });
   }
   return dbPromise;

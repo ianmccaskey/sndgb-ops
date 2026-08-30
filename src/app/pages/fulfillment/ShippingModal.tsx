@@ -985,7 +985,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                       onClick={() => setViewPhoto(ph.full)} />
                     {ph.recovered && (
                       <button className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-amber-100 text-amber-900 border border-amber-400 px-1.5 text-[9px] leading-tight" title="Allow this photo to attach to the next shipment you create"
-                        onClick={async () => { await stashMutateIf(ph.key, { shipment_id: null, recovered: true }, { ...ph, recovered: false }); refreshPendingView(); }}>use</button>
+                        onClick={async () => {
+                          const res = await stashMutateIf(ph.key, { shipment_id: null, recovered: true }, { ...ph, recovered: false });
+                          await refreshPendingView();
+                          if (!res.ok) setPhotoMsg('This photo could not be updated (it changed in another tab, or this device’s storage is unavailable) — try again, or reload the page.');
+                          else if (!res.durable) setPhotoMsg('Allowed onto the next shipment, but this device’s storage is unavailable — the change survives only while this page stays open.');
+                        }}>use</button>
                     )}
                     <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove before shipping"
                       onClick={async () => {

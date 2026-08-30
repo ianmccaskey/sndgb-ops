@@ -1782,7 +1782,12 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                             {s.shipment_id == null && !s.recovered ? (
                               <Button size="sm" variant="outline" className="h-5 px-1.5 text-[10px]" disabled={saving}
                                 title="Convert this pending capture into a recoverable photo that can be attached from here"
-                                onClick={async () => { await stashMutateIf(s.key, { shipment_id: null, recovered: false }, { ...s, recovered: true }); refreshStranded(); }}>
+                                onClick={async () => {
+                                  const res = await stashMutateIf(s.key, { shipment_id: null, recovered: false }, { ...s, recovered: true });
+                                  await refreshStranded();
+                                  if (!res.ok) setStrandedMsg('This photo could not be converted (it changed in another tab, or this device’s storage is unavailable) — try again, or reload the page.');
+                                  else if (!res.durable) setStrandedMsg('Recovered, but this device’s storage is unavailable — the change survives only while this page stays open.');
+                                }}>
                                 recover
                               </Button>
                             ) : (
