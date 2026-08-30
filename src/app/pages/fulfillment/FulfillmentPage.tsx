@@ -85,6 +85,9 @@ export function FulfillmentPage() {
   const poolUnitsLeft = poolEntries.reduce((s, [, v]) => s + Math.max(0, Number(v) || 0), 0);
   const addToPool = () => {
     if (!sAddProduct || !(Number(sAddQty) > 0)) return;
+    // a NEW session (pool currently empty of stock) always starts
+    // default-off for partials, even if a prior session toggled them on
+    if (!Object.values(pool).some(v => Number(v) > 0)) setShowPartials(false);
     setPool(m => ({ ...m, [Number(sAddProduct)]: sAddQty.trim() }));
     setSAddProduct(''); setSAddQty('');
   };
@@ -247,7 +250,7 @@ export function FulfillmentPage() {
                 </span>
               )}
               <span className="ml-auto flex gap-1">
-                {sessionActive && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPool({})}>Reset</Button>}
+                {sessionActive && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setPool({}); setShowPartials(false); }}>Reset</Button>}
                 <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSessionOpen(false)}>Hide</Button>
               </span>
             </CardTitle>
@@ -303,6 +306,25 @@ export function FulfillmentPage() {
       )}
 
       {error && <p className="text-sm text-red-600">{error}</p>}
+
+      {/* persistent whenever the session is filtering rows out — the
+          collapsible card is not the only place this is visible, so a
+          hidden card can never silently shrink the Ready queue */}
+      {sessionActive && stage === 'ready' && sessionHiddenCount > 0 && (
+        <div className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="font-medium text-violet-900">
+            Shipment session is filtering "Ready" — {sessionHiddenCount} order{sessionHiddenCount > 1 ? 's' : ''} hidden.
+          </span>
+          <label className="flex items-center gap-1.5 cursor-pointer text-violet-900">
+            <input type="checkbox" checked={showPartials} onChange={e => setShowPartials(e.target.checked)} />
+            Show partially packable
+          </label>
+          {!sessionOpen && (
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setSessionOpen(true)}>Open session</Button>
+          )}
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => { setPool({}); setShowPartials(false); }}>End session</Button>
+        </div>
+      )}
 
       {/* mobile: cards (same data, packing-first) */}
       <div className="md:hidden space-y-2">
