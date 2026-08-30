@@ -43,17 +43,22 @@ const drawScaledRotated = (bitmap: ImageBitmap, maxEdge: number, rotateDeg: 0 | 
  */
 export async function decodeCarrierLabel(file: File): Promise<string[]> {
   if (!file.type.startsWith('image/')) throw new Error(`"${file.name}" is not an image.`);
-  const bitmap = await createImageBitmap(file).catch(() => null);
-  if (!bitmap) throw new Error(`Could not read "${file.name}" as an image.`);
   // decoding runs on the main thread (no worker in this stack), so the
-  // workload is bounded three ways: the source is downscaled to <=2000px
-  // before ZXing sees it (drawScaledRotated), a WALL-CLOCK budget stops
-  // the whole search, and the loop YIELDS between passes so the page
-  // keeps painting instead of freezing in one long task
+  // workload is bounded end to end: the WALL-CLOCK budget starts BEFORE
+  // the image load, large captures are resize-bounded DURING decode
+  // (createImageBitmap resize options — a 48MP phone photo never fully
+  // rasterizes; engines without the options fall back to a plain load),
+  // canvases cap at <=2000px, and the search loop YIELDS between passes
+  // so the page keeps painting instead of freezing in one long task
   const DEADLINE_MS = 4000;
   const started = performance.now();
   const overBudget = () => performance.now() - started > DEADLINE_MS;
   const yieldToUi = () => new Promise<void>(r => setTimeout(r, 0));
+  const bitmap = await (file.size > 1_500_000
+    ? createImageBitmap(file, { resizeWidth: 2000, resizeQuality: 'high' }).catch(() => createImageBitmap(file))
+    : createImageBitmap(file)
+  ).catch(() => null);
+  if (!bitmap) throw new Error(`Could not read "${file.name}" as an image.`);
   try {
     const hints = new Map();
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.ITF]);
