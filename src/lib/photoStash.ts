@@ -206,8 +206,12 @@ export const readStash = async (orderId: number): Promise<StashReadResult> => {
  * if localStorage is also down, behavior degrades to the prior honest
  * warning.
  */
-const BLIND_KEY = 'sndgb.photoLandingBlind';
-type BlindMark = { order_id: number; ts: number };
+// each order's marker lives under its OWN key — single setItem/
+// removeItem per mutation, no shared array read-modify-write, so
+// concurrent blind landings or a mark racing a clear on another order
+// cannot drop each other's unresolved markers. Newest ts wins per
+// order; clearLandingBlind removes only when the stored ts is covered.
+const BLIND_PREFIX = 'sndgb.photoLandingBlind.';
 // page-memory mirror: EVERY blind mark also lives here, so a landing
 // where localStorage writes fail too still forces reclassification for
 // the rest of the page's lifetime — the only truly unrecoverable case
@@ -215,29 +219,28 @@ type BlindMark = { order_id: number; ts: number };
 // recovers, which no client mechanism can persist through; callers get
 // the durability boolean so they can say exactly that.
 const memBlind = new Map<number, number>();
-const readBlind = (): BlindMark[] => {
-  try { return JSON.parse(localStorage.getItem(BLIND_KEY) || '[]') as BlindMark[]; } catch { return []; }
+const readBlindPersisted = (orderId: number): number | null => {
+  try {
+    const raw = localStorage.getItem(`${BLIND_PREFIX}${orderId}`);
+    if (!raw) return null;
+    const ts = Number(raw);
+    return Number.isFinite(ts) ? ts : null;
+  } catch { return null; }
 };
 // returns true when the marker was durably persisted
 export const markLandingBlind = (orderId: number): boolean => {
   const ts = Date.now();
   memBlind.set(orderId, Math.max(ts, memBlind.get(orderId) ?? 0));
   try {
-    // ONE marker per order, newest ts wins; no global truncation — an
-    // unresolved order's marker must never be evicted by unrelated
-    // activity. Markers are tiny (~30 bytes), grow only with orders that
-    // had a blind landing, and clearLandingBlind removes them once the
-    // order's photos are durably reclassified.
-    const marks = readBlind().filter(m => m && typeof m.order_id === 'number' && m.order_id !== orderId);
-    marks.push({ order_id: orderId, ts });
-    localStorage.setItem(BLIND_KEY, JSON.stringify(marks));
+    const prior = readBlindPersisted(orderId);
+    localStorage.setItem(`${BLIND_PREFIX}${orderId}`, String(prior != null ? Math.max(prior, ts) : ts));
     return true;
   } catch {
     return false; // page-memory mirror still enforces within this session
   }
 };
 export const readLandingBlindTs = (orderId: number): number | null => {
-  const persisted = readBlind().filter(m => m.order_id === orderId).reduce<number | null>((acc, m) => (acc == null || m.ts > acc ? m.ts : acc), null);
+  const persisted = readBlindPersisted(orderId);
   const mem = memBlind.get(orderId) ?? null;
   if (persisted == null) return mem;
   return mem == null ? persisted : Math.max(persisted, mem);
@@ -246,8 +249,9 @@ export const clearLandingBlind = (orderId: number, upToTs: number): void => {
   const mem = memBlind.get(orderId);
   if (mem != null && mem <= upToTs) memBlind.delete(orderId);
   try {
-    localStorage.setItem(BLIND_KEY, JSON.stringify(readBlind().filter(m => !(m.order_id === orderId && m.ts <= upToTs))));
-  } catch { /* leave the marks; reprocessing is idempotent */ }
+    const persisted = readBlindPersisted(orderId);
+    if (persisted != null && persisted <= upToTs) localStorage.removeItem(`${BLIND_PREFIX}${orderId}`);
+  } catch { /* leave the mark; reprocessing is idempotent */ }
 };
 
 // Re-read ONE entry by key — the guard callers run immediately before

@@ -72,23 +72,39 @@ export const announce = (kind: CoordKind, orderId: number, active: boolean): voi
 
 // persisted hold records: a tab that opens or reloads MID-operation has
 // received no broadcast yet — it would be blind to an active hold until
-// the next 10s heartbeat. Every announce also upserts/removes its hold
+// the next 10s heartbeat. Every announce also writes/removes its hold
 // here (best-effort; the live broadcast rail is authoritative when
 // localStorage is down), and anyActive() consults both, so late-joining
-// tabs see current holds immediately. Same 30s staleness as broadcasts.
-const HOLDS_KEY = 'sndgb.photoCoordHolds';
-type HoldRec = { kind: CoordKind; tab: string; order_id: number; ts: number };
-const readHolds = (): HoldRec[] => {
-  try { return JSON.parse(localStorage.getItem(HOLDS_KEY) || '[]') as HoldRec[]; } catch { return []; }
-};
+// tabs see current holds immediately. Each hold lives under its OWN
+// (kind, tab) key — single setItem/removeItem per mutation, no shared
+// array read-modify-write, so concurrent tabs cannot clobber each
+// other's records. Same 30s staleness as broadcasts.
+const HOLD_PREFIX = 'sndgb.photoCoordHold.';
 const persistHold = (kind: CoordKind, orderId: number, active: boolean): void => {
+  const key = `${HOLD_PREFIX}${kind}.${TAB_ID}`;
   try {
-    const now = Date.now();
-    const holds = readHolds().filter(h =>
-      h && !(h.kind === kind && h.tab === TAB_ID) && now - h.ts <= STALE_MS);
-    if (active) holds.push({ kind, tab: TAB_ID, order_id: orderId, ts: now });
-    localStorage.setItem(HOLDS_KEY, JSON.stringify(holds));
+    if (active) localStorage.setItem(key, JSON.stringify({ order_id: orderId, ts: Date.now() }));
+    else localStorage.removeItem(key);
   } catch { /* live broadcast rail still covers already-open tabs */ }
+};
+const persistedHoldActive = (kind: CoordKind, orderId: number, now: number): boolean => {
+  try {
+    const prefix = `${HOLD_PREFIX}${kind}.`;
+    const stale: string[] = [];
+    let found = false;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(prefix)) continue;
+      if (k === `${prefix}${TAB_ID}`) continue; // own hold: not "remote"
+      try {
+        const v = JSON.parse(localStorage.getItem(k) || '') as { order_id: number; ts: number };
+        if (now - v.ts > STALE_MS) { stale.push(k); continue; }
+        if (v.order_id === orderId) found = true;
+      } catch { stale.push(k); }
+    }
+    for (const k of stale) { try { localStorage.removeItem(k); } catch { /* prune later */ } }
+    return found;
+  } catch { return false; }
 };
 
 const anyActive = (kind: CoordKind, orderId: number): boolean => {
@@ -99,10 +115,7 @@ const anyActive = (kind: CoordKind, orderId: number): boolean => {
   }
   // late-join bootstrap: holds persisted by tabs whose broadcasts predate
   // this tab's existence
-  for (const h of readHolds()) {
-    if (h && h.kind === kind && h.tab !== TAB_ID && h.order_id === orderId && now - h.ts <= STALE_MS) return true;
-  }
-  return false;
+  return persistedHoldActive(kind, orderId, now);
 };
 
 export const remoteCaptureActive = (orderId: number): boolean => anyActive('capture', orderId);
