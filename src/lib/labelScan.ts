@@ -54,24 +54,33 @@ export async function decodeCarrierLabel(file: File): Promise<string[]> {
     for (const maxEdge of [2000, 1200]) {
       for (const rot of [0, 90] as const) {
         const canvas = drawScaledRotated(bitmap, maxEdge, rot);
-        // mask-and-rescan: after each decode, blank the found barcode's
-        // region and scan again — up to four barcodes per variant, so a
-        // routing/service barcode cannot shadow the tracking one
-        for (let pass = 0; pass < 4; pass++) {
+        // mask-and-rescan: after each decode, blank the found barcode and
+        // scan again so a routing/service barcode cannot shadow the
+        // tracking one. 1D result points are SPARSE ENDPOINTS (not a
+        // bounding box), so the mask is a FULL-WIDTH stripe around the
+        // scanline with escalating height — and a repeated read does not
+        // burn the budget: it widens the stripe and tries again, bailing
+        // only when masking clearly is not biting.
+        const seenHere = new Set<string>();
+        let repeats = 0;
+        for (let pass = 0; pass < 8; pass++) {
           try {
             const bb = new BinaryBitmap(new HybridBinarizer(new HTMLCanvasElementLuminanceSource(canvas)));
             const res = reader.decode(bb, hints);
             const t = res.getText().trim();
-            if (t) texts.add(t);
+            if (t && seenHere.has(t)) repeats += 1;
+            else if (t) { seenHere.add(t); texts.add(t); repeats = 0; }
+            if (repeats >= 2) break; // stripe not covering it; stop spinning
             const pts = res.getResultPoints() || [];
             if (pts.length === 0) break;
-            const xs = pts.map(p => p.getX());
             const ys = pts.map(p => p.getY());
             const ctx = canvas.getContext('2d');
             if (!ctx) break;
             ctx.fillStyle = '#ffffff';
-            ctx.fillRect(Math.min(...xs) - 12, Math.min(...ys) - 40,
-              (Math.max(...xs) - Math.min(...xs)) + 24, (Math.max(...ys) - Math.min(...ys)) + 80);
+            const pad = 100 * (repeats + 1);
+            const y0 = Math.max(0, Math.min(...ys) - pad);
+            const y1 = Math.min(canvas.height, Math.max(...ys) + pad);
+            ctx.fillRect(0, y0, canvas.width, y1 - y0);
           } catch { break; /* nothing further in this variant */ }
         }
       }
