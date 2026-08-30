@@ -18,8 +18,9 @@ import deleteShipmentPhoto from '@/actions/fulfillment/deleteShipmentPhoto';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { compressImageToDataUrl } from '@/lib/imageCapture';
 import type { CapturedPhoto } from '@/lib/imageCapture';
-import { newStashKey, readStash, stashGet, stashUpsert, stashRemove, stashMutateIf } from '@/lib/photoStash';
+import { newStashKey, readStash, stashGet, stashUpsert, stashRemove, stashMutateIf, markLandingBlind, readLandingBlindTs, clearLandingBlind } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
+import { announce, remoteCaptureActive, remoteLandingActive, subscribeCoord } from '@/lib/photoCoord';
 import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
@@ -185,6 +186,28 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // compressing: that capture missed the snapshot, so its entries must
   // not become ordinary auto-attach pending photos
   const landedDuringCapture = useRef(false);
+  // cross-tab: another tab landing this order's shipment while THIS tab
+  // is mid-compression sets the same flag (see photoCoord)
+  useEffect(() => subscribeCoord(m => {
+    if (m.order_id === order.id && m.kind === 'landing' && m.active && capturingRef.current) landedDuringCapture.current = true;
+  }), [order.id]);
+  // convert entries that predate a BLIND landing (the stash was
+  // unreadable when a shipment landed, so its snapshot could not see or
+  // consume them) into recovered photos requiring explicit placement
+  const reclassifyBlind = async (photosIn: StashedPhoto[]): Promise<StashedPhoto[]> => {
+    const blindTs = readLandingBlindTs(order.id);
+    if (blindTs == null) return photosIn;
+    let converted = 0;
+    for (const s of photosIn) {
+      if (s.shipment_id === null && !s.recovered && s.ts <= blindTs) {
+        const res = await stashMutateIf(s.key, { shipment_id: null, recovered: false }, { ...s, recovered: true });
+        if (res.ok) converted += 1;
+      }
+    }
+    clearLandingBlind(order.id, blindTs);
+    if (converted > 0) setPhotoMsg(`${converted} saved photo(s) predate a shipment created while this device's photo storage was unreadable — they are marked "recovered" for explicit placement.`);
+    return photosIn.map(s => (s.shipment_id === null && !s.recovered && s.ts <= blindTs ? { ...s, recovered: true } : s));
+  };
 
   // 'refused' = the server said no (quota full, shipment voided or gone) —
   // retrying the same payload cannot succeed. 'error' = ambiguous transport
@@ -208,7 +231,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (stashRetried.current) return;
     stashRetried.current = true;
     (async () => {
-      const { photos: all, readOk } = await readStash(order.id);
+      const { photos: rawAll, readOk } = await readStash(order.id);
+      const all = readOk ? await reclassifyBlind(rawAll) : rawAll;
       setPendingPhotos(all.filter(s => s.shipment_id === null));
       if (!readOk) setPhotoMsg('Warning: saved photos on this device could not be read — pending photos and failed-upload retries may be missing. Reload the page to retry.');
       const bound = all.filter(s => s.shipment_id !== null);
@@ -263,12 +287,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     // reaches via shipmentLanded) — a new capture would materialize
     // AFTER the snapshot: never riding the box being packed, free to
     // drift to a later one. Refuse the capture window instead of racing.
-    if (purchaseInFlight.current || manualBusy || landingRef.current) {
+    if (purchaseInFlight.current || manualBusy || landingRef.current || remoteLandingActive(order.id)) {
       setPhotoMsg('A shipment is being created right now — wait a moment, then add the photo (you can also attach it to the shipment row once it appears).');
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
     capturingRef.current = true; // landings wait for this before snapshotting
+    announce('capture', order.id, true); // other tabs' landings wait too
     landedDuringCapture.current = false;
     setPhotoBusy(true); setPhotoMsg('');
     const errors: string[] = [];
@@ -328,6 +353,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (errors.length > 0) setPhotoMsg(errors.join(' '));
     } finally {
       capturingRef.current = false;
+      announce('capture', order.id, false);
       setPhotoBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -340,23 +366,30 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // silently dropped, never blocking the shipment
   const uploadPendingPhotos = async (shipmentId: number) => {
     landingRef.current = true; // new captures refuse while we consume
+    announce('landing', order.id, true); // other tabs' captures refuse + flag
     try {
-    // an in-flight capture (compression runs before the stash write)
-    // must become visible before the snapshot, or it would miss this
-    // shipment and drift to a later one; bounded wait so a wedged
-    // encoder cannot deadlock shipping — after the cap, a straggler
-    // stays visibly pending instead of silently lost
-    for (let i = 0; i < 100 && capturingRef.current; i++) await new Promise(r => setTimeout(r, 100));
-    // cap hit with the capture still running: its photos will land after
-    // this snapshot — flag them so they become RECOVERED (explicit
-    // operator placement) instead of ordinary pending photos that would
-    // silently ride the NEXT box
+    // an in-flight capture (compression runs before the stash write) —
+    // in THIS tab or another — must become visible before the snapshot,
+    // or it would miss this shipment and drift to a later one; bounded
+    // wait so a wedged encoder cannot deadlock shipping — after the
+    // cap, a straggler is flagged and becomes RECOVERED, never an
+    // ordinary pending photo
+    for (let i = 0; i < 100 && (capturingRef.current || remoteCaptureActive(order.id)); i++) await new Promise(r => setTimeout(r, 100));
     if (capturingRef.current) landedDuringCapture.current = true;
     // recovered entries are excluded: evidence never migrates to a
     // different box without the operator's explicit per-photo "use"
-    const { photos: stashPhotos, readOk: pendReadOk } = await readStash(order.id);
+    const { photos: rawStash, readOk: pendReadOk } = await readStash(order.id);
+    if (!pendReadOk) {
+      // a BLIND landing: real pending photos may exist unreadable; mark
+      // it durably (localStorage — a separate channel that often
+      // survives an IndexedDB failure) so the next successful read
+      // converts them to recovered instead of letting them ride the
+      // NEXT box
+      markLandingBlind(order.id);
+    }
+    const stashPhotos = pendReadOk ? await reclassifyBlind(rawStash) : rawStash;
     const mine = stashPhotos.filter(s => s.shipment_id === null && !s.recovered);
-    const readWarning = pendReadOk ? '' : 'Warning: saved photos on this device could not be read — some pending photos may not have attached; reopen this dialog to retry.';
+    const readWarning = pendReadOk ? '' : 'Warning: saved photos on this device could not be read — some pending photos may not have attached; they will resurface as "recovered" photos once storage is readable again.';
     if (mine.length === 0) { if (readWarning) setPhotoMsg(readWarning); return; }
     let refused = 0, errored = 0, attached = 0, allDurable = true;
     for (const s of mine) {
@@ -393,7 +426,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (!allDurable) parts.push(`Warning: this device's storage is unavailable — unattached photos survive only while this page stays open.`);
     if (parts.length > 0) setPhotoMsg(parts.join(' '));
     if (attached > 0 || refused > 0 || errored > 0) reloadPhotos();
-    } finally { landingRef.current = false; }
+    } finally {
+      landingRef.current = false;
+      announce('landing', order.id, false);
+    }
   };
 
   const removePhoto = async (photoId: number, shipmentId: number) => {

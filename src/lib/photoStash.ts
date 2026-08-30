@@ -194,6 +194,40 @@ export const readStash = async (orderId: number): Promise<StashReadResult> => {
   return { photos: [...merged.values()], readOk };
 };
 
+/*
+ * Blind-landing markers: when a shipment lands while the durable stash
+ * is UNREADABLE, its snapshot cannot see (or reclassify) real pending
+ * photos — once reads recover, those rows would still be ordinary
+ * pending entries and would auto-ride the NEXT box. The landing records
+ * a marker in localStorage (a separate storage channel that often
+ * survives an IndexedDB failure); the next successful read converts
+ * every unbound non-recovered entry OLDER than the marker into a
+ * recovered photo requiring explicit placement. try/catch throughout —
+ * if localStorage is also down, behavior degrades to the prior honest
+ * warning.
+ */
+const BLIND_KEY = 'sndgb.photoLandingBlind';
+type BlindMark = { order_id: number; ts: number };
+const readBlind = (): BlindMark[] => {
+  try { return JSON.parse(localStorage.getItem(BLIND_KEY) || '[]') as BlindMark[]; } catch { return []; }
+};
+export const markLandingBlind = (orderId: number): void => {
+  try {
+    const marks = readBlind().filter(m => m && typeof m.order_id === 'number');
+    marks.push({ order_id: orderId, ts: Date.now() });
+    localStorage.setItem(BLIND_KEY, JSON.stringify(marks.slice(-20)));
+  } catch { /* both channels down: the honest warning is all we have */ }
+};
+export const readLandingBlindTs = (orderId: number): number | null => {
+  const ts = readBlind().filter(m => m.order_id === orderId).reduce<number | null>((acc, m) => (acc == null || m.ts > acc ? m.ts : acc), null);
+  return ts;
+};
+export const clearLandingBlind = (orderId: number, upToTs: number): void => {
+  try {
+    localStorage.setItem(BLIND_KEY, JSON.stringify(readBlind().filter(m => !(m.order_id === orderId && m.ts <= upToTs))));
+  } catch { /* leave the marks; reprocessing is idempotent */ }
+};
+
 // Re-read ONE entry by key — the guard callers run immediately before
 // binding/uploading, so a stale snapshot cannot override a newer
 // discard or reclassification made in another tab. null = the entry no
