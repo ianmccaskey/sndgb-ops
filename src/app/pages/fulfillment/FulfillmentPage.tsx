@@ -53,7 +53,17 @@ export function FulfillmentPage() {
   // product filters: CONTAINS (order has remaining work on any selected
   // product) or ONLY (…and on nothing else). Both key on REMAINING work.
   const [filterIds, setFilterIds] = useState<Set<number>>(new Set());
-  const [filterMode, setFilterMode] = useState<'contains' | 'only'>('contains');
+  // the mode is STICKY per device (localStorage): it resetting to
+  // 'contains' on every load made phone and desktop silently disagree —
+  // the same selection filtered "wrong" on mobile because the tiny
+  // toggle had defaulted back
+  const [filterMode, setFilterModeState] = useState<'contains' | 'only'>(() => {
+    try { return localStorage.getItem('sndgb.fulfillFilterMode') === 'only' ? 'only' : 'contains'; } catch { return 'contains'; }
+  });
+  const setFilterMode = (m: 'contains' | 'only') => {
+    setFilterModeState(m);
+    try { localStorage.setItem('sndgb.fulfillFilterMode', m); } catch { /* per-device convenience only */ }
+  };
   const productIdsCsv = Array.from(filterIds).sort((a, b) => a - b).join(',');
   const enabled = groupBuyId != null;
   const [raw, , , reload] = useLoadAction(listFulfillmentQueue,
