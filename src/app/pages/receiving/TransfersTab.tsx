@@ -58,6 +58,15 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const [doSetRefund] = useMutateAction(setTransferRefund);
 
   const [fFrom, setFFrom] = useState('');
+  // address GROUP: transfers ship from an ORIGIN address; stock received
+  // at any address whose transfer_origin_id points at it counts as the
+  // origin's (mirrors the server fns' COALESCE(transfer_origin_id, id))
+  const groupMemberIds = React.useMemo(() => {
+    const origin = Number(fFrom || 0);
+    return new Set(addresses
+      .filter(a => Number(a.transfer_origin_id ?? a.id) === origin)
+      .map(a => Number(a.id)));
+  }, [addresses, fFrom]);
   const [fDest, setFDest] = useState('');      // destination id, '__custom__', or 'ds_<order item id>'
   // the received box whose contents were loaded into the item lines —
   // purely a form-filling aid; the transfer itself stays product+qty based
@@ -177,7 +186,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       : (destinations.find(x => String(x.id) === fDest)?.label || '');
 
   const onHand = (productId: number) =>
-    Number(inventory.find(r => String(r.receive_address_id) === fFrom && r.product_id === productId)?.on_hand_qty || 0);
+    inventory
+      .filter(r => groupMemberIds.has(Number(r.receive_address_id)) && r.product_id === productId)
+      .reduce((s, r) => s + Number(r.on_hand_qty || 0), 0);
 
   // signature of every input the RATE depends on — a quote fetched for one
   // shipment must never buy a label while the form describes another. Any
@@ -752,7 +763,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
 
   // received boxes still at the selected ship-from address — clickable
   // form-fillers: one click loads a box's contents into the item lines
-  const boxesAtFrom = packages.filter(p => String(p.receive_address_id) === fFrom && p.received_at && (p.items || []).length > 0);
+  const boxesAtFrom = packages.filter(p => groupMemberIds.has(Number(p.receive_address_id)) && p.received_at && (p.items || []).length > 0);
   // direct-ship destinations are offered only when the transfer actually
   // carries the customer's product (the fn re-checks this at write time)
   const lineProductIds = new Set(fLines.filter(l => l.product).map(l => Number(l.product)));
@@ -775,7 +786,10 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             <Select value={fFrom} onValueChange={v => { setFFrom(v); setSelectedBoxId(null); }}>
               <SelectTrigger className="h-9 flex-1 min-w-40"><SelectValue placeholder="Ship from (receive address)" /></SelectTrigger>
               <SelectContent>
-                {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}</SelectItem>)}
+                {addresses.filter(a => a.active && a.transfer_origin_id == null).map(a => {
+                  const members = addresses.filter(m => Number(m.transfer_origin_id ?? 0) === Number(a.id)).length;
+                  return <SelectItem key={a.id} value={String(a.id)}>{a.label}{members > 0 ? ` (+${members} grouped)` : ''}</SelectItem>;
+                })}
               </SelectContent>
             </Select>
             <Select value={fDest} onValueChange={setFDest}>

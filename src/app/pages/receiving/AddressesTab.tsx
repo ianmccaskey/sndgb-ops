@@ -3,6 +3,7 @@ import { useMutateAction } from '@uibakery/data';
 import saveReceiveAddress from '@/actions/receiving/saveReceiveAddress';
 import setAddressActive from '@/actions/receiving/setAddressActive';
 import setDefaultShipFrom from '@/actions/receiving/setDefaultShipFrom';
+import setTransferOrigin from '@/actions/receiving/setTransferOrigin';
 import setDestinationActive from '@/actions/receiving/setDestinationActive';
 import saveDestination from '@/actions/receiving/saveDestination';
 import { useApp } from '@/app/AppContext';
@@ -46,9 +47,10 @@ function AddressForm({ title, hint, onSave, msg }: {
   );
 }
 
-function AddressList({ title, items, onToggle, onMakeDefault }: {
+function AddressList({ title, items, onToggle, onMakeDefault, onSetOrigin }: {
   title: string; items: RxAddress[]; onToggle?: (a: RxAddress) => void;
   onMakeDefault?: (a: RxAddress) => void;
+  onSetOrigin?: (a: RxAddress, originId: string) => void;
 }) {
   return (
     <Card>
@@ -67,6 +69,23 @@ function AddressList({ title, items, onToggle, onMakeDefault }: {
               </div>
               {onMakeDefault && !a.phone && a.active && (
                 <div className="text-[11px] text-amber-700">No phone — Shippo refuses label purchases without a ship-from phone; update this label above with one.</div>
+              )}
+              {onSetOrigin && a.active && (
+                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-0.5">
+                  Transfers ship from:
+                  <select className="border rounded px-1 py-0.5 text-[11px] bg-background"
+                    value={a.transfer_origin_id == null ? '' : String(a.transfer_origin_id)}
+                    disabled={items.some(m => Number(m.transfer_origin_id ?? 0) === Number(a.id))}
+                    title={items.some(m => Number(m.transfer_origin_id ?? 0) === Number(a.id))
+                      ? 'Other addresses route through this one — clear them first to re-point it'
+                      : 'Where a transfer of stock received HERE ships from (its inventory counts at that origin)'}
+                    onChange={e => onSetOrigin(a, e.target.value)}>
+                    <option value="">itself</option>
+                    {items.filter(o => o.active && o.transfer_origin_id == null && Number(o.id) !== Number(a.id)).map(o => (
+                      <option key={o.id} value={String(o.id)}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
               )}
             </div>
             <span className="flex gap-1 shrink-0">
@@ -98,6 +117,7 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
   const [doSaveAddress] = useMutateAction(saveReceiveAddress);
   const [doSetActive] = useMutateAction(setAddressActive);
   const [doSetDefault] = useMutateAction(setDefaultShipFrom);
+  const [doSetOrigin] = useMutateAction(setTransferOrigin);
   const [doSetDestActive] = useMutateAction(setDestinationActive);
   const [doSaveDest] = useMutateAction(saveDestination);
   const [addrMsg, setAddrMsg] = useState('');
@@ -147,6 +167,18 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
               if (!(Array.isArray(res) ? res.length > 0 : !!res)) setAddrMsg('Not set — the address must be active.');
             } catch (e: unknown) {
               setAddrMsg(e instanceof Error ? e.message : 'Failed to set the default ship-from');
+            }
+            reloadAddresses();
+          }}
+          onSetOrigin={async (a, originId) => {
+            setAddrMsg('');
+            try {
+              const res = await doSetOrigin({ address_id: a.id, origin_id: originId, actor: userName }) as unknown[] | null;
+              if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+                setAddrMsg('Origin not changed — the target must be an active address with no origin of its own, and an address other rows route through cannot be re-pointed.');
+              }
+            } catch (e: unknown) {
+              setAddrMsg(e instanceof Error ? e.message : 'Failed to set the transfer origin');
             }
             reloadAddresses();
           }} />

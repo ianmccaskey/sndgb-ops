@@ -1,0 +1,22 @@
+-- Receive-address GROUPS for transfers (Ian: "Ian Home, Ian PMB 1, Ian
+-- PMB Fairview, and Ian PMB Woodruff will all originate from Ian PMB 1
+-- when doing a transfer"). Each address may point at ONE origin address
+-- (one level deep — an origin's own transfer_origin_id must stay NULL,
+-- enforced by setTransferOrigin and by the fns' COALESCE resolution).
+-- Semantics:
+--  * transfers ship only FROM an origin (both create fns refuse a
+--    member address as p_from_address_id);
+--  * the fns' on-hand check aggregates v_address_inventory over every
+--    address whose COALESCE(transfer_origin_id, id) = the origin, so
+--    stock received at any member is transferable from the origin;
+--  * reservations keep keying on transfers.from_address_id (always the
+--    origin), and the 42004 lock keys on the origin id.
+-- v_address_inventory itself stays the PHYSICAL per-address truth.
+-- Applied live 2026-08-31 together with CREATE OR REPLACE of
+-- create_transfer_draft and create_manual_transfer (origin guard after
+-- the v_addr load + group on-hand LATERAL replacing the direct
+-- v_address_inventory join — full texts in the live DB). Data: Ian
+-- Home (5), Ian PMB Woodruff (7), Ian PMB Fairview (8) ->
+-- transfer_origin_id = 6 (Ian PMB 1), audited 'Claude per Ian'.
+ALTER TABLE receive_addresses
+  ADD COLUMN transfer_origin_id bigint REFERENCES receive_addresses(id);

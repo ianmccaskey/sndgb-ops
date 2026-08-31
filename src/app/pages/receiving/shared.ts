@@ -8,9 +8,11 @@ export type RxAddress = {
   id: number; label: string; name: string; street1: string; street2: string | null;
   city: string; state: string; zip: string; country: string;
   phone: string | null; email: string | null; active: boolean;
-  // only listReceiveAddresses selects this; saved destinations reuse the
-  // type and never carry it
+  // only listReceiveAddresses selects these; saved destinations reuse the
+  // type and never carry them
   is_default_ship_from?: boolean;
+  // the group ORIGIN this address's transfers ship from (null = itself)
+  transfer_origin_id?: number | null;
 };
 export type PkgItem = { id: number; product_id: number; sku_code: string; name?: string; qty: string };
 export type Pkg = {
