@@ -25,10 +25,17 @@ import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCan
 
 type ItemLine = { product: string; qty: string };
 
+// row boundary: the platform transport re-types digit-only text (ZIPs,
+// phones) as JS numbers — Shippo 400s numeric zips and the fns' jsonb
+// CAS distinguishes 29583 from "29583". sT re-strings (''-coercing for
+// payloads); sN preserves NULL for the exact-equality expected_from/
+// expected_destination snapshots (jsonb null must stay null).
+const sT = (v: unknown): string => (v == null ? '' : String(v));
+const sN = (v: unknown): string | null => (v == null ? null : String(v));
 const toShippoAddress = (a: RxAddress | CustomDest): ShippoAddress => ({
-  name: a.name, street1: a.street1, street2: a.street2 || undefined as unknown as string,
-  city: a.city, state: a.state, zip: a.zip, country: a.country || 'US',
-  phone: a.phone || undefined as unknown as string, email: a.email || undefined as unknown as string,
+  name: sT(a.name), street1: sT(a.street1), street2: sT(a.street2) || undefined as unknown as string,
+  city: sT(a.city), state: sT(a.state), zip: sT(a.zip), country: sT(a.country) || 'US',
+  phone: sT(a.phone) || undefined as unknown as string, email: sT(a.email) || undefined as unknown as string,
 });
 type CustomDest = { name: string; street1: string; street2: string; city: string; state: string; zip: string; country: string; phone: string; email: string };
 const EMPTY_DEST: CustomDest = { name: '', street1: '', street2: '', city: '', state: '', zip: '', country: 'US', phone: '', email: '' };
@@ -318,9 +325,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         return;
       }
       const expectedFrom = {
-        name: fromRow.name, street1: fromRow.street1, street2: fromRow.street2,
-        city: fromRow.city, state: fromRow.state, zip: fromRow.zip,
-        country: fromRow.country, phone: fromRow.phone, email: fromRow.email,
+        name: sN(fromRow.name), street1: sN(fromRow.street1), street2: sN(fromRow.street2),
+        city: sN(fromRow.city), state: sN(fromRow.state), zip: sN(fromRow.zip),
+        country: sN(fromRow.country), phone: sN(fromRow.phone), email: sN(fromRow.email),
       };
       // the SAVED destination the quote was priced for — the server refuses
       // if that row was edited or archived since; custom and direct-ship
@@ -333,9 +340,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       if (isRa && !destReceiveAddr) { setPurchaseMsg('Destination address not found — reload the page.'); return; }
       if (isDirect && !directCandidate) { setPurchaseMsg('That direct-ship order line is no longer available (fulfilled or changed) — pick another destination.'); return; }
       const expectedDest = destRow ? {
-        name: destRow.name, street1: destRow.street1, street2: destRow.street2,
-        city: destRow.city, state: destRow.state, zip: destRow.zip,
-        country: destRow.country, phone: destRow.phone, email: destRow.email,
+        name: sN(destRow.name), street1: sN(destRow.street1), street2: sN(destRow.street2),
+        city: sN(destRow.city), state: sN(destRow.state), zip: sN(destRow.zip),
+        country: sN(destRow.country), phone: sN(destRow.phone), email: sN(destRow.email),
       } : null;
       let draftId: number | null = null;
       let claimedAt = '';
@@ -475,14 +482,14 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     if (fDest !== '__custom__' && !isDirect && !isRa && !destRow) { setPurchaseMsg('Destination not found — reload the page.'); return; }
     if (isRa && !destReceiveAddr) { setPurchaseMsg('Destination address not found — reload the page.'); return; }
     const expectedFrom = {
-      name: from.name, street1: from.street1, street2: from.street2,
-      city: from.city, state: from.state, zip: from.zip,
-      country: from.country, phone: from.phone, email: from.email,
+      name: sN(from.name), street1: sN(from.street1), street2: sN(from.street2),
+      city: sN(from.city), state: sN(from.state), zip: sN(from.zip),
+      country: sN(from.country), phone: sN(from.phone), email: sN(from.email),
     };
     const expectedDest = destRow ? {
-      name: destRow.name, street1: destRow.street1, street2: destRow.street2,
-      city: destRow.city, state: destRow.state, zip: destRow.zip,
-      country: destRow.country, phone: destRow.phone, email: destRow.email,
+      name: sN(destRow.name), street1: sN(destRow.street1), street2: sN(destRow.street2),
+      city: sN(destRow.city), state: sN(destRow.state), zip: sN(destRow.zip),
+      country: sN(destRow.country), phone: sN(destRow.phone), email: sN(destRow.email),
     } : null;
     const params = (allow: boolean) => ({
       from_address_id: Number(fFrom), destination_label: destLabel,
