@@ -133,6 +133,17 @@ export function ReceivingPage() {
 
   const afterPackageChange = () => { reloadPackages(); reloadInventory(); };
 
+  // "Part out" on a received package card jumps to the Transfers tab with
+  // that box preselected and ship-from set to its transfer-origin group
+  const [tab, setTab] = useState('dashboard');
+  const [partOutSeed, setPartOutSeed] = useState<{ boxId: number; from: string } | null>(null);
+  const partOut = (p: Pkg) => {
+    const a = addresses.find(x => Number(x.id) === Number(p.receive_address_id));
+    const origin = a ? String(a.transfer_origin_id ?? a.id) : String(p.receive_address_id);
+    setPartOutSeed({ boxId: Number(p.id), from: origin });
+    setTab('transfers');
+  };
+
   return (
     <div className="p-4 sm:p-6 space-y-5">
       <div>
@@ -154,7 +165,7 @@ export function ReceivingPage() {
         )}
       </div>
 
-      <Tabs defaultValue="dashboard">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="inventory">Inventory</TabsTrigger>
@@ -168,7 +179,7 @@ export function ReceivingPage() {
             addresses={addresses} packages={packages} products={products} vendors={vendors} vendorsReady={vendorsReady}
             refreshOne={refreshOne} refreshAll={refreshAll} refreshingIds={refreshingIds}
             refreshAllProgress={refreshAllProgress} afterChange={afterPackageChange}
-            hasKey={!!shippoKey} testMode={testMode}
+            hasKey={!!shippoKey} testMode={testMode} onPartOut={partOut}
           />
         </TabsContent>
         <TabsContent value="inventory" className="mt-4">
@@ -180,6 +191,7 @@ export function ReceivingPage() {
             transfers={transfers} inventory={inventory} shippoKey={shippoKey} shippoHttp={shippoHttp} testMode={testMode}
             reloadTransfers={() => { reloadTransfers(); reloadInventory(); }}
             reloadDestinations={reloadDestinations}
+            partOutSeed={partOutSeed} onPartOutSeedConsumed={() => setPartOutSeed(null)}
           />
         </TabsContent>
         <TabsContent value="addresses" className="mt-4">

@@ -34,7 +34,7 @@ const CARRIERS = [
 
 type ItemLine = { product: string; qty: string };
 
-export function DashboardTab({ addresses, packages, products, vendors, vendorsReady, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode }: {
+export function DashboardTab({ addresses, packages, products, vendors, vendorsReady, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode, onPartOut }: {
   addresses: RxAddress[]; packages: Pkg[]; products: CatalogProduct[]; vendors: VendorRow[]; vendorsReady: boolean;
   refreshOne: (p: Pkg) => Promise<string | null>;
   refreshAll: () => Promise<void>;
@@ -43,6 +43,8 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
   afterChange: () => void;
   hasKey: boolean;
   testMode: boolean;
+  // jump to Transfers with this box preselected (part-out / send-out flow)
+  onPartOut: (p: Pkg) => void;
 }) {
   const { userName, groupBuyId } = useApp();
   const [doCreate] = useMutateAction(createInboundPackage);
@@ -978,6 +980,13 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
                         <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
                           onClick={() => { setCorrecting(p); setCCarrier(p.carrier); setCTracking(p.tracking_number); setCMsg(''); }}>
                           Edit tracking
+                        </Button>
+                      )}
+                      {p.received_at && (
+                        <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]"
+                          title="Open Transfers with this box loaded — trim the lines to the kits actually leaving, pick any destination (including a custom customer address), and ship"
+                          onClick={() => onPartOut(p)}>
+                          Part out
                         </Button>
                       )}
                       {p.received_at && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-amber-700" onClick={() => unreceivePkg(p)}>Un-receive</Button>}

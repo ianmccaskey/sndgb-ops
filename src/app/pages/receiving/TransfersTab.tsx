@@ -40,10 +40,14 @@ const toShippoAddress = (a: RxAddress | CustomDest): ShippoAddress => ({
 type CustomDest = { name: string; street1: string; street2: string; city: string; state: string; zip: string; country: string; phone: string; email: string };
 const EMPTY_DEST: CustomDest = { name: '', street1: '', street2: '', city: '', state: '', zip: '', country: 'US', phone: '', email: '' };
 
-export function TransfersTab({ addresses, destinations, products, packages, transfers, inventory, shippoKey, shippoHttp, testMode, reloadTransfers, reloadDestinations }: {
+export function TransfersTab({ addresses, destinations, products, packages, transfers, inventory, shippoKey, shippoHttp, testMode, reloadTransfers, reloadDestinations, partOutSeed, onPartOutSeedConsumed }: {
   addresses: RxAddress[]; destinations: RxAddress[]; products: CatalogProduct[]; packages: Pkg[];
   transfers: TransferRow[]; inventory: InvRow[]; shippoKey: string; shippoHttp: ShippoHttp; testMode: boolean;
   reloadTransfers: () => void; reloadDestinations: () => void;
+  // "Part out" on a Receiving package card jumps here with the box
+  // preselected (from = its transfer-origin group)
+  partOutSeed?: { boxId: number; from: string } | null;
+  onPartOutSeedConsumed?: () => void;
 }) {
   void reloadDestinations;
   const { userName, groupBuyId } = useApp();
@@ -75,9 +79,33 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       .map(a => Number(a.id)));
   }, [addresses, fFrom]);
   const [fDest, setFDest] = useState('');      // destination id, '__custom__', 'ds_<order item id>', or 'ra_<receive address id>'
-  // the received box whose contents were loaded into the item lines —
-  // purely a form-filling aid; the transfer itself stays product+qty based
-  const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
+  // the received boxes whose contents were loaded into the item lines —
+  // purely a form-filling aid (a part-out spanning several boxes selects
+  // them all); the transfer itself stays product+qty based. The FIRST
+  // selection is recorded as source_package_id; the rest ride in the note.
+  const [selectedBoxIds, setSelectedBoxIds] = useState<number[]>([]);
+  // boxes beyond the first can't ride source_package_id (one column) —
+  // a multi-box part-out records the rest in the transfer note
+  const selectedBoxes = selectedBoxIds
+    .map(id => packages.find(p => Number(p.id) === id))
+    .filter((p): p is Pkg => !!p);
+  const extraBoxNote = selectedBoxes.length > 1
+    ? `Also parted from ${selectedBoxes.slice(1).map(b => `${(b.carrier || '').toUpperCase()} ${b.tracking_number}`).join(' + ')}`
+    : '';
+  // consume a "Part out" jump from the Receiving dashboard: ship-from set
+  // to the box's origin group, the box selected, its contents loaded
+  React.useEffect(() => {
+    if (!partOutSeed) return;
+    const box = packages.find(p => Number(p.id) === partOutSeed.boxId);
+    if (box) {
+      setFFrom(partOutSeed.from);
+      setSelectedBoxIds([Number(box.id)]);
+      setFLines((box.items || []).map(i => ({ product: String(i.product_id), qty: String(i.qty) })));
+    }
+    onPartOutSeedConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partOutSeed]);
+
   const [custom, setCustom] = useState<CustomDest>(EMPTY_DEST);
   const [dims, setDims] = useState({ length: '', width: '', height: '', weight: '' });
   const [fLines, setFLines] = useState<ItemLine[]>([{ product: '', qty: '' }]);
@@ -349,7 +377,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       const draftParams = (allow: boolean) => ({
         from_address_id: Number(fFrom), destination_label: destLabel,
         destination: JSON.stringify(to),
-        source_package_id: selectedBoxId ? String(selectedBoxId) : '',
+        source_package_id: selectedBoxIds.length > 0 ? String(selectedBoxIds[0]) : '',
       dest_receive_address_id: fDest.startsWith('ra_') ? fDest.slice(3) : '',
         parcel: JSON.stringify({ length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(), distance_unit: 'in', weight: dims.weight.trim(), mass_unit: 'lb' }),
         carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
@@ -364,7 +392,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         // the transfer's items
         direct_order_item_id: directCandidate ? String(directCandidate.item_id) : '',
         group_buy_id: groupBuyId ?? '',
-        note: fNote.trim(), actor: userName,
+        note: [fNote.trim(), extraBoxNote].filter(Boolean).join(' — '), actor: userName,
       });
       try {
         let res = await doCreate(draftParams(allowOver)) as unknown[] | null;
@@ -437,7 +465,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
           : 'NOTE: the linked direct-ship order line was NOT marked (already fulfilled, or its order is now held/unpaid) — verify in the order sheet before shipping.')
         : '');
       setRatesResult(null); setPickedRate(''); setFLines([{ product: '', qty: '' }]); setFNote('');
-      setSelectedBoxId(null);
+      setSelectedBoxIds([]);
       if (fDest.startsWith('ds_')) setFDest('');
       reloadTransfers();
     } finally {
@@ -496,7 +524,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     const params = (allow: boolean) => ({
       from_address_id: Number(fFrom), destination_label: destLabel,
       destination: JSON.stringify(to),
-      source_package_id: selectedBoxId ? String(selectedBoxId) : '',
+      source_package_id: selectedBoxIds.length > 0 ? String(selectedBoxIds[0]) : '',
       dest_receive_address_id: fDest.startsWith('ra_') ? fDest.slice(3) : '',
       carrier, tracking_number: mTracking.trim(), cost: mCost.trim(),
       items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
@@ -506,7 +534,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       expected_destination: expectedDest ? JSON.stringify(expectedDest) : '',
       direct_order_item_id: directCandidate ? String(directCandidate.item_id) : '',
       group_buy_id: groupBuyId ?? '',
-      note: fNote.trim(), actor: userName,
+      note: [fNote.trim(), extraBoxNote].filter(Boolean).join(' — '), actor: userName,
     });
     manualInFlight.current = true;
     setManualBusy(true);
@@ -530,7 +558,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         ? `Order #${directCandidate.order_number} (${directCandidate.customer_name}) marked direct-shipped — the tracking number is now on the customer's order line.`
         : '');
       setFLines([{ product: '', qty: '' }]); setFNote(''); setMTracking(''); setMCost('');
-      setSelectedBoxId(null);
+      setSelectedBoxIds([]);
       if (isDirect) { setFDest(''); reloadDirectShips(); }
       reloadTransfers();
     } catch (e: unknown) {
@@ -792,15 +820,29 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const labelSpendTotal = finalized.reduce((s, t) => s + Number(t.rate_amount || 0), 0);
 
   // received boxes still at the selected ship-from address — clickable
-  // form-fillers: one click loads a box's contents into the item lines
-  // boxes already sent out (a finalized, non-voided transfer records
-  // them as its source) leave the picker — a parted-out package must
-  // not look available to transfer again; a refund SUCCESS voids the
-  // transfer and the box returns
-  const consumedPkgIds = React.useMemo(() => new Set(
-    transfers
-      .filter(t => t.finalized_at && t.refund_status !== 'SUCCESS' && t.source_package_id != null)
-      .map(t => Number(t.source_package_id))), [transfers]);
+  // form-fillers: clicks toggle boxes in/out and load their combined
+  // contents into the item lines. A box leaves the picker only when the
+  // finalized, non-voided transfers naming it as source have moved AT
+  // LEAST its full contents (qty-aware: a part-out that pulls 10 of 30
+  // kits keeps the box available for the rest); a refund SUCCESS voids
+  // the transfer and its quantities return. Chip counts stay as-received
+  // — Inventory is the exact ledger, the picker is provenance.
+  const consumedPkgIds = React.useMemo(() => {
+    const usedCents = new Map<number, number>();
+    for (const t of transfers) {
+      if (!t.finalized_at || t.refund_status === 'SUCCESS' || t.source_package_id == null) continue;
+      const tot = (t.items || []).reduce((s, i) => s + Math.round(Number(i.qty) * 100), 0);
+      const k = Number(t.source_package_id);
+      usedCents.set(k, (usedCents.get(k) || 0) + tot);
+    }
+    const out = new Set<number>();
+    for (const p of packages) {
+      const total = (p.items || []).reduce((s, i) => s + Math.round(Number(i.qty) * 100), 0);
+      const used = usedCents.get(Number(p.id)) || 0;
+      if (total > 0 && used >= total) out.add(Number(p.id));
+    }
+    return out;
+  }, [transfers, packages]);
   const boxesAtFrom = packages.filter(p =>
     groupMemberIds.has(Number(p.receive_address_id)) && p.received_at
     && (p.items || []).length > 0 && !consumedPkgIds.has(Number(p.id)));
@@ -823,7 +865,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         <CardHeader className="pb-2"><CardTitle className="text-base">New transfer — buy a label via Shippo</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           <div className="flex flex-wrap gap-2">
-            <Select value={fFrom} onValueChange={v => { setFFrom(v); setSelectedBoxId(null); }}>
+            <Select value={fFrom} onValueChange={v => { setFFrom(v); setSelectedBoxIds([]); }}>
               <SelectTrigger className="h-9 flex-1 min-w-40"><SelectValue placeholder="Ship from (receive address)" /></SelectTrigger>
               <SelectContent>
                 {addresses.filter(a => a.active && a.transfer_origin_id == null).map(a => {
@@ -862,16 +904,30 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
           {fFrom && boxesAtFrom.length > 0 && (
             <div className="space-y-1">
               <p className="text-[11px] text-muted-foreground">
-                Boxes received at this address — click one to load its contents into the transfer (lines stay editable):
+                Boxes received at this address — click one or more; their combined contents load into the lines. Parting out? Trim the quantities down to what's actually leaving (partially-used boxes stay available here for the rest):
               </p>
               <div className="flex flex-wrap gap-2">
                 {boxesAtFrom.map(b => {
-                  const sel = selectedBoxId === b.id;
+                  const sel = selectedBoxIds.includes(Number(b.id));
                   return (
                     <button key={b.id} type="button"
                       onClick={() => {
-                        setSelectedBoxId(b.id);
-                        setFLines((b.items || []).map(i => ({ product: String(i.product_id), qty: String(i.qty) })));
+                        const id = Number(b.id);
+                        const next = sel ? selectedBoxIds.filter(x => x !== id) : [...selectedBoxIds, id];
+                        setSelectedBoxIds(next);
+                        // merged contents of every selected box, summed per
+                        // product in integer hundredths (qty is scale-2 text)
+                        const sums = new Map<number, number>();
+                        for (const p of packages) {
+                          if (!next.includes(Number(p.id))) continue;
+                          for (const i of p.items || []) {
+                            const pid = Number(i.product_id);
+                            sums.set(pid, (sums.get(pid) || 0) + Math.round(Number(i.qty) * 100));
+                          }
+                        }
+                        setFLines(next.length === 0
+                          ? [{ product: '', qty: '' }]
+                          : [...sums.entries()].map(([pid, cents]) => ({ product: String(pid), qty: String(cents / 100) })));
                       }}
                       className={`rounded-lg border p-2 text-left text-xs space-y-1 max-w-full ${sel ? 'border-violet-500 ring-1 ring-violet-500 bg-violet-50' : 'hover:bg-muted/50'}`}>
                       <div className="font-mono text-[10px] text-muted-foreground break-all">
