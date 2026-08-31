@@ -148,6 +148,41 @@ function finalizeTransfer() {
         RETURNING t.id, t.shippo_transaction_id, t.tracking_number, t.label_url, t.rate_amount,
                   t.carrier, t.direct_order_item_id, t.direct_link_reclaimed_at
       ),
+      -- destination is one of OUR receive addresses: materialize the box
+      -- as an INCOMING inbound package there (committed — trackable —
+      -- and physically receivable on arrival). Guarded against an
+      -- existing ACTIVE package on the same (carrier, tracking).
+      incoming AS (
+        INSERT INTO inbound_packages (receive_address_id, carrier, tracking_number, note, created_by, committed_at)
+        SELECT t2.dest_receive_address_id, LOWER(up.carrier),
+               regexp_replace(UPPER(TRIM(up.tracking_number)), '\\s', '', 'g'),
+               'Incoming transfer from ' || COALESCE(t2.from_label, ''), {{params.actor}}::text, now()
+        FROM up
+        JOIN transfers t2 ON t2.id = up.id
+        WHERE t2.dest_receive_address_id IS NOT NULL
+          AND COALESCE(up.tracking_number, '') <> ''
+          AND EXISTS (SELECT 1 FROM receive_addresses ra WHERE ra.id = t2.dest_receive_address_id AND ra.active)
+          AND NOT EXISTS (
+            SELECT 1 FROM inbound_packages x
+            WHERE x.received_at IS NULL AND x.carrier = LOWER(up.carrier)
+              AND UPPER(x.tracking_number) = regexp_replace(UPPER(TRIM(up.tracking_number)), '\\s', '', 'g'))
+        RETURNING id
+      ),
+      incoming_items AS (
+        INSERT INTO inbound_package_items (package_id, product_id, qty)
+        SELECT incoming.id, ti.product_id, ti.qty
+        FROM incoming, up
+        JOIN transfer_items ti ON ti.transfer_id = up.id
+        RETURNING 1
+      ),
+      incoming_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'inbound_packages', incoming.id::text, 'package_created', {{params.actor}}::text,
+               jsonb_build_object('from_transfer_id', up.id, 'carrier', LOWER(up.carrier),
+                                  'tracking_number', up.tracking_number)
+        FROM incoming, up
+        RETURNING 1
+      ),
       stamp_audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
         SELECT 'order_items', s.id::text, 'direct_ship_label_attached', {{params.actor}}::text,
