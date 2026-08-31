@@ -216,12 +216,15 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       if (!directCandidate) return null;
       const c = directCandidate;
       if (!c.address_line1 || !c.city || !c.state_code || !c.postal_code) return null;
+      // sT every field: the transport re-types digit-only text (phones,
+      // zips, numeric apt lines) as JS numbers and Shippo 400s them
+      // ("Invalid input type for field: phone")
       return {
-        name: c.contact_name || c.customer_name, street1: c.address_line1,
-        street2: c.address_line2 || undefined as unknown as string,
-        city: c.city, state: c.state_code, zip: c.postal_code, country: 'US',
-        phone: c.contact_phone || undefined as unknown as string,
-        email: c.contact_email || undefined as unknown as string,
+        name: sT(c.contact_name) || sT(c.customer_name), street1: sT(c.address_line1),
+        street2: sT(c.address_line2) || undefined as unknown as string,
+        city: sT(c.city), state: sT(c.state_code), zip: sT(c.postal_code), country: 'US',
+        phone: sT(c.contact_phone) || undefined as unknown as string,
+        email: sT(c.contact_email) || undefined as unknown as string,
       };
     }
     if (fDest.startsWith('ra_')) {
