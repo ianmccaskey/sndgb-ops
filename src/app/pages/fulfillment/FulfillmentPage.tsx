@@ -95,6 +95,8 @@ export function FulfillmentPage() {
   const [error, setError] = useState('');
 
   const [filterOpen, setFilterOpen] = useState(false);
+  // free-text search over the loaded stage: order #, customer, tracking
+  const [search, setSearch] = useState('');
 
   // ---- shipment session: on-hand quantities typed by the operator; the
   // queue splits into fully / partially packable and the pool counts DOWN
@@ -399,10 +401,14 @@ export function FulfillmentPage() {
   }, [queue, sessionActive, stage, showPartials, JSON.stringify(pool)]);
   const sessionHiddenCount = sessionActive && stage === 'ready' ? queue.length - displayQueue.length : 0;
   // flagged-only narrows AFTER the session filter; inert without a live
-  // snapshot (the toggle resets when the snapshot drops)
-  const visibleQueue = upstreamLive && showFlaggedOnly
+  // snapshot (the toggle resets when the snapshot drops). The text
+  // search narrows last: order #, customer, contact, or tracking.
+  const searchQ = search.trim().toLowerCase();
+  const visibleQueue = (upstreamLive && showFlaggedOnly
     ? displayQueue.filter(r => upstreamMismatch(r) || partialMismatch(r))
-    : displayQueue;
+    : displayQueue
+  ).filter(r => !searchQ || [r.order_number, r.customer_name, r.contact_name, r.tracking_numbers]
+    .some(v => String(v || '').toLowerCase().includes(searchQ)));
   // counted over the whole loaded stage, not the session-filtered view — a
   // session must not hide the existence of unrecorded-shipped orders.
   // listFulfillmentQueue caps at 1000 rows; at the cap the stage may be
@@ -542,8 +548,18 @@ export function FulfillmentPage() {
         </TabsList>
       </Tabs>
 
-      {/* toolbar: product filter (searchable multi-select) + session toggle */}
+      {/* toolbar: search + product filter (searchable multi-select) + session toggle */}
       <div className="flex flex-wrap items-center gap-2">
+        <span className="relative">
+          <Input placeholder="Search order #, customer, tracking…" value={search}
+            onChange={e => setSearch(e.target.value)} className="h-8 w-64 pr-7 text-sm" />
+          {search && (
+            <button className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-60 hover:opacity-100"
+              title="Clear search" onClick={() => setSearch('')}>
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </span>
         <Popover open={filterOpen} onOpenChange={setFilterOpen}>
           <PopoverTrigger asChild>
             <Button size="sm" variant="outline" className="h-8">
@@ -768,7 +784,7 @@ export function FulfillmentPage() {
           </div>
         ))}
         {visibleQueue.length === 0 && (
-          <p className="text-center text-muted-foreground py-6 text-sm">{showFlaggedOnly && upstreamLive ? 'No flagged orders in this stage — "Show all orders" in the banner restores the full list.' : `Nothing in this stage${filterIds.size > 0 ? ' matching the product filter' : ''}.`}</p>
+          <p className="text-center text-muted-foreground py-6 text-sm">{searchQ ? `No order in this stage matches “${search.trim()}” — try the All tab, or clear the search.` : showFlaggedOnly && upstreamLive ? 'No flagged orders in this stage — "Show all orders" in the banner restores the full list.' : `Nothing in this stage${filterIds.size > 0 ? ' matching the product filter' : ''}.`}</p>
         )}
       </div>
 
@@ -850,7 +866,7 @@ export function FulfillmentPage() {
               </TableRow>
             ))}
             {visibleQueue.length === 0 && (
-              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">{showFlaggedOnly && upstreamLive ? 'No flagged orders in this stage — "Show all orders" in the banner restores the full list.' : `Nothing in this stage${filterIds.size > 0 ? ' matching the product filter (filters match REMAINING work to pack)' : ''}.`}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">{searchQ ? `No order in this stage matches “${search.trim()}” — try the All tab, or clear the search.` : showFlaggedOnly && upstreamLive ? 'No flagged orders in this stage — "Show all orders" in the banner restores the full list.' : `Nothing in this stage${filterIds.size > 0 ? ' matching the product filter (filters match REMAINING work to pack)' : ''}.`}</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
