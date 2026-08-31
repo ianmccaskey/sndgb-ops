@@ -732,7 +732,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       // draft is created, so the fix is one field instead of a
       // draft-recovery loop
       if (!s(fromRow.phone).trim()) {
-        setPurchaseMsg(`"${fromRow.label}" has no phone — Shippo refuses label purchases without a ship-from phone. Add one on Receiving > Addresses (it goes to the carrier, not onto the label), then re-fetch rates.`);
+        setPurchaseMsg(`"${fromRow.label}" has no phone — Shippo refuses label purchases without a ship-from phone. Add one on Receiving > Addresses (UPS purchases are re-quoted without it so it never prints on the label), then re-fetch rates.`);
         return;
       }
       // belt for races the invalidation effect can't win
@@ -743,6 +743,31 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       }
       const lineError = validateChosen();
       if (lineError) { setPurchaseMsg(lineError + ' Nothing was purchased.'); return; }
+      // UPS prints the sender phone on the label's return address, and
+      // UPS is the one major carrier that doesn't require one (USPS does
+      // at purchase). Re-quote the identical shipment — same parcel AND
+      // same insurance — WITHOUT the phone and carry the matching rate
+      // (same service, same price) through the draft -> purchase ->
+      // finalize spine so nothing prints. Any hiccup, or a price/service
+      // mismatch, falls back to the original rate — a printed phone
+      // beats a failed or repriced label. (Ported from the PRT app.)
+      let buyRate = rate;
+      if (/\bups\b/i.test(String(rate.provider))) {
+        try {
+          const res2 = await getRates(shippoHttp, shippoKey, {
+            name: s(fromRow.name), street1: s(fromRow.street1), street2: s(fromRow.street2) || undefined as unknown as string,
+            city: s(fromRow.city), state: s(fromRow.state), zip: s(fromRow.zip), country: s(fromRow.country) || 'US',
+            email: s(fromRow.email) || undefined as unknown as string,
+          }, shipTo, {
+            length: dims.length.trim(), width: dims.width.trim(), height: heightVal.trim(),
+            distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb',
+          }, insureBox ? { amount: insuredValue.trim(), currency: 'USD' } : null);
+          const match = res2.rates.find(r2 => r2.provider === rate.provider
+            && (r2.servicelevel?.token || r2.servicelevel?.name) === (rate.servicelevel?.token || rate.servicelevel?.name)
+            && r2.amount === rate.amount && r2.currency === rate.currency);
+          if (match) buyRate = match;
+        } catch { /* re-quote failed — buy the original rate */ }
+      }
       const expectedFrom = {
         name: sn(fromRow.name), street1: sn(fromRow.street1), street2: sn(fromRow.street2),
         city: sn(fromRow.city), state: sn(fromRow.state), zip: sn(fromRow.zip),
@@ -763,8 +788,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             ...(insureBox ? { insurance_amount_usd: insuredValue.trim() } : {}),
             ...(partPkg ? { parted_package_id: partPkg.id, parted_package_tracking: String(partPkg.tracking_number || '') } : {}),
           }),
-          carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
-          rate_amount: rate.amount, rate_currency: rate.currency, shippo_rate_id: rate.object_id,
+          carrier: buyRate.provider, servicelevel: buyRate.servicelevel?.name || buyRate.servicelevel?.token || '',
+          rate_amount: buyRate.amount, rate_currency: buyRate.currency, shippo_rate_id: buyRate.object_id,
           items: JSON.stringify(chosen.map(c => ({ order_item_id: String(c.line.order_item_id), qty: c.qty }))),
           box: box.trim(), note: [note.trim(), partNote].filter(Boolean).join(' — '), actor: userName,
         }) as unknown[] | null;
@@ -801,7 +826,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       // 3. buy the label (single attempt inside)
       let result: PurchaseResult;
       try {
-        result = await purchaseLabel(shippoHttp, shippoKey, rate.object_id);
+        result = await purchaseLabel(shippoHttp, shippoKey, buyRate.object_id);
       } catch (e: unknown) {
         if (e instanceof ShippoPurchaseRefusedError && claimedAt) {
           await doClearLease({ shipment_id: draftId, claimed_at: claimedAt, actor: userName }).catch(() => null);
@@ -817,7 +842,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         return;
       }
       // 4. persist — retryable from memory if this write fails or THROWS
-      const fin = await persistFinalize(draftId, result, rate.object_id);
+      const fin = await persistFinalize(draftId, result, buyRate.object_id);
       if (!fin.ok) {
         setPendingFinalize(m => ({ ...m, [draftId!]: result }));
         setPurchaseMsg(`LABEL PURCHASED (transaction ${result.transactionId}) but saving failed — label: ${result.labelUrl} — use "Retry save" on the shipment below; do NOT purchase again.`);
@@ -1192,7 +1217,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
               </SelectContent>
             </Select>
             {!manualMode && fromRow && !s(fromRow.phone).trim() && (
-              <span className="text-[11px] text-amber-700">No phone on "{fromRow.label}" — Shippo refuses purchases without one; add it on Receiving &gt; Addresses (carrier contact only, not printed on the label).</span>
+              <span className="text-[11px] text-amber-700">No phone on "{fromRow.label}" — Shippo refuses purchases without one; add it on Receiving &gt; Addresses (UPS purchases are re-quoted without the phone so it never prints on the label).</span>
             )}
             {!manualMode && (
               <>
