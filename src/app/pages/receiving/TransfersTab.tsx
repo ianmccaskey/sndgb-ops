@@ -100,7 +100,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     if (box) {
       setFFrom(partOutSeed.from);
       setSelectedBoxIds([Number(box.id)]);
-      setFLines((box.items || []).map(i => ({ product: String(i.product_id), qty: String(i.qty) })));
+      const lines = [...boxRemaining(box).entries()].filter(([, c]) => c > 0)
+        .map(([pid, cents]) => ({ product: String(pid), qty: String(cents / 100) }));
+      setFLines(lines.length === 0 ? [{ product: '', qty: '' }] : lines);
     }
     onPartOutSeedConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -821,28 +823,75 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
 
   // received boxes still at the selected ship-from address — clickable
   // form-fillers: clicks toggle boxes in/out and load their combined
-  // contents into the item lines. A box leaves the picker only when the
-  // finalized, non-voided transfers naming it as source have moved AT
-  // LEAST its full contents (qty-aware: a part-out that pulls 10 of 30
-  // kits keeps the box available for the rest); a refund SUCCESS voids
-  // the transfer and its quantities return. Chip counts stay as-received
-  // — Inventory is the exact ledger, the picker is provenance.
-  const consumedPkgIds = React.useMemo(() => {
-    const usedCents = new Map<number, number>();
+  // REMAINING contents into the item lines. Attribution: each finalized,
+  // non-voided transfer's quantities fill its provenance chain in order —
+  // the recorded source box first, then any boxes this same UI named in
+  // its note ("Also parted from ..."); excess beyond the chain's recorded
+  // contents pins to the first box so it reads consumed rather than
+  // resurrecting. A box leaves the picker only when nothing remains of
+  // any product; a refund SUCCESS voids the transfer and its quantities
+  // return. Inventory stays the exact ledger — this is provenance
+  // bookkeeping so a part-out can't accidentally offer shipped kits.
+  const boxUse = React.useMemo(() => {
+    const use = new Map<number, Map<number, number>>();
+    const add = (pkgId: number, pid: number, cents: number) => {
+      const m = use.get(pkgId) || new Map<number, number>();
+      m.set(pid, (m.get(pid) || 0) + cents);
+      use.set(pkgId, m);
+    };
+    const byId = new Map(packages.map(p => [Number(p.id), p]));
     for (const t of transfers) {
       if (!t.finalized_at || t.refund_status === 'SUCCESS' || t.source_package_id == null) continue;
-      const tot = (t.items || []).reduce((s, i) => s + Math.round(Number(i.qty) * 100), 0);
-      const k = Number(t.source_package_id);
-      usedCents.set(k, (usedCents.get(k) || 0) + tot);
+      const chain: Pkg[] = [];
+      const first = byId.get(Number(t.source_package_id));
+      if (first) chain.push(first);
+      const noteBoxes = /Also parted from (.+)$/.exec(t.note || '');
+      if (noteBoxes) {
+        for (const tok of noteBoxes[1].split(' + ')) {
+          const sp = tok.trim().split(/\s+/);
+          if (sp.length < 2) continue;
+          const carrier = sp[0].toLowerCase();
+          const tracking = sp.slice(1).join('').toUpperCase();
+          const found = packages.find(p => (p.carrier || '').toLowerCase() === carrier
+            && String(p.tracking_number || '').toUpperCase() === tracking);
+          if (found && !chain.some(c => Number(c.id) === Number(found.id))) chain.push(found);
+        }
+      }
+      for (const it of t.items || []) {
+        const pid = Number(it.product_id);
+        let rem = Math.round(Number(it.qty) * 100);
+        for (const box of chain) {
+          if (rem <= 0) break;
+          const cap = (box.items || []).filter(i => Number(i.product_id) === pid)
+            .reduce((s, i) => s + Math.round(Number(i.qty) * 100), 0);
+          const cur = use.get(Number(box.id))?.get(pid) || 0;
+          const take = Math.min(rem, Math.max(0, cap - cur));
+          if (take > 0) { add(Number(box.id), pid, take); rem -= take; }
+        }
+        if (rem > 0 && chain.length > 0) add(Number(chain[0].id), pid, rem);
+      }
     }
+    return use;
+  }, [transfers, packages]);
+  // remaining contents of a box per product, in integer hundredths
+  const boxRemaining = React.useCallback((p: Pkg) => {
+    const rem = new Map<number, number>();
+    for (const i of p.items || []) {
+      const pid = Number(i.product_id);
+      rem.set(pid, (rem.get(pid) || 0) + Math.round(Number(i.qty) * 100));
+    }
+    const used = boxUse.get(Number(p.id));
+    if (used) for (const [pid, cents] of used) rem.set(pid, Math.max(0, (rem.get(pid) || 0) - cents));
+    return rem;
+  }, [boxUse]);
+  const consumedPkgIds = React.useMemo(() => {
     const out = new Set<number>();
     for (const p of packages) {
-      const total = (p.items || []).reduce((s, i) => s + Math.round(Number(i.qty) * 100), 0);
-      const used = usedCents.get(Number(p.id)) || 0;
-      if (total > 0 && used >= total) out.add(Number(p.id));
+      if (!(p.items || []).length) continue;
+      if ([...boxRemaining(p).values()].every(v => v <= 0)) out.add(Number(p.id));
     }
     return out;
-  }, [transfers, packages]);
+  }, [packages, boxRemaining]);
   const boxesAtFrom = packages.filter(p =>
     groupMemberIds.has(Number(p.receive_address_id)) && p.received_at
     && (p.items || []).length > 0 && !consumedPkgIds.has(Number(p.id)));
@@ -904,7 +953,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
           {fFrom && boxesAtFrom.length > 0 && (
             <div className="space-y-1">
               <p className="text-[11px] text-muted-foreground">
-                Boxes received at this address — click one or more; their combined contents load into the lines. Parting out? Trim the quantities down to what's actually leaving (partially-used boxes stay available here for the rest):
+                Boxes received at this address — click one or more; their combined REMAINING contents load into the lines (earlier part-outs already subtracted). Parting out? Trim the quantities down to what's actually leaving:
               </p>
               <div className="flex flex-wrap gap-2">
                 {boxesAtFrom.map(b => {
@@ -915,30 +964,33 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                         const id = Number(b.id);
                         const next = sel ? selectedBoxIds.filter(x => x !== id) : [...selectedBoxIds, id];
                         setSelectedBoxIds(next);
-                        // merged contents of every selected box, summed per
-                        // product in integer hundredths (qty is scale-2 text)
+                        // merged REMAINING contents of every selected box,
+                        // summed per product in integer hundredths
                         const sums = new Map<number, number>();
                         for (const p of packages) {
                           if (!next.includes(Number(p.id))) continue;
-                          for (const i of p.items || []) {
-                            const pid = Number(i.product_id);
-                            sums.set(pid, (sums.get(pid) || 0) + Math.round(Number(i.qty) * 100));
+                          for (const [pid, cents] of boxRemaining(p)) {
+                            if (cents > 0) sums.set(pid, (sums.get(pid) || 0) + cents);
                           }
                         }
-                        setFLines(next.length === 0
-                          ? [{ product: '', qty: '' }]
-                          : [...sums.entries()].map(([pid, cents]) => ({ product: String(pid), qty: String(cents / 100) })));
+                        const lines = [...sums.entries()].map(([pid, cents]) => ({ product: String(pid), qty: String(cents / 100) }));
+                        setFLines(lines.length === 0 ? [{ product: '', qty: '' }] : lines);
                       }}
                       className={`rounded-lg border p-2 text-left text-xs space-y-1 max-w-full ${sel ? 'border-violet-500 ring-1 ring-violet-500 bg-violet-50' : 'hover:bg-muted/50'}`}>
                       <div className="font-mono text-[10px] text-muted-foreground break-all">
                         {b.carrier.toUpperCase()} · {b.tracking_number}{b.vendor_code ? ` · ${b.vendor_code}` : ''}
                       </div>
                       <div className="flex flex-wrap gap-1">
-                        {(b.items || []).map(i => (
-                          <span key={i.product_id} className={`rounded text-[10px] font-semibold px-1.5 py-0.5 ${productChipClass(i.product_id)}`}>
-                            {i.name || i.sku_code} × {fmtNum(i.qty)}
-                          </span>
-                        ))}
+                        {(() => { const rem = boxRemaining(b); return (b.items || []).map(i => {
+                          const r = (rem.get(Number(i.product_id)) || 0) / 100;
+                          const parted = Math.round(r * 100) !== Math.round(Number(i.qty) * 100);
+                          return (
+                            <span key={i.product_id} className={`rounded text-[10px] font-semibold px-1.5 py-0.5 ${productChipClass(i.product_id)}`}
+                              title={parted ? `Received ${fmtNum(i.qty)}; earlier part-outs took the difference` : undefined}>
+                              {i.name || i.sku_code} × {fmtNum(r)}{parted && <span className="opacity-70"> of {fmtNum(i.qty)}</span>}
+                            </span>
+                          );
+                        }); })()}
                       </div>
                     </button>
                   );
