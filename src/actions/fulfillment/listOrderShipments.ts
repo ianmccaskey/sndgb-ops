@@ -10,7 +10,11 @@ function listOrderShipments() {
   return action('listOrderShipments', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT s.id, s.order_id, s.status, s.carrier, s.servicelevel, s.tracking_number,
+      -- '#' guard on tracking: 22-digit USPS numbers get rounded by the
+      -- JS transport unless they travel with a non-digit char; consumers
+      -- strip it at the row boundary (lib/rows dbText)
+      SELECT s.id, s.order_id, s.status, s.carrier, s.servicelevel,
+             '#' || s.tracking_number AS tracking_number,
              s.label_cost_usd, s.rate_amount, s.rate_currency, s.box, s.note,
              s.from_label, s.parcel, s.label_url,
              s.shippo_rate_id, s.shippo_transaction_id,

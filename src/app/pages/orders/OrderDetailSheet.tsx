@@ -45,7 +45,7 @@ import { shortHash } from '@/lib/explorer';
 import { B44_DEFAULT_APP_ID, getB44Order, updateB44Order } from '@/lib/base44';
 import { normalizeTxHash, canonicalTxRef } from '@/lib/parseOrderImport';
 import { useApp } from '@/app/AppContext';
-import { rows, firstRow } from '@/lib/rows';
+import { rows, firstRow, dbText } from '@/lib/rows';
 import { fmtUSD, fmtDateTime, fmtNum } from '@/lib/fmt';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -189,7 +189,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           chosen = (pool.length > 0 ? pool : live).reduce<JitRow | null>((acc, r) => (acc == null || Number(r.id) > Number(acc.id) ? r : acc), null);
         }
         if (!chosen) { setStrandedMsg('No live shipment to attach to — ship a box from the Fulfillment page first, or remove the photo.'); return; }
-        const label = `#${chosen.id}${chosen.finalized_at ? '' : ' (unfinished draft)'}${chosen.carrier ? ` ${String(chosen.carrier).toUpperCase()}` : ''}${chosen.tracking_number ? ` ${String(chosen.tracking_number)}` : ''}`;
+        const label = `#${chosen.id}${chosen.finalized_at ? '' : ' (unfinished draft)'}${chosen.carrier ? ` ${String(chosen.carrier).toUpperCase()}` : ''}${chosen.tracking_number ? ` ${dbText(chosen.tracking_number)}` : ''}`;
         if (!window.confirm(`Attach this photo to shipment ${label}? It becomes part of that box's evidence.`)) return;
         target = Number(chosen.id);
       } catch { setStrandedMsg('Could not load this order’s shipments — try again.'); return; }
@@ -246,7 +246,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     refreshStranded();
   };
   const o = firstRow<OrderRow>(rawOrder);
-  const items = rows<ItemRow>(rawItems);
+  // dbText strips the actions' '#' transport guard from tracking columns
+  // (22-digit USPS numbers would otherwise arrive as rounded JS numbers)
+  const items = rows<ItemRow>(rawItems).map(it => ({
+    ...it,
+    direct_vendor_tracking: it.direct_vendor_tracking == null ? null : dbText(it.direct_vendor_tracking),
+    direct_tracking_number: it.direct_tracking_number == null ? null : dbText(it.direct_tracking_number),
+  }));
   const campaignProducts = rows<{ sku_code: string; gb_price_usd: string; status: string }>(rawCampaignProducts)
     .filter(p => p.status === 'active');
   const feeDeltaUsd = o
@@ -278,7 +284,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     effective_qty: string; shipped_qty: string; direct_ship: boolean; direct_fulfilled_at: string | null;
     digital: boolean;
   };
-  const shipRows = rows<ShipRow>(rawShipRows).map(s => ({ ...s, tracking_number: s.tracking_number == null ? null : String(s.tracking_number) }));
+  const shipRows = rows<ShipRow>(rawShipRows).map(s => ({ ...s, tracking_number: s.tracking_number == null ? null : dbText(s.tracking_number) }));
   // per-line FINALIZED shipped quantity (voided/refunded boxes excluded) —
   // drives the shipped/partial badges and row tinting on the item list
   const shippedByItem = useMemo(() => {
@@ -1858,7 +1864,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                                     <option value="">newest box</option>
                                     {shipRows.filter(r => r.refund_status !== 'SUCCESS').map(r => (
                                       <option key={r.id} value={String(r.id)}>
-                                        #{r.id}{r.finalized_at ? '' : ' draft'}{r.tracking_number ? ` ${String(r.tracking_number)}` : ''}
+                                        #{r.id}{r.finalized_at ? '' : ' draft'}{r.tracking_number ? ` ${dbText(r.tracking_number)}` : ''}
                                       </option>
                                     ))}
                                   </select>

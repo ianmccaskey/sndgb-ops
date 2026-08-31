@@ -9,9 +9,12 @@ function getOrderItems() {
              (LEAST(oi.comp_qty, CASE WHEN oi.removed_at IS NULL THEN COALESCE(oi.qty_override, oi.qty) ELSE 0 END) * oi.unit_price_usd) AS comp_value_usd,
              oi.direct_ship, oi.direct_ship_source, oi.direct_fulfilled_at, oi.item_source,
              oi.qty_override, oi.removed_at, oi.split_fee_usd,
-             oi.direct_vendor_carrier, oi.direct_vendor_tracking,
+             -- '#' guard on both tracking columns: a 22-digit USPS number
+             -- is rounded by the JS transport unless it travels with a
+             -- non-digit char; stripped at the row boundary (dbText)
+             oi.direct_vendor_carrier, '#' || oi.direct_vendor_tracking AS direct_vendor_tracking,
              p.sku_code, p.name AS product_name, p.mass_label, p.external_id AS product_external_id,
-             dt.carrier AS direct_carrier, dt.tracking_number AS direct_tracking_number
+             dt.carrier AS direct_carrier, '#' || dt.tracking_number AS direct_tracking_number
       FROM order_items oi
       JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
       JOIN products p ON p.id = gbp.product_id

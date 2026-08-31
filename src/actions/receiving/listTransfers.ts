@@ -12,7 +12,11 @@ function listTransfers() {
              t.from_address,
              t.destination_label, t.destination, t.parcel,
              t.carrier, t.servicelevel, t.rate_amount, t.rate_currency,
-             t.shippo_rate_id, t.shippo_transaction_id, t.tracking_number, t.label_url,
+             -- '#' guard: 22-digit USPS numbers get rounded by the JS
+             -- transport unless they travel with a non-digit char; NULLs
+             -- stay NULL ('#'||NULL); stripped at the row boundary
+             t.shippo_rate_id, t.shippo_transaction_id,
+             '#' || t.tracking_number AS tracking_number, t.label_url,
              t.refund_status, t.note, t.finalized_at, t.created_by, t.created_at,
              -- exact-text token for the attempted-clear CAS (jsonb round
              -- trip preserves microseconds; driver Date coercion may not)

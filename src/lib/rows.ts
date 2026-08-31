@@ -14,6 +14,19 @@ export function rows<T>(data: unknown): T[] {
     : [];
 }
 
+/**
+ * Strip the SQL-side '#' transport guard from a digit-only text column.
+ * Long digit-only values (22-digit USPS tracking numbers) exceed
+ * Number.MAX_SAFE_INTEGER, and the platform transport re-types digit-only
+ * text as JS numbers — rounding them beyond recovery. Actions prefix such
+ * columns with '#' ("'#' || tracking_number") so the value always travels
+ * as text; every consumer unwraps with dbText() at the row boundary.
+ */
+export function dbText(v: unknown): string {
+  const s = v == null ? '' : String(v);
+  return s.startsWith('#') ? s.slice(1) : s;
+}
+
 /** First non-null row, for single-row lookups (detail queries, settings). */
 export function firstRow<T>(data: unknown): T | undefined {
   return rows<T>(data)[0];

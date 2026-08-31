@@ -11,7 +11,7 @@ import updatePackageTracking from '@/actions/receiving/updatePackageTracking';
 import { trackPackage, isTestKey } from '@/lib/shippo';
 import { useShippoHttp } from '@/lib/useShippoHttp';
 import { useApp } from '@/app/AppContext';
-import { rows } from '@/lib/rows';
+import { rows, dbText } from '@/lib/rows';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PackageOpen } from 'lucide-react';
 import { DashboardTab } from './DashboardTab';
@@ -53,22 +53,22 @@ export function ReceivingPage() {
   const vendorsReady = groupBuyId != null && !vendorsLoading && !vendorsError;
 
   const addresses = rows<RxAddress>(rawAddresses);
-  // the action transport returns all-digit text columns as JS numbers, so
-  // an all-numeric tracking number would crash every .trim()/.toUpperCase()
-  // downstream (Shippo path, correction dialog seed) — re-string them once
-  // at the row boundary so every consumer sees the DB's text value.
-  // Safe-integer re-typed values (12-digit FedEx) round-trip exactly; a
-  // digit-only value PAST Number.MAX_SAFE_INTEGER (22-digit USPS) was
-  // rounded before we ever saw it, so re-stringing it would drive Shippo
-  // lookups and CAS writes off a wrong number — flag those rows instead
-  // and let refresh/correction fail closed with an honest message
+  // row boundary: tracking numbers travel from the actions behind a '#'
+  // guard ('#' || tracking_number) so a 22-digit USPS number survives the
+  // transport's digit-only-text-to-JS-number re-typing intact — dbText()
+  // strips the guard. A bare NUMBER here means an old action build; the
+  // fail-closed mangle flag stays as dead defense for values past
+  // Number.MAX_SAFE_INTEGER (refresh/correction refuse with an honest
+  // message instead of acting on a rounded number).
   const packages = useMemo(() => rows<Pkg>(rawPackages).map(p => {
     const rawTracking = p.tracking_number as unknown;
     const mangled = typeof rawTracking === 'number' && !Number.isSafeInteger(rawTracking);
-    return { ...p, carrier: String(p.carrier ?? ''), tracking_number: String(rawTracking ?? ''), tracking_mangled: mangled };
+    return { ...p, carrier: String(p.carrier ?? ''), tracking_number: dbText(rawTracking), tracking_mangled: mangled };
   }), [rawPackages]);
   const inventory = rows<InvRow>(rawInventory);
-  const transfers = rows<TransferRow>(rawTransfers);
+  const transfers = useMemo(() => rows<TransferRow>(rawTransfers).map(t => ({
+    ...t, tracking_number: t.tracking_number == null ? null : dbText(t.tracking_number),
+  })), [rawTransfers]);
   const destinations = rows<RxAddress>(rawDestinations);
   const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active), [rawProducts]);
   const vendors = rows<VendorRow>(rawVendors);

@@ -10,8 +10,11 @@ function listInboundPackages() {
   return action('listInboundPackages', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
+      -- '#' guard: a 22-digit USPS number is re-typed to a ROUNDED JS
+      -- number by the transport unless it travels with a non-digit char;
+      -- the client strips the '#' at the row boundary (lib/rows dbText)
       SELECT p.id, p.receive_address_id, ra.label AS address_label, ra.active AS address_active,
-             v.code AS vendor_code, p.carrier, p.tracking_number, p.note,
+             v.code AS vendor_code, p.carrier, '#' || p.tracking_number AS tracking_number, p.note,
              p.committed_at, p.tracking_status, p.tracking_substatus, p.tracking_detail,
              p.tracking_error, p.tracking_location, p.eta, p.status_date, p.last_checked_at,
              p.received_at, p.received_by, p.auto_receive_suppressed, p.created_by, p.created_at,

@@ -30,7 +30,7 @@ import { pushShipmentUpstream } from '@/lib/pushShipment';
 import type { PushPackableLine } from '@/lib/pushShipment';
 import type { B44Config } from '@/lib/base44';
 import { fmtUSD, fmtNum, fmtDateTime } from '@/lib/fmt';
-import { rows } from '@/lib/rows';
+import { rows, dbText } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -100,7 +100,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
   })), [rawPackable]);
   const shipments = useMemo(() => rows<ShipmentRow>(rawShipments).map(s => ({
-    ...s, tracking_number: s.tracking_number == null ? null : String(s.tracking_number),
+    ...s, tracking_number: s.tracking_number == null ? null : dbText(s.tracking_number),
   })), [rawShipments]);
   // digital products (COA certificates) never go in the box — read-only
   const packLines = packable.filter(l => !l.direct_ship && !l.digital);
