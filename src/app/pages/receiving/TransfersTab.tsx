@@ -9,7 +9,7 @@ import clearTransferAttemptVerified from '@/actions/receiving/clearTransferAttem
 import finalizeTransfer from '@/actions/receiving/finalizeTransfer';
 import deleteTransferDraft from '@/actions/receiving/deleteTransferDraft';
 import setTransferRefund from '@/actions/receiving/setTransferRefund';
-import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
+import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError, usPhoneOrUndefined } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
 import { useApp } from '@/app/AppContext';
@@ -223,7 +223,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         name: sT(c.contact_name) || sT(c.customer_name), street1: sT(c.address_line1),
         street2: sT(c.address_line2) || undefined as unknown as string,
         city: sT(c.city), state: sT(c.state_code), zip: sT(c.postal_code), country: 'US',
-        phone: sT(c.contact_phone) || undefined as unknown as string,
+        // customers type anything into the upstream phone box (street
+        // addresses, partial numbers) — only a plausible US phone is sent
+        phone: usPhoneOrUndefined(c.contact_phone) as unknown as string,
         email: sT(c.contact_email) || undefined as unknown as string,
       };
     }

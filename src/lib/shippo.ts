@@ -26,6 +26,24 @@ import type { ShippoHttp } from './useShippoHttp';
 
 const BASE = 'https://api.goshippo.com';
 
+/**
+ * A recipient phone worth sending to Shippo, or undefined. The upstream
+ * order form lets customers type anything into the phone box — a dozen
+ * MB5 orders carry their STREET ADDRESS there ("87 Royal RD"), which
+ * Shippo digit-strips and rejects ("87 is not a valid US phone
+ * number"). Recipient phone is optional, so anything that isn't a
+ * plausible US number (10 digits, or 11 starting with 1) is omitted
+ * rather than sent — no warning, and no garbage printed on UPS labels.
+ * Ship-FROM phones must NOT pass through this: Shippo requires one at
+ * purchase, so an invalid one should refuse loudly, not vanish.
+ */
+export function usPhoneOrUndefined(v: unknown): string | undefined {
+  const digits = (v == null ? '' : String(v)).replace(/\D/g, '');
+  if (digits.length === 10) return digits;
+  if (digits.length === 11 && digits.startsWith('1')) return digits;
+  return undefined;
+}
+
 export function isTestKey(key: string): boolean {
   return key.trim().toLowerCase().startsWith('shippo_test');
 }

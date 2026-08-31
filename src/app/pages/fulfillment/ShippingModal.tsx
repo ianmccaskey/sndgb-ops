@@ -23,7 +23,7 @@ import type { CapturedPhoto } from '@/lib/imageCapture';
 import { newStashKey, readStash, stashGet, stashUpsert, stashRemove, stashMutateIf, markLandingBlind, readLandingBlindTs, clearLandingBlind } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
 import { announceHold, coordAvailable, remoteCaptureActive, remoteLandingActive, subscribeCoord } from '@/lib/photoCoord';
-import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError } from '@/lib/shippo';
+import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError, usPhoneOrUndefined } from '@/lib/shippo';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
@@ -599,7 +599,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     name: s(order.contact_name) || s(order.customer_name), street1: s(order.address_line1),
     street2: s(order.address_line2) || undefined as unknown as string,
     city: s(order.city), state: s(order.state_code), zip: s(order.postal_code), country: 'US',
-    phone: s(order.contact_phone) || undefined as unknown as string,
+    // customers type anything into the upstream phone box (street
+    // addresses, partial numbers) — only a plausible US phone is sent
+    phone: usPhoneOrUndefined(order.contact_phone) as unknown as string,
     email: s(order.contact_email) || undefined as unknown as string,
   } : null;
   const expectedTo = {
