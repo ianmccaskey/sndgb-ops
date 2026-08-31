@@ -5,7 +5,7 @@ function listTransfers() {
   return action('listTransfers', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT t.id, t.from_address_id,
+      SELECT t.id, t.from_address_id, t.source_package_id,
              -- the SNAPSHOT is the truth for history; the live label only
              -- covers pre-snapshot rows the backfill could not know better
              COALESCE(t.from_label, ra.label) AS from_label,

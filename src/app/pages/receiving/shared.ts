@@ -38,6 +38,9 @@ export type InvRow = {
 };
 export type TransferRow = {
   id: number; from_address_id: number; from_label: string;
+  // the received package this transfer parted out (provenance; null =
+  // not recorded via the box picker)
+  source_package_id: number | null;
   from_address: Record<string, string | null> | null;
   destination_label: string; destination: Record<string, string | null>;
   parcel: Record<string, string>; carrier: string | null; servicelevel: string | null;

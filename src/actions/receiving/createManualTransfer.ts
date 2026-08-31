@@ -31,7 +31,8 @@ function createManualTransfer() {
         {{params.note}}::text,
         {{params.actor}}::text,
         NULLIF({{params.direct_order_item_id}}::text, '')::bigint,
-        NULLIF({{params.group_buy_id}}::text, '')::bigint
+        NULLIF({{params.group_buy_id}}::text, '')::bigint,
+        NULLIF({{params.source_package_id}}::text, '')::bigint
       )
     `,
   });

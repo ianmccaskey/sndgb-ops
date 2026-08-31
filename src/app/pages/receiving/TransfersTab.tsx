@@ -349,6 +349,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       const draftParams = (allow: boolean) => ({
         from_address_id: Number(fFrom), destination_label: destLabel,
         destination: JSON.stringify(to),
+        source_package_id: selectedBoxId ? String(selectedBoxId) : '',
         parcel: JSON.stringify({ length: dims.length.trim(), width: dims.width.trim(), height: dims.height.trim(), distance_unit: 'in', weight: dims.weight.trim(), mass_unit: 'lb' }),
         carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
         rate_amount: rate.amount, rate_currency: rate.currency, shippo_rate_id: rate.object_id,
@@ -494,6 +495,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     const params = (allow: boolean) => ({
       from_address_id: Number(fFrom), destination_label: destLabel,
       destination: JSON.stringify(to),
+      source_package_id: selectedBoxId ? String(selectedBoxId) : '',
       carrier, tracking_number: mTracking.trim(), cost: mCost.trim(),
       items: JSON.stringify(lines.map(l => ({ product_id: Number(l.product), qty: l.qty.trim() }))),
       allow_over_onhand: allow,
@@ -789,7 +791,17 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
 
   // received boxes still at the selected ship-from address — clickable
   // form-fillers: one click loads a box's contents into the item lines
-  const boxesAtFrom = packages.filter(p => groupMemberIds.has(Number(p.receive_address_id)) && p.received_at && (p.items || []).length > 0);
+  // boxes already sent out (a finalized, non-voided transfer records
+  // them as its source) leave the picker — a parted-out package must
+  // not look available to transfer again; a refund SUCCESS voids the
+  // transfer and the box returns
+  const consumedPkgIds = React.useMemo(() => new Set(
+    transfers
+      .filter(t => t.finalized_at && t.refund_status !== 'SUCCESS' && t.source_package_id != null)
+      .map(t => Number(t.source_package_id))), [transfers]);
+  const boxesAtFrom = packages.filter(p =>
+    groupMemberIds.has(Number(p.receive_address_id)) && p.received_at
+    && (p.items || []).length > 0 && !consumedPkgIds.has(Number(p.id)));
   // direct-ship destinations are offered only when the transfer actually
   // carries the customer's product (the fn re-checks this at write time)
   const lineProductIds = new Set(fLines.filter(l => l.product).map(l => Number(l.product)));
