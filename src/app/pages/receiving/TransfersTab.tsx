@@ -470,8 +470,10 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       }
       allowOver = true;
     }
-    const destRow = fDest !== '__custom__' && !isDirect ? destinations.find(d => String(d.id) === fDest) : null;
-    if (fDest !== '__custom__' && !isDirect && !destRow) { setPurchaseMsg('Destination not found — reload the page.'); return; }
+    const isRa = fDest.startsWith('ra_');
+    const destRow = fDest !== '__custom__' && !isDirect && !isRa ? destinations.find(d => String(d.id) === fDest) : null;
+    if (fDest !== '__custom__' && !isDirect && !isRa && !destRow) { setPurchaseMsg('Destination not found — reload the page.'); return; }
+    if (isRa && !destReceiveAddr) { setPurchaseMsg('Destination address not found — reload the page.'); return; }
     const expectedFrom = {
       name: from.name, street1: from.street1, street2: from.street2,
       city: from.city, state: from.state, zip: from.zip,
