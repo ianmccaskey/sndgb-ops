@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
+import listInboundPackages from '@/actions/receiving/listInboundPackages';
+import type { Pkg } from '@/app/pages/receiving/shared';
 import createShipmentDraft from '@/actions/fulfillment/createShipmentDraft';
 import recordManualShipment from '@/actions/fulfillment/recordManualShipment';
 import markShipmentPurchaseStarted from '@/actions/fulfillment/markShipmentPurchaseStarted';
@@ -546,6 +548,28 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(qtys), packable.length, insuredTouched]);
 
+  // ---- part-out picker: the received packages at the ship-from
+  // LOCATION GROUP — the operator chooses which physical box is being
+  // opened for this (smaller) order; the choice is provenance, recorded
+  // on the shipment's note and (Shippo path) parcel snapshot ----
+  const [rawPkgs] = useLoadAction(listInboundPackages, [], {});
+  const [partPkgId, setPartPkgId] = useState<number | null>(null);
+  const pkgsAtFrom = useMemo(() => {
+    if (!shipFrom) return [] as Pkg[];
+    const origin = Number(shipFrom);
+    const memberIds = new Set(addresses
+      .filter(a => Number(a.transfer_origin_id ?? a.id) === origin)
+      .map(a => Number(a.id)));
+    return rows<Pkg>(rawPkgs)
+      .filter(p => memberIds.has(Number(p.receive_address_id)) && p.received_at && (p.items || []).length > 0)
+      .sort((a, b) => String(b.received_at).localeCompare(String(a.received_at)));
+  }, [rawPkgs, addresses, shipFrom]);
+  const partPkg = pkgsAtFrom.find(p => p.id === partPkgId) || null;
+  useEffect(() => { setPartPkgId(null); }, [shipFrom]);
+  const partNote = partPkg
+    ? `Parted from ${(partPkg.carrier || '').toUpperCase()} ${partPkg.tracking_number}${partPkg.vendor_code ? ` (${partPkg.vendor_code})` : ''}`
+    : '';
+
   // preselect the app-wide default ship-from, and SELF-HEAL a selection
   // that no longer resolves to an active address (the other admin archived
   // it or moved the default mid-session) — falling back to the current
@@ -737,11 +761,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             length: dims.length.trim(), width: dims.width.trim(), height: heightVal.trim(),
             distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb', packaging,
             ...(insureBox ? { insurance_amount_usd: insuredValue.trim() } : {}),
+            ...(partPkg ? { parted_package_id: partPkg.id, parted_package_tracking: String(partPkg.tracking_number || '') } : {}),
           }),
           carrier: rate.provider, servicelevel: rate.servicelevel?.name || rate.servicelevel?.token || '',
           rate_amount: rate.amount, rate_currency: rate.currency, shippo_rate_id: rate.object_id,
           items: JSON.stringify(chosen.map(c => ({ order_item_id: String(c.line.order_item_id), qty: c.qty }))),
-          box: box.trim(), note: note.trim(), actor: userName,
+          box: box.trim(), note: [note.trim(), partNote].filter(Boolean).join(' — '), actor: userName,
         }) as unknown[] | null;
         const row = Array.isArray(res) && res.length > 0 ? res[0] as { id: string; claimed_at?: string } : null;
         draftId = row ? Number(row.id) : null;
@@ -843,7 +868,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           expected_to: JSON.stringify(expectedTo),
           carrier, tracking_number: mTracking.trim(), cost: mCost.trim(),
           items: JSON.stringify(chosen.map(c => ({ order_item_id: String(c.line.order_item_id), qty: c.qty }))),
-          box: box.trim(), note: note.trim(), actor: userName,
+          box: box.trim(), note: [note.trim(), partNote].filter(Boolean).join(' — '), actor: userName,
         }) as unknown[] | null;
         const row = Array.isArray(res) && res.length > 0 ? res[0] as { id: string } : null;
         recordedId = row ? Number(row.id) : null;
@@ -1262,6 +1287,33 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           </div>
           <input ref={fileInputRef} type="file" accept="image/*" capture="environment" multiple className="hidden"
             onChange={e => onFilesPicked(e.target.files)} />
+
+          {/* part-out picker: which received box at this location is
+              being opened for this order — provenance on the shipment */}
+          {shipFrom && pkgsAtFrom.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[11px] text-muted-foreground">
+                Parting out a received package? Pick the box being opened (optional — recorded on the shipment):
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {pkgsAtFrom.map(p => {
+                  const sel = partPkgId === p.id;
+                  return (
+                    <button key={p.id}
+                      className={`text-left rounded-lg border px-2 py-1.5 text-[11px] ${sel ? 'border-violet-500 bg-violet-50' : 'bg-background hover:border-violet-300'}`}
+                      onClick={() => setPartPkgId(sel ? null : p.id)}>
+                      <span className="font-mono font-medium">{(p.carrier || '').toUpperCase()} {p.tracking_number}</span>
+                      {p.vendor_code && <span className="ml-1 text-muted-foreground">{p.vendor_code}</span>}
+                      <span className="block text-muted-foreground">
+                        {(p.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {partPkg && <p className="text-[11px] text-violet-800">This shipment will note: “{partNote}”.</p>}
+            </div>
+          )}
 
           <Input placeholder="Note (optional)" value={note} onChange={e => setNote(e.target.value)} className="h-9" />
 
