@@ -912,7 +912,12 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // direct-ship destinations are offered only when the transfer actually
   // carries the customer's product (the fn re-checks this at write time)
   const lineProductIds = new Set(fLines.filter(l => l.product).map(l => Number(l.product)));
-  const directOptions = directShips.filter(c => lineProductIds.has(Number(c.product_id)));
+  // fully-covered lines (current-address fills >= ordered) are hidden —
+  // if such a line missed its stamp on a transient gate, the fix is the
+  // order sheet's manual vendor-shipped mark, not another shipment (the
+  // fns refuse a new linked transfer for them as the backstop)
+  const directOptions = directShips.filter(c => lineProductIds.has(Number(c.product_id))
+    && Number(c.qty) - Number(c.filled_qty || 0) > 0);
 
   // a picked direct-ship destination whose line vanished (fulfilled by
   // another session, product removed from the lines, campaign reload)

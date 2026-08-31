@@ -10,6 +10,16 @@
 -- transfer log. The one-unfinalized-draft-per-line reservation
 -- (transfers_direct_item_active_uniq WHERE finalized_at IS NULL) is
 -- unchanged — partials are sequential, one label at a time.
+-- FILLS COUNT ONLY CURRENT-ADDRESS TRANSFERS (Codex round 1): the
+-- cumulative sum requires each contributing transfer's destination
+-- snapshot to match the order's CURRENT ship-to — a partial sent to an
+-- address the customer later corrected stops counting (those units
+-- went elsewhere; visible progress resets and the operator
+-- remediates). And a line whose current-address fills already cover
+-- the ordered qty REFUSES a new linked transfer — if the stamp was
+-- missed on a transient gate (hold/unpaid at finalize time), the
+-- remediation is the order sheet's manual vendor-shipped mark, never
+-- shipping more stock.
 -- ACCEPTED (existing class): a refund SUCCESS on a contributing
 -- transfer after the line completed does NOT un-stamp it — refunding a
 -- label is not proof goods didn't ship; the sheet's manual undo is the
@@ -115,6 +125,25 @@ BEGIN
       )
     FOR UPDATE OF oi, o;
     IF NOT FOUND THEN RETURN; END IF;
+    -- already covered by CURRENT-address fills: refuse a new linked
+    -- transfer — a missed stamp is fixed from the order sheet (manual
+    -- vendor-shipped mark), never by shipping more stock
+    IF (SELECT COALESCE(sum(ti0.qty), 0)
+        FROM transfers t5
+        JOIN transfer_items ti0 ON ti0.transfer_id = t5.id
+        JOIN order_items oi6 ON oi6.id = p_direct_order_item_id
+        JOIN group_buy_products g5 ON g5.id = oi6.group_buy_product_id AND ti0.product_id = g5.product_id
+        JOIN orders o5 ON o5.id = oi6.order_id
+        WHERE t5.direct_order_item_id = p_direct_order_item_id
+          AND t5.finalized_at IS NOT NULL
+          AND COALESCE(t5.refund_status, '') <> 'SUCCESS'
+          AND COALESCE(t5.destination->>'street1', '') = COALESCE(o5.address_line1, '')
+          AND COALESCE(t5.destination->>'street2', '') = COALESCE(o5.address_line2, '')
+          AND COALESCE(t5.destination->>'city', '')    = COALESCE(o5.city, '')
+          AND COALESCE(t5.destination->>'state', '')   = COALESCE(o5.state_code, '')
+          AND COALESCE(t5.destination->>'zip', '')     = COALESCE(o5.postal_code, ''))
+       >= (SELECT COALESCE(oi7.qty_override, oi7.qty) FROM order_items oi7 WHERE oi7.id = p_direct_order_item_id)
+    THEN RETURN; END IF;
     IF EXISTS (
       SELECT 1 FROM transfers t2
       WHERE t2.direct_order_item_id = p_direct_order_item_id AND t2.finalized_at IS NULL
@@ -310,6 +339,25 @@ BEGIN
       )
     FOR UPDATE OF oi, o;
     IF NOT FOUND THEN RETURN; END IF;
+    -- already covered by CURRENT-address fills: refuse a new linked
+    -- transfer — a missed stamp is fixed from the order sheet (manual
+    -- vendor-shipped mark), never by shipping more stock
+    IF (SELECT COALESCE(sum(ti0.qty), 0)
+        FROM transfers t5
+        JOIN transfer_items ti0 ON ti0.transfer_id = t5.id
+        JOIN order_items oi6 ON oi6.id = p_direct_order_item_id
+        JOIN group_buy_products g5 ON g5.id = oi6.group_buy_product_id AND ti0.product_id = g5.product_id
+        JOIN orders o5 ON o5.id = oi6.order_id
+        WHERE t5.direct_order_item_id = p_direct_order_item_id
+          AND t5.finalized_at IS NOT NULL
+          AND COALESCE(t5.refund_status, '') <> 'SUCCESS'
+          AND COALESCE(t5.destination->>'street1', '') = COALESCE(o5.address_line1, '')
+          AND COALESCE(t5.destination->>'street2', '') = COALESCE(o5.address_line2, '')
+          AND COALESCE(t5.destination->>'city', '')    = COALESCE(o5.city, '')
+          AND COALESCE(t5.destination->>'state', '')   = COALESCE(o5.state_code, '')
+          AND COALESCE(t5.destination->>'zip', '')     = COALESCE(o5.postal_code, ''))
+       >= (SELECT COALESCE(oi7.qty_override, oi7.qty) FROM order_items oi7 WHERE oi7.id = p_direct_order_item_id)
+    THEN RETURN; END IF;
     IF EXISTS (
       SELECT 1 FROM transfers t2
       WHERE t2.direct_order_item_id = p_direct_order_item_id AND t2.finalized_at IS NULL
@@ -400,7 +448,8 @@ BEGIN
   IF p_direct_order_item_id IS NOT NULL THEN
     -- stamp only when the CUMULATIVE finalized non-voided fills for this
     -- line (this transfer included — it is already inserted finalized)
-    -- cover the ordered quantity; the completing transfer owns the line
+    -- cover the ordered quantity, counting ONLY transfers sent to the
+    -- order's CURRENT ship-to; the completing transfer owns the line
     UPDATE order_items oi
     SET direct_fulfilled_at = now(), direct_fulfilled_transfer_id = v_id
     FROM group_buy_products gbp3
@@ -409,9 +458,15 @@ BEGIN
       AND (SELECT COALESCE(sum(ti.qty), 0)
            FROM transfers t4
            JOIN transfer_items ti ON ti.transfer_id = t4.id AND ti.product_id = gbp3.product_id
+           JOIN orders o4 ON o4.id = oi.order_id
            WHERE t4.direct_order_item_id = p_direct_order_item_id
              AND t4.finalized_at IS NOT NULL
-             AND COALESCE(t4.refund_status, '') <> 'SUCCESS')
+             AND COALESCE(t4.refund_status, '') <> 'SUCCESS'
+             AND COALESCE(t4.destination->>'street1', '') = COALESCE(o4.address_line1, '')
+             AND COALESCE(t4.destination->>'street2', '') = COALESCE(o4.address_line2, '')
+             AND COALESCE(t4.destination->>'city', '')    = COALESCE(o4.city, '')
+             AND COALESCE(t4.destination->>'state', '')   = COALESCE(o4.state_code, '')
+             AND COALESCE(t4.destination->>'zip', '')     = COALESCE(o4.postal_code, ''))
           >= COALESCE(oi.qty_override, oi.qty);
     GET DIAGNOSTICS v_stamped = ROW_COUNT;
     IF v_stamped > 0 THEN

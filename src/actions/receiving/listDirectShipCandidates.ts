@@ -29,12 +29,20 @@ function listDirectShipCandidates() {
       JOIN products p ON p.id = gbp.product_id
       LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
       LEFT JOIN LATERAL (
+        -- only transfers sent to the order's CURRENT ship-to count —
+        -- an address correction resets visible progress (those units
+        -- went to the old address; the operator remediates)
         SELECT sum(ti.qty) AS filled
         FROM transfers t
         JOIN transfer_items ti ON ti.transfer_id = t.id AND ti.product_id = gbp.product_id
         WHERE t.direct_order_item_id = oi.id
           AND t.finalized_at IS NOT NULL
           AND COALESCE(t.refund_status, '') <> 'SUCCESS'
+          AND COALESCE(t.destination->>'street1', '') = COALESCE(o.address_line1, '')
+          AND COALESCE(t.destination->>'street2', '') = COALESCE(o.address_line2, '')
+          AND COALESCE(t.destination->>'city', '')    = COALESCE(o.city, '')
+          AND COALESCE(t.destination->>'state', '')   = COALESCE(o.state_code, '')
+          AND COALESCE(t.destination->>'zip', '')     = COALESCE(o.postal_code, '')
       ) f ON true
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND o.status NOT IN ('cancelled', 'refunded')

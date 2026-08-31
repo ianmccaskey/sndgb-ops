@@ -117,7 +117,10 @@ function finalizeTransfer() {
               AND ti.qty > 0
           )
           -- cumulative coverage: THIS transfer is not finalized in the
-          -- statement snapshot, so it is included by id
+          -- statement snapshot, so it is included by id. Only transfers
+          -- sent to the order's CURRENT ship-to count — a partial sent
+          -- to an address the customer later corrected went elsewhere
+          -- and must not complete the line at the new address
           AND (
             SELECT COALESCE(sum(ti2.qty), 0)
             FROM transfers t3
@@ -127,6 +130,11 @@ function finalizeTransfer() {
             WHERE t3.direct_order_item_id = oi.id
               AND (t3.finalized_at IS NOT NULL OR t3.id = sel.id)
               AND COALESCE(t3.refund_status, '') <> 'SUCCESS'
+              AND COALESCE(t3.destination->>'street1', '') = COALESCE(o.address_line1, '')
+              AND COALESCE(t3.destination->>'street2', '') = COALESCE(o.address_line2, '')
+              AND COALESCE(t3.destination->>'city', '')    = COALESCE(o.city, '')
+              AND COALESCE(t3.destination->>'state', '')   = COALESCE(o.state_code, '')
+              AND COALESCE(t3.destination->>'zip', '')     = COALESCE(o.postal_code, '')
           ) >= COALESCE(oi.qty_override, oi.qty)
           -- campaign consistency at stamp time: the line's own gbp fixes
           -- its campaign — an order REASSIGNED to another buy after the
@@ -234,9 +242,15 @@ function finalizeTransfer() {
               JOIN order_items oi5 ON oi5.id = up.direct_order_item_id
               JOIN group_buy_products g4 ON g4.id = oi5.group_buy_product_id
                 AND ti4.product_id = g4.product_id
+              JOIN orders o5 ON o5.id = oi5.order_id
               WHERE t4.direct_order_item_id = up.direct_order_item_id
                 AND (t4.finalized_at IS NOT NULL OR t4.id = up.id)
-                AND COALESCE(t4.refund_status, '') <> 'SUCCESS') AS direct_filled
+                AND COALESCE(t4.refund_status, '') <> 'SUCCESS'
+                AND COALESCE(t4.destination->>'street1', '') = COALESCE(o5.address_line1, '')
+                AND COALESCE(t4.destination->>'street2', '') = COALESCE(o5.address_line2, '')
+                AND COALESCE(t4.destination->>'city', '')    = COALESCE(o5.city, '')
+                AND COALESCE(t4.destination->>'state', '')   = COALESCE(o5.state_code, '')
+                AND COALESCE(t4.destination->>'zip', '')     = COALESCE(o5.postal_code, '')) AS direct_filled
       FROM fin_audit, up
     `,
   });
