@@ -118,17 +118,57 @@ export function FulfillmentPage() {
     setPool(m => ({ ...m, [Number(sAddProduct)]: sAddQty.trim() }));
     setSAddProduct(''); setSAddQty('');
   };
-  const poolNum = (pid: number) => Number((pool[pid] ?? '').trim() || 0);
   // active whenever the pool holds stock — hiding the card is a display
   // choice, not a session end (the toolbar button shows the loaded state;
   // Reset ends the session)
   const sessionActive = Object.values(pool).some(v => Number(v) > 0);
+  // the order the greedy allocator walks the queue: biggest orders first,
+  // or oldest first (order numbers are sequential) — sticky per device
+  const [sessionSort, setSessionSort] = useState<'largest' | 'oldest'>(() => {
+    try { return localStorage.getItem('sndgb.sessionSort') === 'oldest' ? 'oldest' : 'largest'; } catch { return 'largest'; }
+  });
+  const pickSessionSort = (v: 'largest' | 'oldest') => {
+    setSessionSort(v);
+    try { localStorage.setItem('sndgb.sessionSort', v); } catch { /* per-device nicety */ }
+  };
+  const rowNeed = (r: QueueRow) => (r.packable_json || []).reduce((s, l) => s + Math.max(0, Number(l.remaining) || 0), 0);
+  // GREEDY PACKING PLAN (Ian: "only show orders I can fit into the session
+  // until all on-hand stock is depleted"): walk the ready queue in the
+  // chosen order and RESERVE each order's full remaining need from the
+  // pool; an order lists only if everything still fits AFTER the orders
+  // above it took their share — every listed order is packable TOGETHER,
+  // not just individually. An order too big for what's left doesn't block
+  // smaller ones behind it. Integer hundredths (split kits ship in 0.5s).
+  const allocation = useMemo(() => {
+    const allocated = new Set<number>();
+    const left = new Map<number, number>();
+    for (const [pid, v] of Object.entries(pool)) left.set(Number(pid), Math.round(Math.max(0, Number(v) || 0) * 100));
+    if (!sessionActive || stage !== 'ready') return { allocated, left };
+    const rows = queue.filter(r => rowNeed(r) > 0);
+    rows.sort((a, b) => sessionSort === 'largest'
+      ? rowNeed(b) - rowNeed(a) || a.order_number.localeCompare(b.order_number)
+      : a.order_number.localeCompare(b.order_number));
+    for (const r of rows) {
+      const lines = (r.packable_json || [])
+        .map(l => ({ pid: Number(l.product_id), cents: Math.round(Math.max(0, Number(l.remaining) || 0) * 100) }))
+        .filter(l => l.cents > 0);
+      if (lines.length === 0) continue;
+      if (lines.every(l => (left.get(l.pid) || 0) >= l.cents)) {
+        for (const l of lines) left.set(l.pid, (left.get(l.pid) || 0) - l.cents);
+        allocated.add(Number(r.id));
+      }
+    }
+    return { allocated, left };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, sessionActive, stage, sessionSort, JSON.stringify(pool)]);
+  const sessionLeftoverUnits = [...allocation.left.values()].reduce((s, c) => s + c, 0) / 100;
   const packability = (r: QueueRow): 'full' | 'partial' | 'none' => {
+    if (allocation.allocated.has(Number(r.id))) return 'full';
+    // partial = the pool LEFT OVER after every full fit could still start
+    // a partial box for this order
     const lines = (r.packable_json || []).map(l => ({ pid: Number(l.product_id), remaining: Number(l.remaining) }));
     if (lines.length === 0) return 'none';
-    const coverable = lines.filter(l => poolNum(l.pid) > 0);
-    if (coverable.length === 0) return 'none';
-    return lines.every(l => poolNum(l.pid) >= l.remaining) ? 'full' : 'partial';
+    return lines.some(l => l.remaining > 0 && (allocation.left.get(l.pid) || 0) > 0) ? 'partial' : 'none';
   };
   const onShipped = (items: { product_id: number; qty: number }[]) => {
     setPool(p => {
@@ -392,13 +432,17 @@ export function FulfillmentPage() {
   const displayQueue = useMemo(() => {
     if (!sessionActive || stage !== 'ready') return queue;
     const rank = { full: 0, partial: 1, none: 2 } as const;
-    // the session FILTERS, not just sorts: only orders the pool fully
-    // covers show by default; partials only when toggled, never 'none'
+    // the session FILTERS, not just sorts: only orders the PLAN fits show
+    // by default (partials only when toggled, never 'none'), listed in
+    // the same order the allocator walked them
+    const byMode = (a: QueueRow, b: QueueRow) => sessionSort === 'largest'
+      ? rowNeed(b) - rowNeed(a) || a.order_number.localeCompare(b.order_number)
+      : a.order_number.localeCompare(b.order_number);
     return queue
       .filter(r => { const p = packability(r); return p === 'full' || (showPartials && p === 'partial'); })
-      .sort((a, b) => rank[packability(a)] - rank[packability(b)] || a.order_number.localeCompare(b.order_number));
+      .sort((a, b) => rank[packability(a)] - rank[packability(b)] || byMode(a, b));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queue, sessionActive, stage, showPartials, JSON.stringify(pool)]);
+  }, [queue, sessionActive, stage, showPartials, sessionSort, allocation]);
   const sessionHiddenCount = sessionActive && stage === 'ready' ? queue.length - displayQueue.length : 0;
   // flagged-only narrows AFTER the session filter; inert without a live
   // snapshot (the toggle resets when the snapshot drops). The text
@@ -624,7 +668,9 @@ export function FulfillmentPage() {
               <span>Shipment session</span>
               {sessionActive && (
                 <span className="text-xs font-normal text-muted-foreground">
-                  {poolEntries.length} product{poolEntries.length > 1 ? 's' : ''} · {fmtNum(poolUnitsLeft)} units left — counts down as you ship
+                  {poolEntries.length} product{poolEntries.length > 1 ? 's' : ''} · {fmtNum(poolUnitsLeft)} units in the pool
+                  {stage === 'ready' && <> · <span className="font-medium text-foreground">fits {allocation.allocated.size} order{allocation.allocated.size === 1 ? '' : 's'}</span> ({fmtNum(sessionLeftoverUnits)} units left over)</>}
+                  {' '}— counts down as you ship
                 </span>
               )}
               <span className="ml-auto flex gap-1">
@@ -668,6 +714,11 @@ export function FulfillmentPage() {
               </div>
             )}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                Fit orders:
+                <Button size="sm" variant={sessionSort === 'largest' ? 'default' : 'outline'} className="h-6 px-2 text-[11px]" onClick={() => pickSessionSort('largest')}>Largest first</Button>
+                <Button size="sm" variant={sessionSort === 'oldest' ? 'default' : 'outline'} className="h-6 px-2 text-[11px]" onClick={() => pickSessionSort('oldest')}>Oldest first</Button>
+              </span>
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
                 <input type="checkbox" checked={showPartials} onChange={e => setShowPartials(e.target.checked)} />
                 Show partially packable
@@ -677,7 +728,7 @@ export function FulfillmentPage() {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              "Ready" shows only orders this pool fully covers — <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1 py-0.5 uppercase">packable</span> = every remaining item covered{showPartials && <>; <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5 uppercase">part-packable</span> = a partial box is possible</>}.
+              "Ready" lists a PACKING PLAN: orders are fitted {sessionSort === 'largest' ? 'largest-first' : 'oldest-first'}, each listed order's full need is reserved from the pool, and an order shows only if it still fits after the ones above it — so everything listed can be packed <span className="font-medium">together</span>, until the stock runs out. <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1 py-0.5 uppercase">packable</span> = fits this plan{showPartials && <>; <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5 uppercase">part-packable</span> = the leftover stock could start a partial box</>}.
             </p>
           </CardContent>
         </Card>
