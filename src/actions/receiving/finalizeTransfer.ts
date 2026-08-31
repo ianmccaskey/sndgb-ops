@@ -84,11 +84,14 @@ function finalizeTransfer() {
       -- SAME money gates enforced at draft time — a draft finalized long
       -- after creation (retry/recovery paths) must not mark a line
       -- fulfilled on an order that went on hold or unpaid meanwhile —
-      -- AND the transfer's item line still covers the line's CURRENT
-      -- effective quantity (qty edits between draft and finalize must
-      -- not let an under-shipment read as complete). Any refusal shows
-      -- up as direct_stamped = 0 (the label itself is still recorded);
-      -- the operator resolves in the order sheet.
+      -- AND the CUMULATIVE finalized non-voided fills for the line (this
+      -- transfer included) cover its CURRENT effective quantity: partial
+      -- fills record without stamping and the line completes when the
+      -- running total reaches the ordered qty (vendor sent everything to
+      -- us; direct ships are filled from received stock in pieces). Any
+      -- refusal shows up as direct_stamped = 0 (the label itself is
+      -- still recorded); direct_filled/direct_ordered tell the client
+      -- whether that is an expected partial or a gate refusal to surface.
       stamp AS (
         UPDATE order_items oi
         -- direct_fulfilled_transfer_id records WHICH transfer owns this
@@ -111,8 +114,20 @@ function finalizeTransfer() {
             SELECT 1 FROM transfer_items ti
             JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
             WHERE ti.transfer_id = sel.id AND ti.product_id = gbp.product_id
-              AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
+              AND ti.qty > 0
           )
+          -- cumulative coverage: THIS transfer is not finalized in the
+          -- statement snapshot, so it is included by id
+          AND (
+            SELECT COALESCE(sum(ti2.qty), 0)
+            FROM transfers t3
+            JOIN transfer_items ti2 ON ti2.transfer_id = t3.id
+            JOIN group_buy_products gbp3 ON gbp3.id = oi.group_buy_product_id
+              AND ti2.product_id = gbp3.product_id
+            WHERE t3.direct_order_item_id = oi.id
+              AND (t3.finalized_at IS NOT NULL OR t3.id = sel.id)
+              AND COALESCE(t3.refund_status, '') <> 'SUCCESS'
+          ) >= COALESCE(oi.qty_override, oi.qty)
           -- campaign consistency at stamp time: the line's own gbp fixes
           -- its campaign — an order REASSIGNED to another buy after the
           -- draft was validated mismatches and refuses
@@ -208,7 +223,20 @@ function finalizeTransfer() {
              -- real and recorded, but it is ORPHANED from any order line —
              -- the caller must warn about a possible duplicate
              (jsonb_build_object('r', up.direct_link_reclaimed_at)->>'r') AS direct_link_reclaimed_at,
-             (SELECT count(*) FROM stamp) AS direct_stamped
+             (SELECT count(*) FROM stamp) AS direct_stamped,
+             -- fill progress for the linked line (this transfer included):
+             -- lets the client tell an expected partial from a gate refusal
+             (SELECT COALESCE(oi4.qty_override, oi4.qty)::text
+              FROM order_items oi4 WHERE oi4.id = up.direct_order_item_id) AS direct_ordered,
+             (SELECT COALESCE(sum(ti4.qty), 0)::text
+              FROM transfers t4
+              JOIN transfer_items ti4 ON ti4.transfer_id = t4.id
+              JOIN order_items oi5 ON oi5.id = up.direct_order_item_id
+              JOIN group_buy_products g4 ON g4.id = oi5.group_buy_product_id
+                AND ti4.product_id = g4.product_id
+              WHERE t4.direct_order_item_id = up.direct_order_item_id
+                AND (t4.finalized_at IS NOT NULL OR t4.id = up.id)
+                AND COALESCE(t4.refund_status, '') <> 'SUCCESS') AS direct_filled
       FROM fin_audit, up
     `,
   });

@@ -65,6 +65,9 @@ export type DirectShipCandidate = {
   contact_name: string | null; contact_phone: string | null; contact_email: string | null;
   address_line1: string; address_line2: string | null; city: string; state_code: string; postal_code: string;
   product_id: number; sku_code: string; qty: string;
+  // finalized non-voided fills already sent against this line — the
+  // remaining need is qty − filled_qty (partial direct fills)
+  filled_qty: string;
 };
 export type VendorRow = { id: number; code: string; active: boolean; shippable: boolean };
 

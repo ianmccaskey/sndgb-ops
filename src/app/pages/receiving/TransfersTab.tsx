@@ -148,29 +148,31 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // refusal, so the caller's recovery branch (pendingFinalize + label URL
   // + transaction id) always runs — a charged label must never lose its
   // recovery handles to an exception path
-  const persistFinalize = async (transferId: number, result: PurchaseResult, rateFallback: string): Promise<{ ok: boolean; directItemId: number | null; directStamped: boolean; linkReclaimed: boolean }> => {
+  const persistFinalize = async (transferId: number, result: PurchaseResult, rateFallback: string): Promise<{ ok: boolean; directItemId: number | null; directStamped: boolean; linkReclaimed: boolean; directFilled: number | null; directOrdered: number | null }> => {
     try {
       const fin = await doFinalize({
         transfer_id: transferId, transaction_id: result.transactionId,
         tracking_number: result.trackingNumber, label_url: result.labelUrl,
         rate_id: result.rateId || rateFallback, actor: userName,
       }) as unknown[] | null;
-      const row = Array.isArray(fin) && fin.length > 0 ? fin[0] as { direct_order_item_id: string | null; direct_link_reclaimed_at: string | null; direct_stamped: string | number } : null;
-      if (!row) return { ok: false, directItemId: null, directStamped: false, linkReclaimed: false };
+      const row = Array.isArray(fin) && fin.length > 0 ? fin[0] as { direct_order_item_id: string | null; direct_link_reclaimed_at: string | null; direct_stamped: string | number; direct_filled: string | number | null; direct_ordered: string | number | null } : null;
+      if (!row) return { ok: false, directItemId: null, directStamped: false, linkReclaimed: false, directFilled: null, directOrdered: null };
       // the draft's linked direct-ship order line completes inside the same
-      // finalize statement; report whether the stamp actually landed (it
-      // refuses harmlessly if the line was fulfilled/removed meanwhile).
-      // linkReclaimed = this draft LOST its reservation to a newer draft
-      // before the label was recovered: the label is ORPHANED — warn.
+      // finalize statement WHEN cumulative fills cover the ordered qty;
+      // direct_filled/direct_ordered tell an expected partial from a gate
+      // refusal. linkReclaimed = this draft LOST its reservation to a
+      // newer draft before the label was recovered: the label is ORPHANED.
       if (row.direct_order_item_id != null) reloadDirectShips();
       return {
         ok: true,
         directItemId: row.direct_order_item_id != null ? Number(row.direct_order_item_id) : null,
         directStamped: Number(row.direct_stamped) > 0,
         linkReclaimed: row.direct_link_reclaimed_at != null,
+        directFilled: row.direct_filled != null ? Number(row.direct_filled) : null,
+        directOrdered: row.direct_ordered != null ? Number(row.direct_ordered) : null,
       };
     } catch {
-      return { ok: false, directItemId: null, directStamped: false, linkReclaimed: false };
+      return { ok: false, directItemId: null, directStamped: false, linkReclaimed: false, directFilled: null, directOrdered: null };
     }
   };
 
@@ -189,11 +191,13 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // appended to every recovery-path outcome whenever a linked direct-ship
   // line failed to stamp — the label saved fine, but the customer's order
   // line stayed outstanding and the operator must know on EVERY path
-  const directMissNote = (fin: { directItemId: number | null; directStamped: boolean; linkReclaimed: boolean }) =>
+  const directMissNote = (fin: { directItemId: number | null; directStamped: boolean; linkReclaimed: boolean; directFilled?: number | null; directOrdered?: number | null }) =>
     fin.linkReclaimed
       ? 'WARNING: this draft LOST its direct-ship reservation to a newer draft before this label was recovered — the label is saved but tied to NO order line. Check the transfer log for a duplicate label to the same customer and refund one.'
       : fin.directItemId != null && !fin.directStamped
-        ? 'NOTE: the linked direct-ship order line was NOT marked (already fulfilled, its order is now held/unpaid, its quantity or address changed) — verify in the order sheet.'
+        ? (fin.directFilled != null && fin.directOrdered != null && fin.directFilled < fin.directOrdered
+          ? `PARTIAL fill recorded: ${fmtNum(fin.directFilled)} of ${fmtNum(fin.directOrdered)} now sent against the customer's line — it completes (and gets its tracking) when the remaining ${fmtNum(fin.directOrdered - fin.directFilled)} ships.`
+          : 'NOTE: the linked direct-ship order line was NOT marked (already fulfilled, its order is now held/unpaid, or its address changed) — verify in the order sheet.')
         : '';
 
   // recovery on a RECLAIMED draft is legitimate (the label may be real
@@ -463,8 +467,8 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       setSuccess(result);
       setSuccessDirect(fin.directItemId != null
         ? (fin.directStamped
-          ? `Order ${directCandidate ? '#' + directCandidate.order_number + ' (' + directCandidate.customer_name + ')' : ''} marked direct-shipped — the tracking number is now on the customer's order line.`
-          : 'NOTE: the linked direct-ship order line was NOT marked (already fulfilled, or its order is now held/unpaid) — verify in the order sheet before shipping.')
+          ? `Order ${directCandidate ? '#' + directCandidate.order_number + ' (' + directCandidate.customer_name + ')' : ''} marked direct-shipped — the customer's line is fully covered and carries this tracking number.`
+          : directMissNote(fin))
         : '');
       setRatesResult(null); setPickedRate(''); setFLines([{ product: '', qty: '' }]); setFNote('');
       setSelectedBoxIds([]);
@@ -552,13 +556,23 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         res = await doCreateManual(params(true)) as unknown[] | null;
       }
       if (!(Array.isArray(res) && res.length > 0)) {
-        setPurchaseMsg('Not recorded. Possible causes: this tracking number is ALREADY on a finalized transfer (bought through the app or recorded manually — check the log), a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, ship-to changed, this transfer carries LESS than the ordered quantity, or an UNFINISHED DRAFT still reserves that line — delete it first).');
+        setPurchaseMsg('Not recorded. Possible causes: this tracking number is ALREADY on a finalized transfer (bought through the app or recorded manually — check the log), a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, ship-to changed, this transfer carries NONE of the customer\'s product, or an UNFINISHED DRAFT still reserves that line — delete it first).');
         return;
       }
       setManualSuccess(mTracking.trim().toUpperCase());
-      setSuccessDirect(directCandidate
-        ? `Order #${directCandidate.order_number} (${directCandidate.customer_name}) marked direct-shipped — the tracking number is now on the customer's order line.`
-        : '');
+      // partial fills: estimate completion from the list's fill counter +
+      // what this transfer carries (the fn stamped on the server truth;
+      // the reloaded candidate list is authoritative)
+      setSuccessDirect((() => {
+        if (!directCandidate) return '';
+        const sentNow = lines.filter(l => Number(l.product) === Number(directCandidate.product_id))
+          .reduce((s, l) => s + Number(l.qty), 0);
+        const total = Number(directCandidate.filled_qty || 0) + sentNow;
+        const ordered = Number(directCandidate.qty);
+        return total >= ordered
+          ? `Order #${directCandidate.order_number} (${directCandidate.customer_name}) marked direct-shipped — the customer's line is fully covered and carries this tracking number.`
+          : `PARTIAL fill recorded for order #${directCandidate.order_number} (${directCandidate.customer_name}): ${fmtNum(total)} of ${fmtNum(ordered)} now sent — the line completes (and gets its tracking) when the remaining ${fmtNum(ordered - total)} ships.`;
+      })());
       setFLines([{ product: '', qty: '' }]); setFNote(''); setMTracking(''); setMCost('');
       setSelectedBoxIds([]);
       if (isDirect) { setFDest(''); reloadDirectShips(); }
@@ -945,6 +959,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                 {directOptions.map(c => (
                   <SelectItem key={`ds_${c.item_id}`} value={`ds_${c.item_id}`}>
                     Direct: {c.customer_name} #{c.order_number} — {c.sku_code} × {fmtNum(c.qty)}
+                    {Number(c.filled_qty || 0) > 0 ? ` (${fmtNum(c.filled_qty)} sent, ${fmtNum(Number(c.qty) - Number(c.filled_qty))} left)` : ''}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1007,7 +1022,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             <p className="text-[11px] text-muted-foreground">
               Ships to {directCandidate.contact_name || directCandidate.customer_name}, {directCandidate.address_line1}
               {directCandidate.address_line2 ? `, ${directCandidate.address_line2}` : ''}, {directCandidate.city}, {directCandidate.state_code} {directCandidate.postal_code}
-              {' '}— this customer ordered <span className="font-medium">{directCandidate.sku_code} × {fmtNum(directCandidate.qty)}</span>; buying the label marks that order line direct-shipped with this tracking number. The transfer must carry at least that quantity of {directCandidate.sku_code} (more is fine — under-ships won't link).
+              {' '}— this customer ordered <span className="font-medium">{directCandidate.sku_code} × {fmtNum(directCandidate.qty)}</span>
+              {Number(directCandidate.filled_qty || 0) > 0 && <> (<span className="font-medium">{fmtNum(directCandidate.filled_qty)} already sent</span>, {fmtNum(Number(directCandidate.qty) - Number(directCandidate.filled_qty))} left)</>}.
+              {' '}Partial fills are fine: each transfer credits its {directCandidate.sku_code} quantity against the line, and the line marks direct-shipped (with the completing label's tracking) once the total covers the order.
             </p>
           )}
           {fDest === '__custom__' && (
