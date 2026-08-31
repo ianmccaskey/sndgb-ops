@@ -67,7 +67,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       .filter(a => Number(a.transfer_origin_id ?? a.id) === origin)
       .map(a => Number(a.id)));
   }, [addresses, fFrom]);
-  const [fDest, setFDest] = useState('');      // destination id, '__custom__', or 'ds_<order item id>'
+  const [fDest, setFDest] = useState('');      // destination id, '__custom__', 'ds_<order item id>', or 'ra_<receive address id>'
   // the received box whose contents were loaded into the item lines —
   // purely a form-filling aid; the transfer itself stays product+qty based
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
@@ -141,6 +141,13 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const directCandidate = fDest.startsWith('ds_')
     ? directShips.find(c => String(c.item_id) === fDest.slice(3)) || null
     : null;
+  // a RECEIVE ADDRESS picked as the destination (transfers between the
+  // group's own locations — e.g. Paige PMB 1 -> Ian Home); its snapshot
+  // travels in the destination jsonb like a custom address, no
+  // transfer_destinations CAS
+  const destReceiveAddr = fDest.startsWith('ra_')
+    ? addresses.find(a => String(a.id) === fDest.slice(3)) || null
+    : null;
 
   // appended to every recovery-path outcome whenever a linked direct-ship
   // line failed to stamp — the label saved fine, but the customer's order
@@ -176,6 +183,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         email: c.contact_email || undefined as unknown as string,
       };
     }
+    if (fDest.startsWith('ra_')) {
+      return destReceiveAddr ? toShippoAddress(destReceiveAddr) : null;
+    }
     const d = destinations.find(x => String(x.id) === fDest);
     return d ? toShippoAddress(d) : null;
   };
@@ -183,7 +193,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     ? (custom.name || 'custom')
     : directCandidate
       ? `Direct: ${directCandidate.customer_name} #${directCandidate.order_number}`
-      : (destinations.find(x => String(x.id) === fDest)?.label || '');
+      : destReceiveAddr
+        ? destReceiveAddr.label
+        : (destinations.find(x => String(x.id) === fDest)?.label || '');
 
   const onHand = (productId: number) =>
     inventory
@@ -201,6 +213,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     // direct-ship CONTENT too: a refreshed candidate list with a changed
     // ship-to (order re-imported with a new address) re-quotes
     direct: directCandidate,
+    // receive-address destination CONTENT: editing the address record
+    // re-quotes, same as saved destinations
+    ra: destReceiveAddr,
     custom, dims,
   });
   React.useEffect(() => {
@@ -312,8 +327,10 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       // destinations skip this (their snapshots live in this form / the
       // order row, and the direct LINE is separately validated in the fn)
       const isDirect = fDest.startsWith('ds_');
-      const destRow = fDest !== '__custom__' && !isDirect ? destinations.find(d => String(d.id) === fDest) : null;
-      if (fDest !== '__custom__' && !isDirect && !destRow) { setPurchaseMsg('Destination not found — reload the page.'); return; }
+      const isRa = fDest.startsWith('ra_');
+      const destRow = fDest !== '__custom__' && !isDirect && !isRa ? destinations.find(d => String(d.id) === fDest) : null;
+      if (fDest !== '__custom__' && !isDirect && !isRa && !destRow) { setPurchaseMsg('Destination not found — reload the page.'); return; }
+      if (isRa && !destReceiveAddr) { setPurchaseMsg('Destination address not found — reload the page.'); return; }
       if (isDirect && !directCandidate) { setPurchaseMsg('That direct-ship order line is no longer available (fulfilled or changed) — pick another destination.'); return; }
       const expectedDest = destRow ? {
         name: destRow.name, street1: destRow.street1, street2: destRow.street2,
@@ -795,6 +812,20 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             <Select value={fDest} onValueChange={setFDest}>
               <SelectTrigger className="h-9 flex-1 min-w-40"><SelectValue placeholder="Destination" /></SelectTrigger>
               <SelectContent>
+                {/* receive addresses as transfer-to targets — the two
+                    everyday ones pinned first (Ian), then the rest, then
+                    saved destinations; the exact FROM address is excluded */}
+                {(() => {
+                  const PINNED = ['Paige PMB 1', 'Ian Home'];
+                  const opts = addresses.filter(a => a.active && String(a.id) !== fFrom);
+                  const ordered = [
+                    ...PINNED.map(l => opts.find(a => a.label === l)).filter((a): a is typeof opts[number] => !!a),
+                    ...opts.filter(a => !PINNED.includes(a.label)).sort((a, b) => a.label.localeCompare(b.label)),
+                  ];
+                  return ordered.map(a => (
+                    <SelectItem key={`ra_${a.id}`} value={`ra_${a.id}`}>{a.label}</SelectItem>
+                  ));
+                })()}
                 {destinations.filter(d => d.active).map(d => <SelectItem key={d.id} value={String(d.id)}>{d.label}</SelectItem>)}
                 <SelectItem value="__custom__">Custom address…</SelectItem>
                 {directOptions.map(c => (
