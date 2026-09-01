@@ -3,6 +3,11 @@ import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listFulfillmentQueue from '@/actions/fulfillment/listFulfillmentQueue';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
+import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
+import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
+import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
+import { pushShipmentUpstream } from '@/lib/pushShipment';
+import type { PushPackableLine } from '@/lib/pushShipment';
 import adoptUpstreamShipment from '@/actions/fulfillment/adoptUpstreamShipment';
 import listReceiveAddresses from '@/actions/receiving/listReceiveAddresses';
 import listProducts from '@/actions/products/listProducts';
@@ -10,7 +15,7 @@ import { useApp } from '@/app/AppContext';
 import { useShippoHttp } from '@/lib/useShippoHttp';
 import { isTestKey } from '@/lib/shippo';
 import { B44_DEFAULT_APP_ID, getB44Order, listB44Orders } from '@/lib/base44';
-import { rows } from '@/lib/rows';
+import { rows, dbText } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -89,6 +94,86 @@ export function FulfillmentPage() {
   // belong in the filter chips or the session pool
   const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active && !p.digital), [rawProducts]);
   const [doMarkDirect] = useMutateAction(markOrderDirectFulfilled);
+
+  // ---- Push All (Shipped tab): every order flagged "not pushed" gets its
+  // finalized-but-unpushed boxes pushed to the ordering app, one at a
+  // time. Each push is the SAME spine as the modal's "Push upstream"
+  // (pushShipmentUpstream): local note first, read-merge-write, verified,
+  // stamped — a failure on one order never blocks the rest. ----
+  const [fetchShipmentsJit] = useMutateAction(listOrderShipments);
+  const [fetchPackableJit] = useMutateAction(getPackableItems);
+  const [doAppendNote] = useMutateAction(appendOrderAdminNote);
+  const [doMarkPushed] = useMutateAction(markShipmentPushed);
+  const pushAllInFlight = useRef(false);
+  const [pushAllBusy, setPushAllBusy] = useState(false);
+  const [pushAllMsg, setPushAllMsg] = useState('');
+  const pushAllCandidates = queue.filter(r => r.push_outstanding);
+  const pushAll = async () => {
+    if (pushAllInFlight.current) return;
+    if (!cfg.token) { setPushAllMsg('Add the ordering-app token in Settings first.'); return; }
+    pushAllInFlight.current = true;
+    setPushAllBusy(true);
+    const targets = pushAllCandidates;
+    let pushedBoxes = 0;
+    const failures: string[] = [];
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const r = targets[i];
+        setPushAllMsg(`Pushing ${r.order_number} (${i + 1}/${targets.length})…`);
+        // JIT authoritative reads per order — never this page's stale rows
+        type JitShip = {
+          id: number; finalized_at: string | null; b44_pushed_at: string | null;
+          refund_status: string | null; push_epoch: number; carrier: string | null;
+          tracking_number: string | number | null;
+          items: { order_item_id: number; qty: string; sku_code: string }[];
+        };
+        let ships: JitShip[];
+        let packable: PushPackableLine[];
+        try {
+          const [shipRes, pkRes] = [
+            await fetchShipmentsJit({ order_id: r.id }) as unknown[] | null,
+            await fetchPackableJit({ order_id: r.id }) as unknown[] | null,
+          ];
+          ships = (Array.isArray(shipRes) ? shipRes as JitShip[] : [])
+            .filter(s => s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS');
+          packable = (Array.isArray(pkRes) ? pkRes : []).map(row => {
+            const l = row as Record<string, unknown>;
+            return {
+              order_item_id: Number(l.order_item_id),
+              product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
+              sku_code: String(l.sku_code ?? ''), effective_qty: String(l.effective_qty ?? '0'),
+              shipped_qty: String(l.shipped_qty ?? '0'), direct_ship: !!l.direct_ship,
+              direct_fulfilled_at: l.direct_fulfilled_at == null ? null : String(l.direct_fulfilled_at),
+              digital: !!l.digital,
+            };
+          });
+          if (packable.length === 0) throw new Error('empty packable read');
+        } catch {
+          failures.push(`${r.order_number}: could not read its shipments/packing state`);
+          continue;
+        }
+        if (ships.length === 0) continue;   // pushed meanwhile in another session
+        for (const s of ships) {
+          const out = await pushShipmentUpstream({
+            cfg, externalId: r.external_id || '', orderId: r.id, orderNumber: r.order_number,
+            shipmentId: s.id, pushEpoch: Number(s.push_epoch || 0),
+            carrier: s.carrier || '', tracking: s.tracking_number == null ? '' : dbText(s.tracking_number),
+            shippedItems: (s.items || []).map(it => ({ sku: it.sku_code, qty: String(it.qty) })),
+            packable, userName, appendNote: doAppendNote, markPushed: doMarkPushed,
+          });
+          if (out.ok) pushedBoxes++;
+          else failures.push(`${r.order_number}: ${out.message}`);
+        }
+      }
+      setPushAllMsg(
+        (pushedBoxes > 0 ? `Pushed ${pushedBoxes} box${pushedBoxes === 1 ? '' : 'es'} to the ordering app.` : 'Nothing was pushed.')
+        + (failures.length > 0 ? ` ${failures.length} failed — ${failures.join(' · ')}` : ''));
+      reload();
+    } finally {
+      pushAllInFlight.current = false;
+      setPushAllBusy(false);
+    }
+  };
 
   const [shipping, setShipping] = useState<QueueRow | null>(null);
   const [saving, setSaving] = useState(false);
@@ -648,6 +733,13 @@ export function FulfillmentPage() {
             <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => setFilterIds(new Set())}>Clear</Button>
           </>
         )}
+        {stage === 'shipped' && pushAllCandidates.length > 0 && (
+          <Button size="sm" variant="outline" className="h-8" disabled={pushAllBusy}
+            title="Push every shipped order still marked 'not pushed' to the ordering app — same verified push as the modal's Push upstream, one order at a time"
+            onClick={pushAll}>
+            {pushAllBusy ? 'Pushing…' : `Push all (${pushAllCandidates.length})`}
+          </Button>
+        )}
         <Button size="sm" variant="outline" className="h-8 ml-auto" disabled={!canCheck || checking}
           title={canCheck
             ? 'Pull every order\'s status from the ordering app and flag orders marked shipped there with no shipment recorded here'
@@ -659,6 +751,7 @@ export function FulfillmentPage() {
           Shipment session{poolEntries.length > 0 ? ` · ${poolEntries.length} product${poolEntries.length > 1 ? 's' : ''}` : ''}
         </Button>
       </div>
+      {pushAllMsg && stage === 'shipped' && <p className="text-xs text-amber-800">{pushAllMsg}</p>}
 
       {/* shipment session: only the products you SAY you have, as a tidy list */}
       {sessionOpen && (
