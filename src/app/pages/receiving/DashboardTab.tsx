@@ -19,8 +19,8 @@ import { RefreshCw, Truck, AlertTriangle, ScanLine, Printer } from 'lucide-react
 import { decodeCarrierLabel, trackingCandidates, matchTracking, candidateCarrier, carrierCompatible } from '@/lib/labelScan';
 import { openPrinterPage, niimbotSupported } from '@/lib/niimbotPrint';
 import type { PackageLabelData } from '@/lib/niimbotPrint';
-import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday } from './shared';
-import type { RxAddress, Pkg, CatalogProduct, VendorRow } from './shared';
+import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday, boxConsumption } from './shared';
+import type { RxAddress, Pkg, CatalogProduct, VendorRow, TransferRow } from './shared';
 
 const CARRIERS = [
   { token: 'usps', label: 'USPS' },
@@ -34,8 +34,8 @@ const CARRIERS = [
 
 type ItemLine = { product: string; qty: string };
 
-export function DashboardTab({ addresses, packages, products, vendors, vendorsReady, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode, onPartOut }: {
-  addresses: RxAddress[]; packages: Pkg[]; products: CatalogProduct[]; vendors: VendorRow[]; vendorsReady: boolean;
+export function DashboardTab({ addresses, packages, transfers, products, vendors, vendorsReady, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode, onPartOut }: {
+  addresses: RxAddress[]; packages: Pkg[]; transfers: TransferRow[]; products: CatalogProduct[]; vendors: VendorRow[]; vendorsReady: boolean;
   refreshOne: (p: Pkg) => Promise<string | null>;
   refreshAll: () => Promise<void>;
   refreshingIds: Set<number>;
@@ -602,8 +602,16 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
     if (statusFilter === 'out_for_delivery') return isOutForDeliveryToday(p);
     return p.tracking_status === statusFilter && !p.received_at;
   };
+  // the dashboard is WHAT'S HERE NOW, not history (Ian 2026-08-31): a
+  // received box whose entire contents left through finalized transfers
+  // (part-outs / direct ships) disappears from the cards — the History
+  // tab keeps the auditable record. Partially parted boxes stay, showing
+  // their REMAINING contents.
+  const { remainingByPkg, consumedIds } = React.useMemo(
+    () => boxConsumption(packages, transfers), [packages, transfers]);
   const visible = packages.filter(p =>
     pkgMatchesProduct(p) && pkgMatchesStatus(p)
+    && !(p.received_at && consumedIds.has(Number(p.id)))
     && (addrFilter === 'all' || String(p.receive_address_id) === addrFilter)
     && (vendorFilter === 'all' || p.vendor_code === vendorFilter));
   // the product filter scopes the ADDRESS CARDS to addresses that actually
@@ -923,6 +931,9 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
                         {trackLabel(p)}
                       </span>
                       {p.received_at && <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`Received ${fmtDateTime(p.received_at)} by ${p.received_by}`}>received</span>}
+                      {p.received_at && (p.items || []).some(i => (remainingByPkg.get(Number(p.id))?.get(Number(i.product_id)) ?? Math.round(Number(i.qty) * 100)) < Math.round(Number(i.qty) * 100)) && (
+                        <span className="rounded bg-violet-100 text-violet-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Part of this box left through finalized transfers — quantities below are what's still here">parted</span>
+                      )}
                       {p.vendor_code && <span className="rounded bg-zinc-200 text-zinc-800 text-[10px] font-semibold px-1.5 py-0.5">{p.vendor_code}</span>}
                       {p.eta && !p.received_at && <span className="text-[10px] text-muted-foreground">ETA {fmtDate(p.eta)}</span>}
                     </div>
@@ -944,14 +955,22 @@ export function DashboardTab({ addresses, packages, products, vendors, vendorsRe
                       <p className="text-[11px] text-muted-foreground">Auto-receive is OFF for this package (it was un-received) — use Mark received when it's really here.</p>
                     )}
                     <div className="flex flex-wrap gap-1">
-                      {(p.items || []).map(i => (
-                        <span key={i.product_id} className={`rounded text-[10px] font-semibold px-1.5 py-0.5 ${productChipClass(Number(i.product_id))}`}>
-                          {i.sku_code} × {fmtNum(i.qty)}
-                          {!p.received_at && (
-                            <button className="ml-1 opacity-60 hover:opacity-100" title="Remove line" onClick={() => removeItemFromCard(p, i.id)}>✕</button>
-                          )}
-                        </span>
-                      ))}
+                      {(p.items || []).map(i => {
+                        // received boxes show what's STILL IN them; the
+                        // original count stays visible as "of N"
+                        const origC = Math.round(Number(i.qty) * 100);
+                        const remC = p.received_at ? (remainingByPkg.get(Number(p.id))?.get(Number(i.product_id)) ?? origC) : origC;
+                        const parted = remC < origC;
+                        return (
+                          <span key={i.product_id} className={`rounded text-[10px] font-semibold px-1.5 py-0.5 ${productChipClass(Number(i.product_id))}`}
+                            title={parted ? `Received ${fmtNum(i.qty)}; part-outs took the difference` : undefined}>
+                            {i.sku_code} × {fmtNum(parted ? remC / 100 : i.qty)}{parted && <span className="opacity-70"> of {fmtNum(i.qty)}</span>}
+                            {!p.received_at && (
+                              <button className="ml-1 opacity-60 hover:opacity-100" title="Remove line" onClick={() => removeItemFromCard(p, i.id)}>✕</button>
+                            )}
+                          </span>
+                        );
+                      })}
                     </div>
                     {!p.received_at && (
                       <div className="flex flex-wrap gap-1 items-center">

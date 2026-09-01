@@ -17,6 +17,7 @@ import { PackageOpen } from 'lucide-react';
 import { DashboardTab } from './DashboardTab';
 import { InventoryTab } from './InventoryTab';
 import { TransfersTab } from './TransfersTab';
+import { HistoryTab } from './HistoryTab';
 import { AddressesTab } from './AddressesTab';
 import { ImportTab } from './ImportTab';
 import type { RxAddress, Pkg, InvRow, TransferRow, CatalogProduct, VendorRow } from './shared';
@@ -170,13 +171,14 @@ export function ReceivingPage() {
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="inventory">Inventory</TabsTrigger>
           <TabsTrigger value="transfers">Transfers</TabsTrigger>
+          <TabsTrigger value="history">History</TabsTrigger>
           <TabsTrigger value="addresses">Addresses</TabsTrigger>
           <TabsTrigger value="import">Import CSV</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dashboard" className="mt-4">
           <DashboardTab
-            addresses={addresses} packages={packages} products={products} vendors={vendors} vendorsReady={vendorsReady}
+            addresses={addresses} packages={packages} transfers={transfers} products={products} vendors={vendors} vendorsReady={vendorsReady}
             refreshOne={refreshOne} refreshAll={refreshAll} refreshingIds={refreshingIds}
             refreshAllProgress={refreshAllProgress} afterChange={afterPackageChange}
             hasKey={!!shippoKey} testMode={testMode} onPartOut={partOut}
@@ -193,6 +195,9 @@ export function ReceivingPage() {
             reloadDestinations={reloadDestinations}
             partOutSeed={partOutSeed} onPartOutSeedConsumed={() => setPartOutSeed(null)}
           />
+        </TabsContent>
+        <TabsContent value="history" className="mt-4">
+          <HistoryTab packages={packages} transfers={transfers} addresses={addresses} />
         </TabsContent>
         <TabsContent value="addresses" className="mt-4">
           <AddressesTab

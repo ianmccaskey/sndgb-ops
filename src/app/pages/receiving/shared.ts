@@ -71,6 +71,78 @@ export type DirectShipCandidate = {
 };
 export type VendorRow = { id: number; code: string; active: boolean; shippable: boolean };
 
+// ---- box consumption (part-out provenance) ----
+// Each finalized, non-voided transfer's quantities fill its provenance
+// chain in order — the recorded source box first, then any boxes named in
+// its note ("Also parted from CARRIER TRACKING + ..."); excess beyond the
+// chain's recorded contents pins to the first box so it reads consumed
+// rather than resurrecting. A box counts as CONSUMED only when nothing
+// remains of any product; a refund SUCCESS voids the transfer and its
+// quantities return. Inventory stays the exact ledger — this is
+// provenance bookkeeping shared by the Transfers box picker (don't offer
+// shipped kits), the Dashboard (show what's actually still here), and
+// History (audit trail).
+export type BoxConsumption = {
+  // package id -> product id -> hundredths still in the box
+  remainingByPkg: Map<number, Map<number, number>>;
+  // packages with nothing left of any product
+  consumedIds: Set<number>;
+};
+export function boxConsumption(packages: Pkg[], transfers: TransferRow[]): BoxConsumption {
+  const use = new Map<number, Map<number, number>>();
+  const add = (pkgId: number, pid: number, cents: number) => {
+    const m = use.get(pkgId) || new Map<number, number>();
+    m.set(pid, (m.get(pid) || 0) + cents);
+    use.set(pkgId, m);
+  };
+  const byId = new Map(packages.map(p => [Number(p.id), p]));
+  for (const t of transfers) {
+    if (!t.finalized_at || t.refund_status === 'SUCCESS' || t.source_package_id == null) continue;
+    const chain: Pkg[] = [];
+    const first = byId.get(Number(t.source_package_id));
+    if (first) chain.push(first);
+    const noteBoxes = /Also parted from (.+)$/.exec(t.note || '');
+    if (noteBoxes) {
+      for (const tok of noteBoxes[1].split(' + ')) {
+        const sp = tok.trim().split(/\s+/);
+        if (sp.length < 2) continue;
+        const carrier = sp[0].toLowerCase();
+        const tracking = sp.slice(1).join('').toUpperCase();
+        const found = packages.find(p => (p.carrier || '').toLowerCase() === carrier
+          && String(p.tracking_number || '').toUpperCase() === tracking);
+        if (found && !chain.some(c => Number(c.id) === Number(found.id))) chain.push(found);
+      }
+    }
+    for (const it of t.items || []) {
+      const pid = Number(it.product_id);
+      let rem = Math.round(Number(it.qty) * 100);
+      for (const box of chain) {
+        if (rem <= 0) break;
+        const cap = (box.items || []).filter(i => Number(i.product_id) === pid)
+          .reduce((s, i) => s + Math.round(Number(i.qty) * 100), 0);
+        const cur = use.get(Number(box.id))?.get(pid) || 0;
+        const take = Math.min(rem, Math.max(0, cap - cur));
+        if (take > 0) { add(Number(box.id), pid, take); rem -= take; }
+      }
+      if (rem > 0 && chain.length > 0) add(Number(chain[0].id), pid, rem);
+    }
+  }
+  const remainingByPkg = new Map<number, Map<number, number>>();
+  const consumedIds = new Set<number>();
+  for (const p of packages) {
+    const rem = new Map<number, number>();
+    for (const i of p.items || []) {
+      const pid = Number(i.product_id);
+      rem.set(pid, (rem.get(pid) || 0) + Math.round(Number(i.qty) * 100));
+    }
+    const used = use.get(Number(p.id));
+    if (used) for (const [pid, cents] of used) rem.set(pid, Math.max(0, (rem.get(pid) || 0) - cents));
+    remainingByPkg.set(Number(p.id), rem);
+    if ((p.items || []).length > 0 && [...rem.values()].every(v => v <= 0)) consumedIds.add(Number(p.id));
+  }
+  return { remainingByPkg, consumedIds };
+}
+
 // stable per-product chip colors — LITERAL class strings (Tailwind purge
 // cannot see dynamic names); assignment by product id so a product keeps
 // its color everywhere. Chips always carry SKU text — color is never the

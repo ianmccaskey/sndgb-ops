@@ -20,7 +20,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { rows } from '@/lib/rows';
-import { productChipClass } from './shared';
+import { productChipClass, boxConsumption } from './shared';
 import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCandidate } from './shared';
 
 type ItemLine = { product: string; qty: string };
@@ -863,78 +863,16 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
 
   // received boxes still at the selected ship-from address — clickable
   // form-fillers: clicks toggle boxes in/out and load their combined
-  // REMAINING contents into the item lines. Attribution: each finalized,
-  // non-voided transfer's quantities fill its provenance chain in order —
-  // the recorded source box first, then any boxes this same UI named in
-  // its note ("Also parted from ..."); excess beyond the chain's recorded
-  // contents pins to the first box so it reads consumed rather than
-  // resurrecting. A box leaves the picker only when nothing remains of
-  // any product; a refund SUCCESS voids the transfer and its quantities
-  // return. Inventory stays the exact ledger — this is provenance
-  // bookkeeping so a part-out can't accidentally offer shipped kits.
-  const boxUse = React.useMemo(() => {
-    const use = new Map<number, Map<number, number>>();
-    const add = (pkgId: number, pid: number, cents: number) => {
-      const m = use.get(pkgId) || new Map<number, number>();
-      m.set(pid, (m.get(pid) || 0) + cents);
-      use.set(pkgId, m);
-    };
-    const byId = new Map(packages.map(p => [Number(p.id), p]));
-    for (const t of transfers) {
-      if (!t.finalized_at || t.refund_status === 'SUCCESS' || t.source_package_id == null) continue;
-      const chain: Pkg[] = [];
-      const first = byId.get(Number(t.source_package_id));
-      if (first) chain.push(first);
-      const noteBoxes = /Also parted from (.+)$/.exec(t.note || '');
-      if (noteBoxes) {
-        for (const tok of noteBoxes[1].split(' + ')) {
-          const sp = tok.trim().split(/\s+/);
-          if (sp.length < 2) continue;
-          const carrier = sp[0].toLowerCase();
-          const tracking = sp.slice(1).join('').toUpperCase();
-          const found = packages.find(p => (p.carrier || '').toLowerCase() === carrier
-            && String(p.tracking_number || '').toUpperCase() === tracking);
-          if (found && !chain.some(c => Number(c.id) === Number(found.id))) chain.push(found);
-        }
-      }
-      for (const it of t.items || []) {
-        const pid = Number(it.product_id);
-        let rem = Math.round(Number(it.qty) * 100);
-        for (const box of chain) {
-          if (rem <= 0) break;
-          const cap = (box.items || []).filter(i => Number(i.product_id) === pid)
-            .reduce((s, i) => s + Math.round(Number(i.qty) * 100), 0);
-          const cur = use.get(Number(box.id))?.get(pid) || 0;
-          const take = Math.min(rem, Math.max(0, cap - cur));
-          if (take > 0) { add(Number(box.id), pid, take); rem -= take; }
-        }
-        if (rem > 0 && chain.length > 0) add(Number(chain[0].id), pid, rem);
-      }
-    }
-    return use;
-  }, [transfers, packages]);
-  // remaining contents of a box per product, in integer hundredths
-  const boxRemaining = React.useCallback((p: Pkg) => {
-    const rem = new Map<number, number>();
-    for (const i of p.items || []) {
-      const pid = Number(i.product_id);
-      rem.set(pid, (rem.get(pid) || 0) + Math.round(Number(i.qty) * 100));
-    }
-    const used = boxUse.get(Number(p.id));
-    if (used) for (const [pid, cents] of used) rem.set(pid, Math.max(0, (rem.get(pid) || 0) - cents));
-    return rem;
-  }, [boxUse]);
-  const consumedPkgIds = React.useMemo(() => {
-    const out = new Set<number>();
-    for (const p of packages) {
-      if (!(p.items || []).length) continue;
-      if ([...boxRemaining(p).values()].every(v => v <= 0)) out.add(Number(p.id));
-    }
-    return out;
-  }, [packages, boxRemaining]);
+  // REMAINING contents into the item lines. The part-out attribution
+  // (which transfers emptied which boxes) is the shared boxConsumption
+  // in ./shared — the Dashboard and History tabs read the same math.
+  const { remainingByPkg, consumedIds } = React.useMemo(
+    () => boxConsumption(packages, transfers), [packages, transfers]);
+  const boxRemaining = React.useCallback(
+    (p: Pkg) => remainingByPkg.get(Number(p.id)) || new Map<number, number>(), [remainingByPkg]);
   const boxesAtFrom = packages.filter(p =>
     groupMemberIds.has(Number(p.receive_address_id)) && p.received_at
-    && (p.items || []).length > 0 && !consumedPkgIds.has(Number(p.id)));
+    && (p.items || []).length > 0 && !consumedIds.has(Number(p.id)));
   // direct-ship destinations are offered only when the transfer actually
   // carries the customer's product (the fn re-checks this at write time)
   const lineProductIds = new Set(fLines.filter(l => l.product).map(l => Number(l.product)));
