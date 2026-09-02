@@ -44,8 +44,15 @@ function markTransferPurchaseStarted() {
       -- the FULL draft-time eligibility must still hold — line
       -- outstanding, order active, not held, money collected, the
       -- stored destination still the order's CURRENT ship-to, the line
-      -- still in its order's campaign (its own gbp fixes it), and the
-      -- transfer still covering the line's current effective quantity.
+      -- still in its order's campaign (its own gbp fixes it), the
+      -- transfer carrying SOME of the line's product, and the line not
+      -- already fully covered by finalized fills. PARTIAL fills are
+      -- legitimate (create_transfer_draft and finalizeTransfer both
+      -- allow them; the line completes when the running total reaches
+      -- the ordered qty) — this gate previously demanded the transfer
+      -- alone cover the FULL effective quantity, which refused every
+      -- Shippo purchase for a partially-filled line (Sheila Meyer
+      -- 2026-09-02: 41 of 60 remaining, heartbeat returned zero rows).
       eligible AS (
         SELECT oi.id
         FROM lck
@@ -68,8 +75,24 @@ function markTransferPurchaseStarted() {
           AND EXISTS (
             SELECT 1 FROM transfer_items ti
             WHERE ti.transfer_id = t.id AND ti.product_id = gbp.product_id
-              AND ti.qty >= COALESCE(oi.qty_override, oi.qty)
+              AND ti.qty > 0
           )
+          -- cumulative finalized, non-voided, address-matched fills must
+          -- still leave quantity unfilled — the same filled-sum shape
+          -- create_transfer_draft evaluates at draft time
+          AND (SELECT COALESCE(sum(ti5.qty), 0)
+               FROM transfers t5
+               JOIN transfer_items ti5 ON ti5.transfer_id = t5.id
+               WHERE t5.direct_order_item_id = oi.id
+                 AND t5.finalized_at IS NOT NULL
+                 AND COALESCE(t5.refund_status, '') <> 'SUCCESS'
+                 AND ti5.product_id = gbp.product_id
+                 AND COALESCE(t5.destination->>'street1', '') = COALESCE(o.address_line1, '')
+                 AND COALESCE(t5.destination->>'street2', '') = COALESCE(o.address_line2, '')
+                 AND COALESCE(t5.destination->>'city', '')    = COALESCE(o.city, '')
+                 AND COALESCE(t5.destination->>'state', '')   = COALESCE(o.state_code, '')
+                 AND COALESCE(t5.destination->>'zip', '')     = COALESCE(o.postal_code, ''))
+              < COALESCE(oi.qty_override, oi.qty)
         FOR UPDATE OF oi, o
       ),
       up AS (
