@@ -7,9 +7,12 @@ const Table = React.forwardRef<
   React.HTMLAttributes<HTMLTableElement>
 >(({ className, ...props }, ref) => (
   <div className="relative w-full overflow-auto">
+    {/* min-w makes the overflow wrapper real: a bare w-full table never
+        overflows — it crushes columns to one-word ladders on phones
+        (mobile audit #4). Wide tables pass a larger min-w via className. */}
     <table
       ref={ref}
-      className={cn("w-full caption-bottom text-sm", className)}
+      className={cn("w-full min-w-[560px] caption-bottom text-sm", className)}
       {...props}
     />
   </div>

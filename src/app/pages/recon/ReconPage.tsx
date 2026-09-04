@@ -143,8 +143,8 @@ export function ReconPage() {
     <div className="p-4 sm:p-6 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Scale className="h-6 w-6 text-violet-600" /> Payments & Reconciliation
+          <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+            <Scale className="h-6 w-6 text-cyan-300" /> Payments & Reconciliation
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Billed vs received per order and per rail · tolerance ±{fmtUSD(groupBuy?.reconcile_tolerance_usd || 1)}</p>
         </div>
@@ -161,7 +161,7 @@ export function ReconPage() {
               <CardContent className="text-sm space-y-0.5">
                 <div className="flex justify-between"><span className="text-muted-foreground">Billed</span><span>{fmtUSD(r.billed_usd, { cents: false })}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Received</span><span>{fmtUSD(r.received_usd, { cents: false })}</span></div>
-                <div className={`flex justify-between font-semibold ${Math.abs(gap) > 1 ? 'text-red-600' : 'text-green-700'}`}>
+                <div className={`flex justify-between font-semibold ${Math.abs(gap) > 1 ? 'text-rose-400' : 'text-emerald-300'}`}>
                   <span>Gap</span><span>{fmtUSD(gap, { cents: false })}</span>
                 </div>
                 {Number(r.vendor_paid_usd) > 0 && (
@@ -202,7 +202,7 @@ export function ReconPage() {
                           <span>≈ Expected if dedicated (received − payouts − refunds)</span>
                           <span>
                             {fmtUSD(expected, { cents: false })}
-                            <span className={Math.abs(drift) <= 50 ? 'text-green-700' : 'text-amber-600'}>
+                            <span className={Math.abs(drift) <= 50 ? 'text-emerald-300' : 'text-amber-300'}>
                               {' '}({drift >= 0 ? '+' : '−'}{fmtUSD(Math.abs(drift), { cents: false })})
                             </span>
                           </span>
@@ -267,31 +267,31 @@ export function ReconPage() {
                     <span className="font-medium whitespace-nowrap">{r.order_number}</span>
                     <span className="text-sm whitespace-nowrap">
                       {fmtUSD(r.billed_usd)} <span className="text-muted-foreground">→</span> {fmtUSD(r.effective_received_usd)}
-                      {r.override_usd != null && <span className="text-violet-600 text-xs ml-1">(override)</span>}
+                      {r.override_usd != null && <span className="text-cyan-300 text-xs ml-1">(override)</span>}
                     </span>
                   </div>
                   <div className="flex items-center justify-between gap-2 mt-1">
                     <span className="text-sm text-muted-foreground truncate">{r.customer_name}</span>
                     <span className="flex items-center gap-1.5 shrink-0">
                       {Math.abs(diff) > 0.005 && (
-                        <span className={`text-xs font-medium ${r.recon_status === 'short' ? 'text-red-600' : r.recon_status === 'over' ? 'text-blue-600' : 'text-muted-foreground'}`}>
+                        <span className={`text-xs font-medium ${r.recon_status === 'short' ? 'text-rose-400' : r.recon_status === 'over' ? 'text-blue-300' : 'text-muted-foreground'}`}>
                           {fmtUSD(diff)}
                         </span>
                       )}
                       <span className="text-xs uppercase text-muted-foreground">{r.payment_rail || '—'}</span>
                       <StatusPill value={r.recon_status} />
                       {Number(r.comp_usd) > 0 && (
-                        <span className="rounded bg-green-100 text-green-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
+                        <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
                           comp −{fmtUSD(r.comp_usd)}
                         </span>
                       )}
                       {Number(r.writeoff_usd) > 0 && (
-                        <span className="rounded bg-green-100 text-green-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
+                        <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
                           w/o −{fmtUSD(r.writeoff_usd)}
                         </span>
                       )}
                       {r.native_unpriced && (
-                        <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
+                        <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
                           native {r.native_unpriced}
                         </span>
                       )}
@@ -325,23 +325,23 @@ export function ReconPage() {
                     <TableCell className="text-right">
                       {fmtUSD(r.billed_usd)}
                       {(Number(r.comp_usd) > 0 || Number(r.writeoff_usd) > 0) && (
-                        <span className="block text-[11px] text-green-700" title="Comped items and write-offs — the customer owes billed minus these">
+                        <span className="block text-[11px] text-emerald-300" title="Comped items and write-offs — the customer owes billed minus these">
                           {Number(r.comp_usd) > 0 ? `−${fmtUSD(r.comp_usd)} comp ` : ''}{Number(r.writeoff_usd) > 0 ? `−${fmtUSD(r.writeoff_usd)} w/o ` : ''}→ {fmtUSD(r.due_usd)} due
                         </span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
                       {fmtUSD(r.effective_received_usd)}
-                      {r.override_usd != null && <span className="text-violet-600 text-xs ml-1">(override)</span>}
+                      {r.override_usd != null && <span className="text-cyan-300 text-xs ml-1">(override)</span>}
                     </TableCell>
-                    <TableCell className={`text-right ${r.recon_status === 'short' ? 'text-red-600' : r.recon_status === 'over' ? 'text-blue-600' : 'text-muted-foreground'}`}>
+                    <TableCell className={`text-right ${r.recon_status === 'short' ? 'text-rose-400' : r.recon_status === 'over' ? 'text-blue-300' : 'text-muted-foreground'}`}>
                       {fmtUSD(r.diff_usd)}
                     </TableCell>
                     <TableCell>
                       <span className="inline-flex items-center gap-1">
                         <StatusPill value={r.recon_status} />
                         {r.native_unpriced && (
-                          <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`Customer paid in native ${r.native_unpriced} — coin amount recorded, needs pricing. Open the order and set an override for the TOTAL received USD (override replaces the verified sum).`}>
+                          <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`Customer paid in native ${r.native_unpriced} — coin amount recorded, needs pricing. Open the order and set an override for the TOTAL received USD (override replaces the verified sum).`}>
                             native {r.native_unpriced}
                           </span>
                         )}
@@ -382,7 +382,7 @@ export function ReconPage() {
                 {pending.map(p => (
                   <TableRow key={p.payment_id}>
                     <TableCell className="font-medium">
-                      <button type="button" className="text-violet-600 hover:underline" onClick={e => { e.stopPropagation(); setOpenOrderId(p.order_id); }}>
+                      <button type="button" className="text-cyan-300 hover:underline" onClick={e => { e.stopPropagation(); setOpenOrderId(p.order_id); }}>
                         {p.order_number}
                       </button>
                     </TableCell>
@@ -394,7 +394,7 @@ export function ReconPage() {
                       {verifying[p.payment_id] && verifying[p.payment_id] !== 'done'
                         ? <span className="text-xs text-muted-foreground">{verifying[p.payment_id]}</span>
                         : verifying[p.payment_id] === 'done'
-                          ? <span className="text-xs text-green-700">verified ✓</span>
+                          ? <span className="text-xs text-emerald-300">verified ✓</span>
                           : <Button size="sm" variant="outline" onClick={() => verifyOne(p).then(reloadAll)}>Verify</Button>}
                     </TableCell>
                   </TableRow>
@@ -424,7 +424,7 @@ export function ReconPage() {
                 <Input placeholder="Amount USD" value={mAmount} onChange={e => setMAmount(e.target.value)} className="h-9 w-36" />
                 <Input placeholder="Receipt / confirmation # (optional)" value={mRef} onChange={e => setMRef(e.target.value)} className="h-9 flex-1" />
               </div>
-              {mError && <p className="text-sm text-red-600">{mError}</p>}
+              {mError && <p className="text-sm text-rose-400">{mError}</p>}
               <Button size="sm" onClick={addManual} disabled={mSaving}>Record payment</Button>
             </CardContent>
           </Card>

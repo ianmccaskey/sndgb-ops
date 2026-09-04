@@ -148,19 +148,19 @@ export function ReceivingPage() {
   return (
     <div className="p-4 sm:p-6 space-y-5">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <PackageOpen className="h-6 w-6 text-violet-600" /> Receiving
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+          <PackageOpen className="h-6 w-6 text-cyan-300" /> Receiving
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
           What's coming, where it is, and whether it was transferred — tracked via Shippo, outside the money books.
         </p>
         {testMode && (
-          <p className="text-xs rounded border border-amber-300 bg-amber-50 text-amber-900 p-2 mt-2">
+          <p className="text-xs rounded border border-amber-400/40 bg-amber-400/5 text-amber-200 p-2 mt-2">
             Shippo TEST MODE — tracking data is simulated. Labels purchased are test labels.
           </p>
         )}
         {!shippoKey && (
-          <p className="text-xs rounded border border-amber-300 bg-amber-50 text-amber-900 p-2 mt-2">
+          <p className="text-xs rounded border border-amber-400/40 bg-amber-400/5 text-amber-200 p-2 mt-2">
             No Shippo API token yet — packages can be logged, but tracking and transfer labels need the token (Settings).
           </p>
         )}

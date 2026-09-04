@@ -217,8 +217,8 @@ export function ImportPage() {
   return (
     <div className="p-4 sm:p-6 space-y-4 max-w-5xl">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <ClipboardPaste className="h-6 w-6 text-violet-600" /> Import Orders
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+          <ClipboardPaste className="h-6 w-6 text-cyan-300" /> Import Orders
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
           Orders for <span className="font-medium">{groupBuy?.name}</span> pull straight from the ordering app;
@@ -251,7 +251,7 @@ export function ImportPage() {
               </p>
             )}
           </div>
-          {pullError && <p className="text-sm text-red-600">{pullError}</p>}
+          {pullError && <p className="text-sm text-rose-400">{pullError}</p>}
         </CardContent>
       </Card>
 
@@ -268,33 +268,33 @@ export function ImportPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base">
               Preview — {parsed.orders.length} orders parsed
-              {parsed.errors.length > 0 && <span className="text-red-600">, {parsed.errors.length} rows rejected</span>}
+              {parsed.errors.length > 0 && <span className="text-rose-400">, {parsed.errors.length} rows rejected</span>}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {parsed.errors.length > 0 && (
-              <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-800 space-y-1">
+              <div className="rounded border border-rose-400/40 bg-rose-400/10 p-2 text-sm text-rose-300 space-y-1">
                 {parsed.errors.map((e, i) => (
                   <div key={i}><span className="font-mono">line {e.line}</span>: {e.reason} — <span className="font-mono text-xs">{e.text}</span></div>
                 ))}
               </div>
             )}
             {cancellations.length > 0 && (
-              <div className="rounded border border-orange-300 bg-orange-50 p-2 text-sm text-orange-900 space-y-1">
+              <div className="rounded border border-orange-400/40 bg-orange-400/10 p-2 text-sm text-orange-300 space-y-1">
                 <p className="font-semibold">Cancelled/refunded upstream — importing will update their local status (views already exclude them from demand and revenue):</p>
                 {cancellations.map(c => {
                   const res = results.find(r => r.orderNumber === c.orderNumber);
                   return (
                     <div key={c.orderNumber}>
                       <span className="font-mono">{c.orderNumber}</span> → {c.status} <span className="text-xs">({c.sourceStatus})</span>
-                      {res && <span className={`text-xs ml-2 ${res.ok ? 'text-green-700' : 'text-red-600'}`}>{res.message}</span>}
+                      {res && <span className={`text-xs ml-2 ${res.ok ? 'text-emerald-300' : 'text-rose-400'}`}>{res.message}</span>}
                     </div>
                   );
                 })}
               </div>
             )}
             {missingUpstream.length > 0 && (
-              <div className="rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-900 space-y-1">
+              <div className="rounded border border-rose-400/40 bg-rose-400/10 p-2 text-sm text-rose-300 space-y-1">
                 <p className="font-semibold">
                   Deleted upstream? — {missingUpstream.length} active local order(s) no longer exist in the ordering app.
                   Review each and mark cancelled if the deletion was intentional (drops it from demand, reconciliation, and P&L):
@@ -309,14 +309,14 @@ export function ImportPage() {
                       <Button size="sm" variant="outline" className="h-6 px-2 text-xs" disabled={r?.busy || r?.ok} onClick={() => markDeletedUpstream(m)}>
                         {r?.busy ? 'Cancelling…' : 'Mark cancelled'}
                       </Button>
-                      {r?.message && <span className={`text-xs ${r.ok ? 'text-green-700' : 'text-red-600'}`}>{r.message}</span>}
+                      {r?.message && <span className={`text-xs ${r.ok ? 'text-emerald-300' : 'text-rose-400'}`}>{r.message}</span>}
                     </div>
                   );
                 })}
               </div>
             )}
             {skuProblems.size > 0 && (
-              <div className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+              <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-sm text-amber-200">
                 <p className="font-semibold">Unknown SKUs — add these as campaign products first (Products page):</p>
                 {[...skuProblems.entries()].map(([sku, ords]) => (
                   <div key={sku}><span className="font-mono">{sku}</span> — in {ords.length} order(s): {ords.slice(0, 5).join(', ')}{ords.length > 5 ? '…' : ''}</div>
@@ -351,8 +351,8 @@ export function ImportPage() {
                         <TableCell className="text-center">{o.payments.length}</TableCell>
                         <TableCell>
                           {res && (res.ok
-                            ? <span className="text-green-700 text-xs flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" />{res.message}</span>
-                            : <span className="text-red-600 text-xs flex items-center gap-1"><XCircle className="w-3.5 h-3.5" />{res.message}</span>)}
+                            ? <span className="text-emerald-300 text-xs flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" />{res.message}</span>
+                            : <span className="text-rose-400 text-xs flex items-center gap-1"><XCircle className="w-3.5 h-3.5" />{res.message}</span>)}
                         </TableCell>
                       </TableRow>
                     );

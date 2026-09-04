@@ -308,10 +308,10 @@ export function ImportProgressWidget() {
     <div className="fixed bottom-4 right-4 z-50 w-72 rounded-lg border bg-background shadow-lg p-3 text-sm">
       <div className="flex items-center gap-2">
         {job.running
-          ? <Loader2 className="w-4 h-4 animate-spin text-violet-600 shrink-0" />
+          ? <Loader2 className="w-4 h-4 animate-spin text-cyan-300 shrink-0" />
           : failed > 0
-            ? <XCircle className="w-4 h-4 text-red-600 shrink-0" />
-            : <CheckCircle2 className="w-4 h-4 text-green-700 shrink-0" />}
+            ? <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            : <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />}
         <span className="font-medium flex-1">
           {job.running ? `Importing orders… ${done}/${job.total}` : `Import finished — ${done - failed} ok${failed > 0 ? `, ${failed} failed` : ''}`}
         </span>
@@ -322,11 +322,11 @@ export function ImportProgressWidget() {
         )}
       </div>
       <div className="mt-2 h-1.5 rounded bg-muted overflow-hidden">
-        <div className="h-full bg-violet-600 transition-all" style={{ width: `${pct}%` }} />
+        <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
       </div>
       <div className="mt-1.5 flex items-center justify-between text-xs text-muted-foreground">
         <span>{failed > 0 ? `${failed} failed so far` : 'no failures'}</span>
-        <Link to="/import" className="text-violet-600 hover:underline">details →</Link>
+        <Link to="/import" className="text-cyan-300 hover:underline">details →</Link>
       </div>
     </div>
   );

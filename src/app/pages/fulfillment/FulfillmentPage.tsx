@@ -27,6 +27,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { fmtNum } from '@/lib/fmt';
 import { StatusPill } from '@/components/StatusPill';
+import { Led } from '@/components/Led';
 import { productChipClass } from '@/app/pages/receiving/shared';
 import type { RxAddress } from '@/app/pages/receiving/shared';
 import { ShippingModal } from './ShippingModal';
@@ -643,23 +644,23 @@ export function FulfillmentPage() {
 
   const rowBadges = (r: QueueRow) => (
     <span className="inline-flex flex-wrap gap-1 align-middle">
-      {r.shipment_state === 'partial' && <span className="rounded bg-blue-100 text-blue-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase">partial</span>}
-      {r.has_draft && !r.draft_needs_recovery && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="An unfinished shipment draft exists — open Ship to continue or delete it">draft</span>}
-      {r.draft_needs_recovery && <span className="rounded bg-red-100 text-red-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A draft's Shippo purchase was dispatched but never saved — it may hold a PAID label. Open Ship to recover.">needs recovery</span>}
-      {r.push_outstanding && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A shipped box has not been pushed to the ordering app — open Ship and use Push upstream">not pushed</span>}
-      {upstreamMismatch(r) && <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={mismatchTitle(r)}>shipped upstream</span>}
-      {partialMismatch(r) && <span className="rounded bg-orange-100 text-orange-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={partialTitle(r)}>partial upstream</span>}
-      {sessionActive && stage === 'ready' && packability(r) === 'full' && <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase">packable</span>}
-      {sessionActive && stage === 'ready' && packability(r) === 'partial' && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">part-packable</span>}
+      {r.shipment_state === 'partial' && <span className="rounded bg-blue-400/10 text-blue-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">partial</span>}
+      {r.has_draft && !r.draft_needs_recovery && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="An unfinished shipment draft exists — open Ship to continue or delete it">draft</span>}
+      {r.draft_needs_recovery && <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A draft's Shippo purchase was dispatched but never saved — it may hold a PAID label. Open Ship to recover.">needs recovery</span>}
+      {r.push_outstanding && <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A shipped box has not been pushed to the ordering app — open Ship and use Push upstream"><Led className="w-1.5 h-1.5" />not pushed</span>}
+      {upstreamMismatch(r) && <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={mismatchTitle(r)}>shipped upstream</span>}
+      {partialMismatch(r) && <span className="rounded bg-orange-400/10 text-orange-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={partialTitle(r)}>partial upstream</span>}
+      {sessionActive && stage === 'ready' && packability(r) === 'full' && <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">packable</span>}
+      {sessionActive && stage === 'ready' && packability(r) === 'partial' && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">part-packable</span>}
     </span>
   );
 
   return (
     <div className="p-4 sm:p-6 space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Truck className="h-6 w-6 text-violet-600" /> Fulfillment
-          {testMode && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">Shippo test mode</span>}
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+          <Truck className="h-6 w-6 text-cyan-300" /> Fulfillment
+          {testMode && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">Shippo test mode</span>}
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
           "Ready" = payment matched, not held, and something REMAINS to pack — partially shipped orders stay here until their last box.
@@ -713,13 +714,18 @@ export function FulfillmentPage() {
         </Popover>
         {filterIds.size > 0 && (
           <>
-            <span className="inline-flex rounded-md border overflow-hidden text-xs h-8">
-              <button className={`px-2.5 ${filterMode === 'contains' ? 'bg-violet-600 text-white' : 'bg-background text-muted-foreground'}`}
-                title="Orders with remaining work on ANY selected product (other items allowed)"
-                onClick={() => setFilterMode('contains')}>contains</button>
-              <button className={`px-2.5 border-l ${filterMode === 'only' ? 'bg-violet-600 text-white' : 'bg-background text-muted-foreground'}`}
-                title="Orders whose ENTIRE remaining work is within the selected products (vendor-direct lines ignored)"
-                onClick={() => setFilterMode('only')}>only</button>
+            <span className="inline-flex flex-col gap-0.5">
+              <span className="inline-flex rounded-md border overflow-hidden text-xs h-8">
+                <button className={`px-2.5 ${filterMode === 'contains' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
+                  onClick={() => setFilterMode('contains')}>contains</button>
+                <button className={`px-2.5 border-l ${filterMode === 'only' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
+                  onClick={() => setFilterMode('only')}>only</button>
+              </span>
+              {/* the mode semantics were hover-only (title=) — invisible on
+                  touch (mobile audit #5); a visible one-liner replaces them */}
+              <span className="text-[10px] text-muted-foreground">
+                {filterMode === 'contains' ? 'any selected product remains' : 'ONLY selected products remain'}
+              </span>
             </span>
             {products.filter(p => filterIds.has(p.id)).map(p => (
               <button key={p.id}
@@ -751,7 +757,7 @@ export function FulfillmentPage() {
           Shipment session{poolEntries.length > 0 ? ` · ${poolEntries.length} product${poolEntries.length > 1 ? 's' : ''}` : ''}
         </Button>
       </div>
-      {pushAllMsg && stage === 'shipped' && <p className="text-xs text-amber-800">{pushAllMsg}</p>}
+      {pushAllMsg && stage === 'shipped' && <p className="text-xs text-amber-200">{pushAllMsg}</p>}
 
       {/* shipment session: only the products you SAY you have, as a tidy list */}
       {sessionOpen && (
@@ -796,7 +802,7 @@ export function FulfillmentPage() {
                       <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
                         left:
                         <Input value={qty} onChange={e => setPool(m => ({ ...m, [Number(pid)]: e.target.value }))} className="h-7 w-20 text-xs text-right" />
-                        <button className="p-0.5 opacity-60 hover:opacity-100" title="Remove from pool"
+                        <button className="p-2 -m-1 opacity-60 hover:opacity-100" title="Remove from pool"
                           onClick={() => setPool(m => { const n = { ...m }; delete n[Number(pid)]; return n; })}>
                           <X className="w-3.5 h-3.5" />
                         </button>
@@ -821,38 +827,38 @@ export function FulfillmentPage() {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              "Ready" lists a PACKING PLAN: orders are fitted {sessionSort === 'largest' ? 'largest-first' : 'oldest-first'}, each listed order's full need is reserved from the pool, and an order shows only if it still fits after the ones above it — so everything listed can be packed <span className="font-medium">together</span>, until the stock runs out. <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1 py-0.5 uppercase">packable</span> = fits this plan{showPartials && <>; <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5 uppercase">part-packable</span> = the leftover stock could start a partial box</>}.
+              "Ready" lists a PACKING PLAN: orders are fitted {sessionSort === 'largest' ? 'largest-first' : 'oldest-first'}, each listed order's full need is reserved from the pool, and an order shows only if it still fits after the ones above it — so everything listed can be packed <span className="font-medium">together</span>, until the stock runs out. <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1 py-0.5 uppercase">packable</span> = fits this plan{showPartials && <>; <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1 py-0.5 uppercase">part-packable</span> = the leftover stock could start a partial box</>}.
             </p>
           </CardContent>
         </Card>
       )}
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {checkError && <p className="text-sm text-red-600">{checkError}</p>}
+      {error && <p className="text-sm text-rose-400">{error}</p>}
+      {checkError && <p className="text-sm text-rose-400">{checkError}</p>}
 
       {/* upstream check result — persists until cleared or re-pulled so the
           rose "shipped upstream" badges have a visible legend */}
       {upstreamLive && (
-        <div className={`rounded-lg border px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1 ${mismatchCount > 0 ? 'border-rose-300 bg-rose-50' : (partialMismatchCount > 0 || queueTruncated) ? 'border-amber-300 bg-amber-50' : 'border-green-300 bg-green-50'}`}>
-          <span className={`font-medium ${mismatchCount > 0 ? 'text-rose-900' : (partialMismatchCount > 0 || queueTruncated) ? 'text-amber-900' : 'text-green-900'}`}>
+        <div className={`rounded-lg border px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1 ${mismatchCount > 0 ? 'border-rose-400/40 bg-rose-400/10' : (partialMismatchCount > 0 || queueTruncated) ? 'border-amber-400/40 bg-amber-400/5' : 'border-emerald-400/30 bg-emerald-400/10'}`}>
+          <span className={`font-medium ${mismatchCount > 0 ? 'text-rose-300' : (partialMismatchCount > 0 || queueTruncated) ? 'text-amber-200' : 'text-emerald-300'}`}>
             Ordering app checked at {upstreamLive.at} ({fmtNum(upstreamLive.total)} orders) — {mismatchCount === 0
               ? `no order in this ${filterIds.size > 0 ? 'filtered view' : 'stage'} is marked shipped there without being recorded here.`
               : `${mismatchCount} order${mismatchCount > 1 ? 's' : ''} in this ${filterIds.size > 0 ? 'filtered view' : 'stage'} marked shipped there without being recorded here.`}
           </span>
           {partialMismatchCount > 0 && (
-            <span className="text-orange-800">{partialMismatchCount} order{partialMismatchCount > 1 ? 's' : ''} partially shipped there with nothing recorded here — see the <span className="rounded bg-orange-100 text-orange-800 text-[10px] font-semibold px-1 py-0.5 uppercase">partial upstream</span> badge.</span>
+            <span className="text-orange-300">{partialMismatchCount} order{partialMismatchCount > 1 ? 's' : ''} partially shipped there with nothing recorded here — see the <span className="rounded bg-orange-400/10 text-orange-300 text-[10px] font-semibold px-1 py-0.5 uppercase">partial upstream</span> badge.</span>
           )}
           {queueTruncated && (
-            <span className="text-amber-800">Only the first 1000 loaded orders were checked — this stage may hold more; narrow by stage or product filter to cover the rest.</span>
+            <span className="text-amber-200">Only the first 1000 loaded orders were checked — this stage may hold more; narrow by stage or product filter to cover the rest.</span>
           )}
           {shipAdjacentStatuses.length > 0 && (
-            <span className="text-amber-800">Unrecognized shipping-related upstream status{shipAdjacentStatuses.length > 1 ? 'es' : ''} not flagged: {shipAdjacentStatuses.map(s => `"${s}"`).join(', ')} — only "shipped"/"delivered" are recognized; review these by eye.</span>
+            <span className="text-amber-200">Unrecognized shipping-related upstream status{shipAdjacentStatuses.length > 1 ? 'es' : ''} not flagged: {shipAdjacentStatuses.map(s => `"${s}"`).join(', ')} — only "shipped"/"delivered" are recognized; review these by eye.</span>
           )}
           {mismatchCount > 0 && (
-            <span className="text-rose-900">Look for the <span className="rounded bg-rose-100 text-rose-800 text-[10px] font-semibold px-1 py-0.5 uppercase">shipped upstream</span> badge — its tooltip names the recording flow (Ship, or Vendor shipped for direct orders).</span>
+            <span className="text-rose-300">Look for the <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1 py-0.5 uppercase">shipped upstream</span> badge — its tooltip names the recording flow (Ship, or Vendor shipped for direct orders).</span>
           )}
           {filterIds.size > 0 && (
-            <span className="text-amber-800">The product filter is narrowing this check — orders outside it are not counted. <button className="underline" onClick={() => setFilterIds(new Set())}>Clear filter</button> for full-stage coverage.</span>
+            <span className="text-amber-200">The product filter is narrowing this check — orders outside it are not counted. <button className="underline" onClick={() => setFilterIds(new Set())}>Clear filter</button> for full-stage coverage.</span>
           )}
           <span className="text-muted-foreground">Switch to the All tab for coverage across every stage.</span>
           <span className="ml-auto flex gap-1">
@@ -872,11 +878,11 @@ export function FulfillmentPage() {
           collapsible card is not the only place this is visible, so a
           hidden card can never silently shrink the Ready queue */}
       {sessionActive && stage === 'ready' && sessionHiddenCount > 0 && (
-        <div className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="font-medium text-violet-900">
+        <div className="rounded-lg border border-violet-400/40 bg-cyan-400/10 px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="font-medium text-violet-300">
             Shipment session is filtering "Ready" — {sessionHiddenCount} order{sessionHiddenCount > 1 ? 's' : ''} hidden.
           </span>
-          <label className="flex items-center gap-1.5 cursor-pointer text-violet-900">
+          <label className="flex items-center gap-1.5 cursor-pointer text-violet-300">
             <input type="checkbox" checked={showPartials} onChange={e => setShowPartials(e.target.checked)} />
             Show partially packable
           </label>
@@ -893,7 +899,7 @@ export function FulfillmentPage() {
           <div key={r.id} className="rounded-lg border p-3 space-y-1.5">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="font-medium">{r.order_number} {r.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 text-amber-600" />}</p>
+                <p className="font-medium">{r.order_number} {r.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 text-amber-300" />}</p>
                 <p className="text-sm truncate">{r.customer_name}</p>
               </div>
               <span className="flex gap-1 shrink-0">
@@ -903,7 +909,7 @@ export function FulfillmentPage() {
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShipping(r)}>Ship</Button>
                 )}
                 {(upstreamMismatch(r) || partialMismatch(r)) && !r.all_direct && (
-                  <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-700" title="Record the ordering app's shipped items as a local shipment"
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-300" title="Record the ordering app's shipped items as a local shipment"
                     onClick={() => { setAdoptMsg(''); setAdopting(r); }}>Record here</Button>
                 )}
                 {stage !== 'direct' && r.direct_items_summary && !r.direct_outstanding && (
@@ -951,12 +957,12 @@ export function FulfillmentPage() {
               <TableRow key={r.id}>
                 <TableCell className="font-medium whitespace-nowrap">
                   {r.order_number}
-                  {r.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 ml-1 text-amber-600" />}
+                  {r.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 ml-1 text-amber-300" />}
                   <div>{rowBadges(r)}</div>
                 </TableCell>
                 <TableCell>
                   {r.customer_name}
-                  {r.customer_note && <div className="text-xs text-amber-700 max-w-[200px] truncate" title={r.customer_note}>“{r.customer_note}”</div>}
+                  {r.customer_note && <div className="text-xs text-amber-300 max-w-[200px] truncate" title={r.customer_note}>“{r.customer_note}”</div>}
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground max-w-[200px]">
                   {r.address_line1}{r.address_line2 ? `, ${r.address_line2}` : ''}<br />
@@ -969,7 +975,7 @@ export function FulfillmentPage() {
                     </span>
                     {stage !== 'direct' && !r.all_direct && r.direct_items_summary && (
                       <span
-                        className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${r.direct_outstanding ? 'bg-violet-100 text-violet-900' : 'bg-green-100 text-green-900'}`}
+                        className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${r.direct_outstanding ? 'bg-violet-400/10 text-violet-300' : 'bg-emerald-400/10 text-emerald-300'}`}
                         title={`${r.direct_outstanding ? 'Vendor still owes' : 'Vendor shipped'}: ${r.direct_items_summary}`}
                       >
                         {r.direct_outstanding ? '+ direct' : 'direct ✓'}
@@ -995,7 +1001,7 @@ export function FulfillmentPage() {
                       </Button>
                     )}
                     {(upstreamMismatch(r) || partialMismatch(r)) && !r.all_direct && (
-                      <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-700" title="Record the ordering app's shipped items as a local shipment"
+                      <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-300" title="Record the ordering app's shipped items as a local shipment"
                         onClick={() => { setAdoptMsg(''); setAdopting(r); }}>Record here</Button>
                     )}
                     {stage !== 'direct' && r.direct_items_summary && !r.direct_outstanding && (
@@ -1030,7 +1036,7 @@ export function FulfillmentPage() {
             </p>
             {directLinesLoading && <p className="text-xs text-muted-foreground">Loading lines…</p>}
             {!directLinesLoading && directLines.length === 0 && (
-              <p className="text-xs text-amber-700">No outstanding direct lines — they may have been marked in another session.</p>
+              <p className="text-xs text-amber-300">No outstanding direct lines — they may have been marked in another session.</p>
             )}
             {directLines.length > 0 && (
               <div className="border rounded-lg divide-y">
@@ -1061,7 +1067,7 @@ export function FulfillmentPage() {
                 })}
               </div>
             )}
-            {directMsg && <p className="text-xs text-red-600">{directMsg}</p>}
+            {directMsg && <p className="text-xs text-rose-400">{directMsg}</p>}
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={() => setDirecting(null)}>Cancel</Button>
               <Button size="sm" disabled={directBusy || directLinesLoading || directChecked.size === 0} onClick={runVendorShipped}>
@@ -1088,7 +1094,7 @@ export function FulfillmentPage() {
             </p>
             {adoptLinesLoading && <p className="text-xs text-muted-foreground">Loading items…</p>}
             {!adoptLinesLoading && adoptLines.length === 0 && (
-              <p className="text-xs text-amber-700">Nothing to record — every matching item is already covered by a local shipment or draft.</p>
+              <p className="text-xs text-amber-300">Nothing to record — every matching item is already covered by a local shipment or draft.</p>
             )}
             {adoptLines.length > 0 && (
               <div className="border rounded-lg divide-y">
@@ -1096,24 +1102,24 @@ export function FulfillmentPage() {
                   <div key={l.order_item_id} className="flex items-center gap-2 px-2 py-1.5 text-xs">
                     <span className="font-medium">{l.sku_code}</span>
                     <span className="text-muted-foreground">× {fmtNum(Number(l.adopt_qty))}</span>
-                    {l.clamped && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5" title={`Upstream shipped less than the local remaining ${fmtNum(Number(l.remaining_qty))} — only the upstream-shipped quantity is recorded`}>of {fmtNum(Number(l.remaining_qty))}</span>}
+                    {l.clamped && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1 py-0.5" title={`Upstream shipped less than the local remaining ${fmtNum(Number(l.remaining_qty))} — only the upstream-shipped quantity is recorded`}>of {fmtNum(Number(l.remaining_qty))}</span>}
                     <span className="ml-auto text-muted-foreground">{l.date ? `shipped upstream ${l.date}` : `order marked ${adoptInfo?.status}`}</span>
                   </div>
                 ))}
               </div>
             )}
             {adoptComputed.ambiguous.length > 0 && (
-              <p className="text-xs text-amber-700">
+              <p className="text-xs text-amber-300">
                 Not recordable automatically (conflicting upstream dates or unusable quantities): {adoptComputed.ambiguous.join(', ')} — record {adoptComputed.ambiguous.length > 1 ? 'these' : 'it'} via Ship &gt; manual entry.
               </p>
             )}
             {undatedCount > 0 && (
-              <label className="flex items-start gap-1.5 text-xs text-amber-800 cursor-pointer">
+              <label className="flex items-start gap-1.5 text-xs text-amber-200 cursor-pointer">
                 <input type="checkbox" className="mt-0.5" checked={adoptConfirmed} onChange={e => setAdoptConfirmed(e.target.checked)} />
                 <span>{undatedCount} item{undatedCount > 1 ? 's have' : ' has'} no per-item shipped date — only the order-level "{adoptInfo?.status}" status covers {undatedCount > 1 ? 'them' : 'it'}. I confirm these items really shipped.</span>
               </label>
             )}
-            {adoptMsg && <p className="text-xs text-red-600">{adoptMsg}</p>}
+            {adoptMsg && <p className="text-xs text-rose-400">{adoptMsg}</p>}
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={() => setAdopting(null)}>Cancel</Button>
               <Button size="sm" disabled={adoptBusy || adoptLinesLoading || adoptLines.length === 0 || (undatedCount > 0 && !adoptConfirmed)} onClick={runAdopt}>

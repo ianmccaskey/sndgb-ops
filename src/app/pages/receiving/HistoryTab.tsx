@@ -36,12 +36,12 @@ export function HistoryTab({ packages, transfers, addresses }: {
     .sort((a, b) => String(b.received_at).localeCompare(String(a.received_at)));
 
   const statusOf = (p: Pkg) => {
-    if (consumedIds.has(Number(p.id))) return { label: 'emptied', cls: 'bg-zinc-200 text-zinc-700', title: 'Everything in this box has left through finalized transfers (part-outs / direct ships)' };
+    if (consumedIds.has(Number(p.id))) return { label: 'emptied', cls: 'bg-slate-400/10 text-slate-300', title: 'Everything in this box has left through finalized transfers (part-outs / direct ships)' };
     const rem = remainingByPkg.get(Number(p.id));
     const parted = (p.items || []).some(i =>
       (rem?.get(Number(i.product_id)) ?? Math.round(Number(i.qty) * 100)) < Math.round(Number(i.qty) * 100));
-    if (parted) return { label: 'parted', cls: 'bg-violet-100 text-violet-800', title: 'Part of this box has left through finalized transfers — the rest is still on hand' };
-    return { label: 'on hand', cls: 'bg-green-100 text-green-800', title: 'Nothing recorded as leaving this box' };
+    if (parted) return { label: 'parted', cls: 'bg-violet-400/10 text-violet-300', title: 'Part of this box has left through finalized transfers — the rest is still on hand' };
+    return { label: 'on hand', cls: 'bg-emerald-400/10 text-emerald-300', title: 'Nothing recorded as leaving this box' };
   };
 
   return (
@@ -88,7 +88,7 @@ export function HistoryTab({ packages, transfers, addresses }: {
                     <TableCell className="text-xs whitespace-nowrap">{p.address_label}</TableCell>
                     <TableCell className="text-xs">{p.vendor_code || '—'}</TableCell>
                     <TableCell className="text-xs font-mono break-all max-w-[220px]">
-                      {p.carrier.toUpperCase()} · {p.tracking_mangled ? <span className="text-amber-700">(unreadable here)</span> : p.tracking_number}
+                      {p.carrier.toUpperCase()} · {p.tracking_mangled ? <span className="text-amber-300">(unreadable here)</span> : p.tracking_number}
                     </TableCell>
                     <TableCell>
                       <span className="inline-flex flex-wrap gap-1">

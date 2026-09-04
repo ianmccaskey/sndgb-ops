@@ -12,6 +12,7 @@ import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtNum } from '@/lib/fmt';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertTriangle } from 'lucide-react';
+import { Led } from '@/components/Led';
 import {
   MomentumChart, ReconDonut, RailBars, PnlBlock, ProductBars,
   DailyPoint, RailRow, PnlData, ProductPerfRow,
@@ -31,12 +32,14 @@ type MoqRow = {
 };
 
 function StatTile({ label, value, tone, sub }: { label: string; value: string; tone?: 'bad' | 'warn' | 'good'; sub?: string }) {
-  const color = tone === 'bad' ? 'text-red-600' : tone === 'warn' ? 'text-amber-600' : tone === 'good' ? 'text-green-700' : 'text-foreground';
+  const color = tone === 'bad' ? 'text-rose-400' : tone === 'warn' ? 'text-amber-300' : tone === 'good' ? 'text-emerald-300' : 'text-foreground';
   return (
     <div className="flex flex-col px-4 py-3 bg-background">
       <span className="text-xs text-muted-foreground truncate">{label}</span>
-      <span className={`text-lg font-semibold mt-0.5 ${color}`}>{value}</span>
-      {sub && <span className="text-[10px] text-muted-foreground truncate" title={sub}>{sub}</span>}
+      <span className={`text-lg font-semibold font-mono mt-0.5 ${color}`}>{value}</span>
+      {/* wraps instead of truncating: the full text was hover-only (title=),
+          unreachable on touch, and 173px phone columns truncate every time */}
+      {sub && <span className="text-[10px] leading-tight text-muted-foreground">{sub}</span>}
     </div>
   );
 }
@@ -78,7 +81,7 @@ export function HomePage() {
   return (
     <div className="p-4 sm:p-6 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">{groupBuy?.name || 'Dashboard'}</h1>
+        <h1 className="text-2xl font-bold text-gradient w-fit">{groupBuy?.name || 'Dashboard'}</h1>
         <p className="text-sm text-muted-foreground mt-1">Campaign health at a glance</p>
       </div>
 
@@ -98,15 +101,15 @@ export function HomePage() {
       </div>
 
       {attention.length > 0 && (
-        <Card className="border-amber-300 bg-amber-50/50">
+        <Card className="border-amber-400/40 bg-amber-400/5">
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600" /> Needs attention
+              <Led /><AlertTriangle className="w-4 h-4 text-amber-300" /> Needs attention
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1">
             {attention.map(a => (
-              <Link key={a.label} to={a.href} className="block text-sm text-amber-900 hover:underline">
+              <Link key={a.label} to={a.href} className="block text-sm text-amber-200 hover:underline">
                 <span className="font-semibold">{a.count}</span> {a.label} →
               </Link>
             ))}
@@ -156,7 +159,7 @@ export function HomePage() {
                     {m.sku_code}
                     <span className="text-muted-foreground font-normal"> · {m.vendor_code} · {fmtUSD(m.gb_price_usd)}</span>
                   </span>
-                  <span className={m.moq_met ? 'text-green-700' : 'text-muted-foreground'}>
+                  <span className={m.moq_met ? 'text-emerald-300' : 'text-muted-foreground'}>
                     {fmtNum(demand)} / {fmtNum(target)}
                     {Number(m.adjustment_qty) !== 0 && (
                       <span className="text-muted-foreground"> (+{fmtNum(m.adjustment_qty)} admin → {fmtNum(m.final_count)})</span>
@@ -165,7 +168,7 @@ export function HomePage() {
                 </div>
                 <div className="h-2 mt-1 rounded bg-muted overflow-hidden">
                   <div
-                    className={`h-full ${m.moq_met ? 'bg-green-500' : 'bg-violet-500'}`}
+                    className={`h-full ${m.moq_met ? 'bg-emerald-400/100' : 'bg-cyan-400/100'}`}
                     style={{ width: `${pct}%` }}
                   />
                 </div>

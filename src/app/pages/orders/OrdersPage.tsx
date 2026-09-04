@@ -42,8 +42,8 @@ export function OrdersPage() {
     <div className="p-4 sm:p-6 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <ShoppingCart className="h-6 w-6 text-violet-600" /> Orders
+          <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+            <ShoppingCart className="h-6 w-6 text-cyan-300" /> Orders
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             {orders.length} orders · imported from the ordering app, reconciled here
@@ -109,7 +109,7 @@ export function OrdersPage() {
             <div className="flex items-center justify-between gap-2">
               <span className="font-medium whitespace-nowrap">
                 {o.order_number}
-                {o.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 ml-1 text-amber-600" />}
+                {o.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 ml-1 text-amber-300" />}
               </span>
               <span className="font-medium whitespace-nowrap">{fmtUSD(o.total_usd)}</span>
             </div>
@@ -153,7 +153,7 @@ export function OrdersPage() {
                 <TableRow key={o.id} className="cursor-pointer" onClick={() => setOpenOrderId(o.id)}>
                   <TableCell className="font-medium whitespace-nowrap">
                     {o.order_number}
-                    {o.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 ml-1 text-amber-600" />}
+                    {o.hold_shipping && <PauseCircle className="inline w-3.5 h-3.5 ml-1 text-amber-300" />}
                   </TableCell>
                   <TableCell>
                     <div className="font-medium">{o.customer_name}</div>
@@ -163,7 +163,7 @@ export function OrdersPage() {
                   <TableCell className="text-right font-medium">{fmtUSD(o.total_usd)}</TableCell>
                   <TableCell>{o.payment_rail || '—'}</TableCell>
                   <TableCell><StatusPill value={o.recon_status || 'awaiting'} /></TableCell>
-                  <TableCell className={`text-right ${Math.abs(diff) > 1 ? (diff > 0 ? 'text-red-600' : 'text-blue-600') : 'text-muted-foreground'}`}>
+                  <TableCell className={`text-right ${Math.abs(diff) > 1 ? (diff > 0 ? 'text-rose-400' : 'text-blue-300') : 'text-muted-foreground'}`}>
                     {Math.abs(diff) > 0.005 ? fmtUSD(diff) : '—'}
                   </TableCell>
                   <TableCell><StatusPill value={o.shipment_status} /></TableCell>

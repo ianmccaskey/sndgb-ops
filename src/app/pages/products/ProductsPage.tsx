@@ -27,7 +27,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Package, CheckCircle2 } from 'lucide-react';
+import { Package, CheckCircle2, Pencil } from 'lucide-react';
 
 type Product = { id: number; external_id: string | null; sku_code: string; name: string; mass_label: string | null; unit_weight_oz: string | null; digital: boolean; active: boolean };
 type Vendor = { id: number; code: string; active: boolean };
@@ -388,8 +388,8 @@ export function ProductsPage() {
   return (
     <div className="p-4 sm:p-6 space-y-5">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Package className="h-6 w-6 text-violet-600" /> Products & Campaign Setup
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+          <Package className="h-6 w-6 text-cyan-300" /> Products & Campaign Setup
         </h1>
         <p className="text-sm text-muted-foreground mt-1">One quantity basis everywhere: demand + adjustments = final count.</p>
       </div>
@@ -404,7 +404,7 @@ export function ProductsPage() {
 
         <TabsContent value="campaign" className="mt-4 space-y-4">
           <div className="border rounded-lg overflow-x-auto">
-            <Table>
+            <Table className="min-w-[1100px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>SKU</TableHead>
@@ -435,7 +435,7 @@ export function ProductsPage() {
                     <TableCell className="text-right">{c.cost_tier_price != null ? <span className="text-muted-foreground">—</span> : fmtUSD(c.margin_usd)}</TableCell>
                     <TableCell className="text-right font-medium">{fmtUSD(c.gb_price_usd)}</TableCell>
                     <TableCell className="text-right">{fmtNum(c.target_moq)}</TableCell>
-                    <TableCell className={`text-right ${c.moq_met ? 'text-green-700 font-medium' : ''}`}>{fmtNum(c.demand_qty)}</TableCell>
+                    <TableCell className={`text-right ${c.moq_met ? 'text-emerald-300 font-medium' : ''}`}>{fmtNum(c.demand_qty)}</TableCell>
                     <TableCell className="text-right font-medium">
                       {fmtNum(c.final_count)}
                       {Number(c.adjustment_qty) !== 0 && (
@@ -445,18 +445,18 @@ export function ProductsPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-right">{fmtUSD(c.owed_to_vendor_usd, { cents: false })}</TableCell>
-                    <TableCell className="text-right text-green-700">{fmtUSD(c.total_product_profit_usd, { cents: false })}</TableCell>
+                    <TableCell className="text-right text-emerald-300">{fmtUSD(c.total_product_profit_usd, { cents: false })}</TableCell>
                     <TableCell className="text-right text-xs">
                       {c.qty_cap == null
                         ? <span className="text-muted-foreground">—</span>
                         : Number(c.demand_qty) >= Number(c.qty_cap)
-                          ? <span className="text-red-600 font-medium">SOLD OUT ({fmtNum(c.demand_qty)}/{fmtNum(c.qty_cap)})</span>
+                          ? <span className="text-rose-400 font-medium">SOLD OUT ({fmtNum(c.demand_qty)}/{fmtNum(c.qty_cap)})</span>
                           : <span>{fmtNum(c.demand_qty)}/{fmtNum(c.qty_cap)}</span>}
                     </TableCell>
                     <TableCell>
                       {c.ordered_from_vendor_at ? (
                         <button
-                          className="text-xs text-green-700 flex items-center gap-1"
+                          className="text-xs text-emerald-300 flex items-center gap-1"
                           title={fmtDateTime(c.ordered_from_vendor_at)}
                           onClick={() => doMarkOrdered({ group_buy_product_id: c.group_buy_product_id, ordered: false }).then(reloadCampaign)}
                         >
@@ -521,7 +521,7 @@ export function ProductsPage() {
                     <p className="text-xs text-muted-foreground">Margin per unit: ${(Number(cPrice) - Number(cCost)).toFixed(2)}</p>
                   ))}
               <p className="text-xs text-muted-foreground">Max available caps a limited item (e.g. a COA product at 25) — the Available column flags SOLD OUT at that demand. Cost tier is for stepped vendor pricing (e.g. $50 per 4 units); fill both tier fields to use it and unit cost is ignored.</p>
-              {cError && <p className="text-sm text-red-600">{cError}</p>}
+              {cError && <p className="text-sm text-rose-400">{cError}</p>}
               <div className="flex gap-2">
                 <Button size="sm" onClick={saveCampaignProduct}>{cEditing ? 'Save changes' : 'Save'}</Button>
                 {cEditing && <Button size="sm" variant="ghost" onClick={resetCampaignForm}>Cancel</Button>}
@@ -566,7 +566,7 @@ export function ProductsPage() {
                 <Input placeholder={aIsCost ? 'Reason / customer (audited)' : "Reason (e.g. 'P&P personal x100')"} value={aReason} onChange={e => setAReason(e.target.value)} className="h-9 flex-1 min-w-48" />
                 <Button size="sm" onClick={addAdj}>Add</Button>
               </div>
-              {aError && <p className="text-sm text-red-600">{aError}</p>}
+              {aError && <p className="text-sm text-rose-400">{aError}</p>}
               {aPricing === 'gb' ? (
                 <p className="text-xs text-muted-foreground">
                   "For" decides whose profit pays for these units at GB price: a person's adjustments come out of their split payout; "Both" comes out of total profit before the split.
@@ -619,13 +619,13 @@ export function ProductsPage() {
                     <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
                     <TableCell>
                       {a.pricing === 'cost' && a.stock ? (
-                        <span className="rounded bg-emerald-100 text-emerald-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                        <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                           title={`${a.stock_plan_item_id != null ? 'Committed from the Stock Planner' : 'Group stock adjustment'} at vendor cost + freight — kits join the vendor order; the value comes out of net profit before the split. No receivable.`}>
                           {a.stock_plan_item_id != null ? 'stock plan' : 'group stock'}
                         </span>
                       ) : a.pricing === 'cost' ? (
                         <span className="whitespace-nowrap">
-                          <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase"
+                          <span className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase"
                             title={a.beneficiary !== 'both'
                               ? `Personal stock at vendor cost + freight — deducted from ${a.beneficiary}'s profit payout`
                               : a.preordered
@@ -650,9 +650,9 @@ export function ProductsPage() {
                             <span className="block text-[10px] font-normal text-muted-foreground">from {a.beneficiary}'s profit</span>
                           </span>
                         ) : a.received_at ? (
-                          <span className="text-green-700">{fmtUSD(a.expected_usd)}<span className="block text-[10px] font-normal">received {fmtDate(a.received_at)}</span></span>
+                          <span className="text-emerald-300">{fmtUSD(a.expected_usd)}<span className="block text-[10px] font-normal">received {fmtDate(a.received_at)}</span></span>
                         ) : (
-                          <span className="text-amber-700">
+                          <span className="text-amber-300">
                             awaiting {fmtUSD(a.expected_usd)}
                             <Button size="sm" variant="outline" className="block h-6 px-1.5 mt-0.5 ml-auto text-[11px]"
                               onClick={() => doMarkReceived({ adjustment_id: a.id, group_buy_id: groupBuyId, actor: userName }).then(() => reloadAdj())}>
@@ -669,7 +669,7 @@ export function ProductsPage() {
                       {/* a RECEIVED at-cost row is a paid sale — the server
                           refuses its deletion, so don't offer the button */}
                       {!(a.pricing === 'cost' && a.received_at) && (
-                        <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600"
+                        <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400"
                           onClick={() => {
                             // pre-ordered kits for an OUTSIDE customer are
                             // already bought: removing the sale is a CHOICE —
@@ -728,12 +728,14 @@ export function ProductsPage() {
                           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setWEditing(null); setWMsg(''); }}>✕</Button>
                         </span>
                       ) : (
-                        <button className="text-left hover:underline"
-                          title="Per-unit shipping weight — feeds the shipping modal's box-weight prefill. Click to edit."
+                        <button className="text-left hover:underline inline-flex items-center gap-1"
+                          title="Per-unit shipping weight — feeds the shipping modal's box-weight prefill."
                           onClick={() => { setWEditing(p.id); const cur = p.unit_weight_oz == null ? '' : String(Number(p.unit_weight_oz)); setWValue(cur); setWExpected(cur); setWMsg(''); }}>
                           {p.unit_weight_oz == null
-                            ? <span className="text-amber-700">— none</span>
+                            ? <span className="text-amber-300">— none</span>
                             : fmtNum(p.unit_weight_oz)}
+                          {/* visible edit affordance — "click to edit" was hover-only (mobile audit #5) */}
+                          <Pencil className="w-3 h-3 opacity-50" />
                         </button>
                       )}
                     </TableCell>
@@ -742,7 +744,7 @@ export function ProductsPage() {
                         title="Digital products (COA certificates) are billed but never packed — excluded from all fulfillment math. Click to flip."
                         onClick={() => toggleDigital(p)}>
                         {p.digital
-                          ? <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">digital</span>
+                          ? <span className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">digital</span>
                           : <span className="text-muted-foreground text-xs">physical</span>}
                       </button>
                     </TableCell>
@@ -753,7 +755,7 @@ export function ProductsPage() {
               </TableBody>
             </Table>
           </div>
-          {wMsg && <p className="text-sm text-red-600">{wMsg}</p>}
+          {wMsg && <p className="text-sm text-rose-400">{wMsg}</p>}
           <Card className="max-w-2xl">
             <CardHeader className="pb-2"><CardTitle className="text-base">Add product</CardTitle></CardHeader>
             <CardContent className="space-y-2">
@@ -764,7 +766,7 @@ export function ProductsPage() {
                 <Input placeholder="Weight oz" value={npWeight} onChange={e => setNpWeight(e.target.value)} className="h-9 w-24" title="Per-unit shipping weight in ounces — feeds the shipping modal's box-weight prefill" />
                 <Button size="sm" onClick={addProduct}>Add</Button>
               </div>
-              {npError && <p className="text-sm text-red-600">{npError}</p>}
+              {npError && <p className="text-sm text-rose-400">{npError}</p>}
               <p className="text-xs text-muted-foreground">The SKU must match exactly how the ordering app writes it in the Items column. A missing weight (amber "— none" in the table) counts as 0 in shipping-weight prefills.</p>
             </CardContent>
           </Card>
@@ -810,12 +812,12 @@ export function ProductsPage() {
                 <p className="text-xs text-muted-foreground">
                   Removes just the receivable record. The kits stay off the campaign's kit ledger — use this if they'll be resold outside the buy or handled separately.
                 </p>
-                <Button size="sm" variant="outline" className="text-red-600" disabled={rSaving}
+                <Button size="sm" variant="outline" className="text-rose-400" disabled={rSaving}
                   onClick={async () => { const ok = await deleteAdjOnly(removing); if (ok) setRemoving(null); }}>
                   Delete only
                 </Button>
               </div>
-              {rMsg && <p className="text-xs text-red-600">{rMsg}</p>}
+              {rMsg && <p className="text-xs text-rose-400">{rMsg}</p>}
             </div>
           )}
         </DialogContent>

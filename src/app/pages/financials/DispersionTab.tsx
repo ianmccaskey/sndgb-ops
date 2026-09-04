@@ -72,7 +72,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
   const itemizedNote = adjustmentsState === 'error'
     ? 'Failed to load the itemized adjustments — the totals above are unaffected. Switch tabs and back to retry.'
     : 'Loading itemized adjustments…';
-  const itemizedNoteClass = adjustmentsState === 'error' ? 'text-xs text-red-600' : 'text-xs text-muted-foreground';
+  const itemizedNoteClass = adjustmentsState === 'error' ? 'text-xs text-rose-400' : 'text-xs text-muted-foreground';
   const splits = pnl?.splits || [];
   const viewNet = num(pnl?.net_profit_usd);
 
@@ -186,7 +186,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
   return (
     <div className="space-y-5">
       {drift && (
-        <div className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+        <div className="rounded border border-rose-400/40 bg-rose-400/10 p-3 text-sm text-rose-300">
           Composition drift: these lines sum to {fmtUSD(composedNet)} but the P&L view says {fmtUSD(viewNet)}.
           A new P&L component exists that this tab does not know about — trust the Overview number and report this.
         </div>
@@ -197,7 +197,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
         <Card>
           <CardHeader className="pb-1"><CardTitle className="text-sm font-bold uppercase tracking-wide underline underline-offset-4">Gross profit</CardTitle></CardHeader>
           <CardContent className="space-y-1">
-            <div className="text-3xl font-bold text-blue-600">{fmtUSD(gross)}</div>
+            <div className="text-3xl font-bold text-blue-300">{fmtUSD(gross)}</div>
             <div className="text-xs text-muted-foreground space-y-0.5 pt-1">
               <div className="flex justify-between"><span>Product margin (earned)</span><span>{fmtUSD(earnedMargin)}</span></div>
               <div className="flex justify-between"><span>Admin fees ({num(pnl?.order_count)} orders)</span><span>{fmtUSD(pnl?.admin_fee_revenue_usd)}</span></div>
@@ -209,12 +209,12 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
         <Card>
           <CardHeader className="pb-1"><CardTitle className="text-sm font-bold uppercase tracking-wide">Net profit</CardTitle></CardHeader>
           <CardContent className="space-y-1">
-            <div className="text-3xl font-bold text-blue-600">{fmtUSD(viewNet)}</div>
+            <div className="text-3xl font-bold text-blue-300">{fmtUSD(viewNet)}</div>
             <div className="text-xs text-muted-foreground space-y-0.5 pt-1">
               {bridge.filter(b => b.amount !== 0).slice(0, 4).map(b => (
                 <div key={b.label} className="flex justify-between">
                   <span className="truncate pr-2">{b.label}</span>
-                  <span className={b.amount < 0 ? 'text-red-600' : 'text-green-700'}>{b.amount < 0 ? '−' : '+'}{fmtUSD(Math.abs(b.amount))}</span>
+                  <span className={b.amount < 0 ? 'text-rose-400' : 'text-emerald-300'}>{b.amount < 0 ? '−' : '+'}{fmtUSD(Math.abs(b.amount))}</span>
                 </div>
               ))}
               <div className="text-[10px]">full bridge below</div>
@@ -228,7 +228,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
               <CardContent className="py-3 space-y-0.5">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-xl font-bold">{s.party}</span>
-                  <span className="text-2xl font-bold text-green-600 whitespace-nowrap">{fmtUSD(viewNet * Number(s.pct) / 100)}</span>
+                  <span className="text-2xl font-bold text-emerald-300 whitespace-nowrap">{fmtUSD(viewNet * Number(s.pct) / 100)}</span>
                 </div>
                 <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
                   title="Informational only: gross + shipping (net) − comps − credits − write-offs − GB-price giveaways, × split share. Stock (group and personal), at-cost waivers, direct freight, and non-shipping expenses are deliberately excluded — this is not a payout figure.">
@@ -268,7 +268,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                   <React.Fragment key={b.label}>
                     <TableRow>
                       <TableCell title={b.hint}>{b.label}</TableCell>
-                      <TableCell className={`text-right ${b.amount < 0 ? 'text-red-600' : 'text-green-700'}`}>
+                      <TableCell className={`text-right ${b.amount < 0 ? 'text-rose-400' : 'text-emerald-300'}`}>
                         {b.amount < 0 ? '−' : '+'}{fmtUSD(Math.abs(b.amount))}
                       </TableCell>
                       <TableCell className="text-right">{fmtUSD(rowRunning)}</TableCell>
@@ -276,7 +276,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                     {(b.subs || []).filter(s => s.amount !== 0).map(sub => (
                       <TableRow key={`${b.label}:${sub.label}`} className="bg-muted/30 hover:bg-muted/40">
                         <TableCell className="pl-8 text-xs text-muted-foreground">↳ {sub.label}</TableCell>
-                        <TableCell className={`text-right text-xs ${sub.amount < 0 ? 'text-red-600' : 'text-green-700'}`}>
+                        <TableCell className={`text-right text-xs ${sub.amount < 0 ? 'text-rose-400' : 'text-emerald-300'}`}>
                           {sub.amount < 0 ? '−' : '+'}{fmtUSD(Math.abs(sub.amount))}
                         </TableCell>
                         <TableCell />
@@ -288,7 +288,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
               <TableRow className="font-semibold border-t-2">
                 <TableCell>Net profit</TableCell>
                 <TableCell />
-                <TableCell className={`text-right ${viewNet >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtUSD(viewNet)}</TableCell>
+                <TableCell className={`text-right ${viewNet >= 0 ? 'text-emerald-300' : 'text-rose-400'}`}>{fmtUSD(viewNet)}</TableCell>
               </TableRow>
             </TableBody>
           </Table>
@@ -296,7 +296,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
       </Card>
 
       {unattributed.length > 0 && (
-        <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+        <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs text-amber-200">
           <span className="font-semibold">Unattributed adjustments:</span>{' '}
           {unattributed.map(a => `${a.beneficiary} (${fmtUSD(a.value_usd)})`).join(', ')}
           {' '}— no current split party matches, so this value is deducted from NO ONE's payout. Reassign on the Products page.
@@ -328,7 +328,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                 </div>
                 {!adjustmentsReady && <p className={itemizedNoteClass}>{itemizedNote}</p>}
                 {desync && (
-                  <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                  <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs text-amber-200">
                     Itemized rows sum to {fmtUSD(itemsSum)} but the P&L aggregation says {fmtUSD(personal)} — the two
                     loads are out of sync (something changed between them). The final payout below uses the P&L figure; reload the page to re-sync the detail.
                   </div>
@@ -340,13 +340,13 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                       <span className="text-muted-foreground min-w-0 truncate pr-2">
                         {a.sku_code} × {fmtNum(a.qty)} {a.pricing === 'cost' ? '(personal stock, at cost + freight)' : '(at GB price)'}
                       </span>
-                      <span className={v > 0 ? 'text-red-600' : 'text-green-700'}>{v > 0 ? '−' : '+'}{fmtUSD(Math.abs(v))}</span>
+                      <span className={v > 0 ? 'text-rose-400' : 'text-emerald-300'}>{v > 0 ? '−' : '+'}{fmtUSD(Math.abs(v))}</span>
                     </div>
                   );
                 })}
                 <div className="flex justify-between font-semibold border-t pt-1">
                   <span>Final payout</span>
-                  <span className={base - personal >= 0 ? 'text-green-700' : 'text-red-600'}>{fmtUSD(base - personal)}</span>
+                  <span className={base - personal >= 0 ? 'text-emerald-300' : 'text-rose-400'}>{fmtUSD(base - personal)}</span>
                 </div>
               </CardContent>
             </Card>
@@ -390,7 +390,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                 <TableHead>Kind</TableHead>
                 <TableHead className="text-right">Value</TableHead>
                 {splits.map(s => <TableHead key={s.party} className="text-right">{s.party}</TableHead>)}
-                {hasOrphans && <TableHead className="text-right text-amber-700">Orphaned</TableHead>}
+                {hasOrphans && <TableHead className="text-right text-amber-300">Orphaned</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -403,7 +403,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                     <TableCell className="min-w-0 max-w-48 truncate" title={a.reason}>{a.sku_code}</TableCell>
                     <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
                     <TableCell>
-                      <span className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${a.stock ? 'bg-emerald-100 text-emerald-900' : 'bg-indigo-100 text-indigo-900'}`}>
+                      <span className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${a.stock ? 'bg-emerald-400/10 text-emerald-300' : 'bg-indigo-400/10 text-indigo-300'}`}>
                         {kind}
                       </span>
                     </TableCell>
@@ -412,7 +412,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                       <TableCell key={s.party} className="text-right">{(shares[s.party] || 0) !== 0 ? fmtUSD(shares[s.party]) : '—'}</TableCell>
                     ))}
                     {hasOrphans && (
-                      <TableCell className="text-right text-amber-700">{isOrphaned(a) ? fmtUSD(rowValue(a)) : '—'}</TableCell>
+                      <TableCell className="text-right text-amber-300">{isOrphaned(a) ? fmtUSD(rowValue(a)) : '—'}</TableCell>
                     )}
                   </TableRow>
                 );
@@ -426,7 +426,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                       {fmtUSD((contribTotals[s.party]?.group || 0) + (contribTotals[s.party]?.personal || 0))}
                     </TableCell>
                   ))}
-                  {hasOrphans && <TableCell className="text-right text-amber-700">{fmtUSD(orphanedTotal)}</TableCell>}
+                  {hasOrphans && <TableCell className="text-right text-amber-300">{fmtUSD(orphanedTotal)}</TableCell>}
                 </TableRow>
               )}
               {stockRows.length === 0 && (
@@ -437,7 +437,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
             </TableBody>
           </Table>
           {hasOrphans && (
-            <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 mt-2">
+            <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs text-amber-200 mt-2">
               <span className="font-semibold">{fmtUSD(orphanedTotal)} of personal stock is ORPHANED</span> — its beneficiary no longer
               matches a split party, so it is deducted from no one's payout and counts toward no one's contribution. Reassign it on the Products page.
             </div>

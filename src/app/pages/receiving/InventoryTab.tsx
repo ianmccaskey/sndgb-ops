@@ -44,7 +44,7 @@ export function InventoryTab({ inventory, addresses }: { inventory: InvRow[]; ad
                         </TableCell>
                         <TableCell className="text-right">{fmtNum(r.received_qty)}</TableCell>
                         <TableCell className="text-right">{fmtNum(r.transferred_qty)}</TableCell>
-                        <TableCell className={`text-right font-semibold ${onHand < 0 ? 'text-amber-700' : ''}`}>
+                        <TableCell className={`text-right font-semibold ${onHand < 0 ? 'text-amber-300' : ''}`}>
                           {fmtNum(r.on_hand_qty)}
                           {onHand < 0 && <span className="block text-[10px] font-normal">negative — a package was un-received after a transfer</span>}
                         </TableCell>

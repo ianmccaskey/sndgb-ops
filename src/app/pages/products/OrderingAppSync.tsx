@@ -185,7 +185,7 @@ export function OrderingAppSync({ products, onImported }: {
               <Button size="sm" variant="ghost" onClick={() => setB44Buys(null)}>Cancel</Button>
             </div>
           )}
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-rose-400">{error}</p>}
         </CardContent>
       </Card>
 
@@ -201,7 +201,7 @@ export function OrderingAppSync({ products, onImported }: {
             {preview && (
               <>
                 {unscoped && (
-                  <p className="text-sm text-amber-600">
+                  <p className="text-sm text-amber-300">
                     The Product records have no group-buy field, so this is the <em>full</em> catalog —
                     untick anything that isn't part of {groupBuy?.name}.
                     (Fields seen: {Object.keys(preview[0]?.b44 || {}).join(', ')})
@@ -263,8 +263,8 @@ export function OrderingAppSync({ products, onImported }: {
                 </p>
               </>
             )}
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            {doneMsg && <p className="text-sm text-green-700">{doneMsg}</p>}
+            {error && <p className="text-sm text-rose-400">{error}</p>}
+            {doneMsg && <p className="text-sm text-emerald-300">{doneMsg}</p>}
           </CardContent>
         </Card>
       )}

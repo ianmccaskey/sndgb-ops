@@ -44,14 +44,14 @@ type ProductProgress = {
 // that their kits are INSIDE the purchase numbers (color never the only
 // signal — every chip carries its kind label and signed kit count)
 const ADJ_CHIP_STYLES: [RegExp, string][] = [
-  [/^stock plan$/, 'bg-emerald-100 text-emerald-900'],
-  [/^group stock$/, 'bg-emerald-100 text-emerald-900'],
-  [/^outside sale$/, 'bg-sky-100 text-sky-900'],
-  [/^personal/, 'bg-indigo-100 text-indigo-900'],
-  [/^admin$/, 'bg-zinc-200 text-zinc-800'],
+  [/^stock plan$/, 'bg-emerald-400/10 text-emerald-300'],
+  [/^group stock$/, 'bg-emerald-400/10 text-emerald-300'],
+  [/^outside sale$/, 'bg-sky-400/10 text-sky-300'],
+  [/^personal/, 'bg-indigo-400/10 text-indigo-300'],
+  [/^admin$/, 'bg-slate-400/10 text-slate-300'],
 ];
 const adjChipClass = (kind: string) =>
-  (ADJ_CHIP_STYLES.find(([re]) => re.test(kind)) || [null, 'bg-zinc-200 text-zinc-800'])[1];
+  (ADJ_CHIP_STYLES.find(([re]) => re.test(kind)) || [null, 'bg-slate-400/10 text-slate-300'])[1];
 
 export function VendorsPage() {
   const { groupBuyId, userName } = useApp();
@@ -258,14 +258,14 @@ export function VendorsPage() {
   return (
     <div className="p-4 sm:p-6 space-y-5">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Store className="h-6 w-6 text-violet-600" /> Vendors
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+          <Store className="h-6 w-6 text-cyan-300" /> Vendors
         </h1>
         <p className="text-sm text-muted-foreground mt-1">Balances are computed from final counts × unit cost; payments are logged, never typed over.</p>
       </div>
 
       {overpaid.length > 0 && (
-        <div className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800 flex items-center gap-2">
+        <div className="rounded border border-rose-400/40 bg-rose-400/10 p-3 text-sm text-rose-300 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           <span><span className="font-semibold">{overpaid.map(o => o.vendor_code).join(', ')}</span> {overpaid.length === 1 ? 'is' : 'are'} OVERPAID — money went out beyond what's owed.</span>
         </div>
@@ -292,7 +292,7 @@ export function VendorsPage() {
                   <TableCell className="font-medium">{b.vendor_code}</TableCell>
                   <TableCell className="text-right">{fmtUSD(b.owed_usd)}</TableCell>
                   <TableCell className="text-right">{fmtUSD(b.paid_usd)}</TableCell>
-                  <TableCell className={`text-right font-medium ${parseFloat(b.balance_usd) < 0 ? 'text-red-600' : ''}`}>
+                  <TableCell className={`text-right font-medium ${parseFloat(b.balance_usd) < 0 ? 'text-rose-400' : ''}`}>
                     {fmtUSD(b.balance_usd)}
                     {(() => {
                       const rem = remainingProductUsd(b.vendor_code);
@@ -301,7 +301,7 @@ export function VendorsPage() {
                       // inside the aggregate (plus freight, tracked in its
                       // own column)
                       return rem > 0 ? (
-                        <span className="block text-[10px] text-violet-700 font-normal whitespace-nowrap"
+                        <span className="block text-[10px] text-violet-300 font-normal whitespace-nowrap"
                           title="Sum over products of remaining kits × per-kit cost, clamped at zero per product — what buying the rest actually costs. Over-payments on one product do not offset other products here; freight is tracked separately in Freight left.">
                           product left to buy {fmtUSD(rem)}
                         </span>
@@ -315,7 +315,7 @@ export function VendorsPage() {
                         .filter(pp => pp.vendor_code === b.vendor_code)
                         .reduce((s, pp) => s + Number(pp.adj_kits), 0);
                       return (
-                        <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
+                        <span className={left === 0 ? 'text-emerald-300' : left < 0 ? 'text-amber-300 font-medium' : ''}>
                           {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
                           <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(b.kits_paid)}/{fmtNum(b.kits_demand)} paid</span>
                           {vendorAdj !== 0 && (
@@ -332,7 +332,7 @@ export function VendorsPage() {
                     {(() => {
                       const left = Number(b.freight_demand_usd) - Number(b.freight_paid_usd);
                       return (
-                        <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
+                        <span className={left === 0 ? 'text-emerald-300' : left < 0 ? 'text-amber-300 font-medium' : ''}>
                           {left < 0 ? `over by ${fmtUSD(-left)}` : fmtUSD(left)}
                           <span className="block text-[10px] text-muted-foreground font-normal">{fmtUSD(b.freight_paid_usd)}/{fmtUSD(b.freight_demand_usd)} paid</span>
                         </span>
@@ -366,7 +366,7 @@ export function VendorsPage() {
                           const remKits = Math.max(Number(pp.kits_demand) - Number(pp.kits_paid), 0);
                           const remUsd = Math.round(remKits * Number(pp.per_kit_cost_usd) * 100) / 100;
                           return remUsd > 0 ? (
-                            <span className="block text-[10px] text-violet-700 whitespace-nowrap"
+                            <span className="block text-[10px] text-violet-300 whitespace-nowrap"
                               title={`${fmtNum(remKits)} kits still to buy × ${fmtUSD(pp.per_kit_cost_usd)}/kit`}>
                               left to buy {fmtUSD(remUsd)}
                             </span>
@@ -376,7 +376,7 @@ export function VendorsPage() {
                       <TableCell />
                       <TableCell />
                       <TableCell className="text-right text-sm">
-                        <span className={left === 0 ? 'text-green-700' : left < 0 ? 'text-amber-600 font-medium' : ''}>
+                        <span className={left === 0 ? 'text-emerald-300' : left < 0 ? 'text-amber-300 font-medium' : ''}>
                           {left < 0 ? `over by ${fmtNum(-left)}` : fmtNum(left)}
                           <span className="block text-[10px] text-muted-foreground font-normal">{fmtNum(pp.kits_paid)}/{fmtNum(pp.kits_demand)} paid</span>
                           {adj !== 0 && (
@@ -449,7 +449,7 @@ export function VendorsPage() {
                 <Input placeholder="Kits" value={l.kits} disabled={pSaving} onChange={e => setLine(i, { kits: e.target.value })} className="h-9 w-20" />
                 <Input placeholder="Value $" value={l.value} disabled={pSaving} onChange={e => setLine(i, { value: e.target.value, valueDirty: e.target.value.trim() !== '' })} className="h-9 w-28" />
                 {pLines.length > 1 && (
-                  <Button size="sm" variant="ghost" className="h-9 px-2 text-red-600" disabled={pSaving} onClick={() => setPLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
+                  <Button size="sm" variant="ghost" className="h-9 px-2 text-rose-400" disabled={pSaving} onClick={() => setPLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
                 )}
               </div>
             ))}
@@ -473,7 +473,7 @@ export function VendorsPage() {
               <Input placeholder="Receipt / tx ref (optional)" value={pRef} disabled={pSaving} onChange={e => setPRef(e.target.value)} className="h-9 flex-1" />
               <Input placeholder="Note" value={pNote} disabled={pSaving} onChange={e => setPNote(e.target.value)} className="h-9 flex-1" />
             </div>
-            {pError && <p className="text-sm text-red-600">{pError}</p>}
+            {pError && <p className="text-sm text-rose-400">{pError}</p>}
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold">Total: {fmtUSD(paymentTotal)}</span>
               <Button size="sm" onClick={recordPayment} disabled={pSaving || paymentTotal <= 0}>Record payment</Button>
@@ -488,7 +488,7 @@ export function VendorsPage() {
               <Input placeholder="Vendor code (e.g. MEDUSA)" value={nvCode} onChange={e => setNvCode(e.target.value)} className="h-9 flex-1" />
               <Button size="sm" onClick={addNewVendor}>Add</Button>
             </div>
-            {nvError && <p className="text-sm text-red-600">{nvError}</p>}
+            {nvError && <p className="text-sm text-rose-400">{nvError}</p>}
             <p className="text-xs text-muted-foreground">Existing: {vendors.map(v => v.code).join(', ')}</p>
           </CardContent>
         </Card>
@@ -497,7 +497,7 @@ export function VendorsPage() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Payment log</CardTitle></CardHeader>
         <CardContent className="overflow-x-auto">
-          <Table>
+          <Table className="min-w-[900px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Date</TableHead>
@@ -525,7 +525,7 @@ export function VendorsPage() {
                   <TableCell>{p.method || '—'}</TableCell>
                   <TableCell className="text-muted-foreground">{p.note || ''}</TableCell>
                   <TableCell>
-                    <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600"
+                    <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400"
                       onClick={async () => {
                         // Deleting a payment moves real balances — make the
                         // operator confirm exactly which one they're removing.

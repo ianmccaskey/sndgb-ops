@@ -20,6 +20,7 @@ import { decodeCarrierLabel, trackingCandidates, matchTracking, candidateCarrier
 import { openPrinterPage, niimbotSupported } from '@/lib/niimbotPrint';
 import type { PackageLabelData } from '@/lib/niimbotPrint';
 import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday, boxConsumption } from './shared';
+import { Led } from '@/components/Led';
 import type { RxAddress, Pkg, CatalogProduct, VendorRow, TransferRow } from './shared';
 
 const CARRIERS = [
@@ -629,14 +630,14 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
     <div className="space-y-4">
       {/* heads-up: out for delivery TODAY, grouped by address */}
       {ofdToday.length > 0 && (
-        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 space-y-1">
+        <div className="rounded border border-amber-400/40 bg-amber-400/5 p-3 text-sm text-amber-200 space-y-1 animate-breathe">
           <div className="flex items-center gap-2 font-semibold">
-            <Truck className="w-4 h-4 shrink-0" /> Out for delivery today
+            <Led /><Truck className="w-4 h-4 shrink-0" /> Out for delivery today
             <span className="text-[11px] font-normal">as of {fmtDateTime(lastChecked)}</span>
           </div>
           <div className="flex flex-wrap gap-2">
             {[...ofdByAddress.entries()].map(([label, n]) => (
-              <span key={label} className="rounded bg-amber-100 px-2 py-0.5 font-medium">{label}: {n} package{n === 1 ? '' : 's'}</span>
+              <span key={label} className="rounded bg-amber-400/10 px-2 py-0.5 font-medium">{label}: {n} package{n === 1 ? '' : 's'}</span>
             ))}
           </div>
         </div>
@@ -683,7 +684,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
               </Select>
               <Input placeholder="Count" value={l.qty} onChange={e => setFLines(ls => ls.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} className="h-9 w-24" />
               {fLines.length > 1 && (
-                <Button size="sm" variant="ghost" className="h-9 px-2 text-red-600" onClick={() => setFLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
+                <Button size="sm" variant="ghost" className="h-9 px-2 text-rose-400" onClick={() => setFLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
               )}
             </div>
           ))}
@@ -692,7 +693,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
             <Input placeholder="Note (optional)" value={fNote} onChange={e => setFNote(e.target.value)} className="h-8 flex-1 min-w-40" />
             <Button size="sm" className="h-8" disabled={fSaving} onClick={createPackage}>{fSaving ? 'Saving…' : 'Create draft'}</Button>
           </div>
-          {fMsg && <p className="text-xs text-red-600">{fMsg}</p>}
+          {fMsg && <p className="text-xs text-rose-400">{fMsg}</p>}
           <p className="text-[11px] text-muted-foreground">Drafts are editable; Commit on the card starts tracking. Contents count into the address inventory when the package is received.</p>
         </CardContent>
       </Card>
@@ -745,17 +746,17 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
           )}
           {refreshAllProgress && <span className="text-xs text-muted-foreground">{refreshAllProgress}</span>}
         </div>
-        {scanMsg && <p className={`text-xs ${scanMsg.startsWith('Received ') || scanMsg.startsWith('Logged and received') ? 'text-green-700' : 'text-amber-700'}`}>{scanMsg}</p>}
+        {scanMsg && <p className={`text-xs ${scanMsg.startsWith('Received ') || scanMsg.startsWith('Logged and received') ? 'text-emerald-300' : 'text-amber-300'}`}>{scanMsg}</p>}
         {printJob && (
-          <div className="rounded-lg border border-green-300 bg-green-50 px-3 py-1.5 text-xs flex flex-wrap items-center gap-2">
-            <span className="text-green-900 font-medium">Received — print the package label ({printJob.tracking}).</span>
+          <div className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-xs flex flex-wrap items-center gap-2">
+            <span className="text-emerald-300 font-medium">Received — print the package label ({printJob.tracking}).</span>
             <Button size="sm" className="h-7 text-xs" onClick={runPrintJob}>
               <Printer className="w-3.5 h-3.5 mr-1" /> Print label
             </Button>
             <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPrintJob(null)}>Dismiss</Button>
           </div>
         )}
-        {printMsg && <p className={`text-xs ${printMsg.startsWith('Printed ') ? 'text-green-700' : 'text-amber-700'}`}>{printMsg}</p>}
+        {printMsg && <p className={`text-xs ${printMsg.startsWith('Printed ') ? 'text-emerald-300' : 'text-amber-300'}`}>{printMsg}</p>}
 
         {/* scan triage modal */}
         <Dialog open={!!scanModal} onOpenChange={o => { if (!o) setScanModal(null); }}>
@@ -780,7 +781,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
                   <p className="font-mono">Scanned: {scanModal.scanned}</p>
                   <p className="font-mono">Logged:&nbsp; {String(scanModal.pkg.tracking_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '')}</p>
                 </div>
-                {smMsg && <p className="text-xs text-red-600">{smMsg}</p>}
+                {smMsg && <p className="text-xs text-rose-400">{smMsg}</p>}
                 <div className="flex flex-wrap justify-end gap-2">
                   <Button size="sm" variant="ghost" onClick={() => setScanModal(null)}>Cancel</Button>
                   <Button size="sm" variant="outline" onClick={() => { seedCreateForm(scanModal.scanned); setScanStep('create'); setSmMsg(''); }}>
@@ -801,7 +802,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
                     <div key={i.id} className="flex items-center gap-2 px-2 py-1.5 text-xs">
                       <span className="font-medium">{i.sku_code}</span>
                       {String(Number(i.qty)) !== (scanQty[i.id] ?? '').trim() && (
-                        <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1 py-0.5" title="Changed from the logged count">was {fmtNum(i.qty)}</span>
+                        <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1 py-0.5" title="Changed from the logged count">was {fmtNum(i.qty)}</span>
                       )}
                       <span className="ml-auto flex items-center gap-1.5">
                         count:
@@ -822,7 +823,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
                   </Select>
                   <Input placeholder="Qty" value={scanAddLine.qty} onChange={e => setScanAddLine(l => ({ ...l, qty: e.target.value }))} className="h-8 w-16 text-xs" inputMode="decimal" />
                 </div>
-                {smMsg && <p className="text-xs text-red-600">{smMsg}</p>}
+                {smMsg && <p className="text-xs text-rose-400">{smMsg}</p>}
                 <div className="flex justify-end gap-2">
                   <Button size="sm" variant="ghost" onClick={() => setScanModal(null)}>Cancel</Button>
                   <Button size="sm" disabled={smBusy} onClick={confirmContentsAndReceive}>
@@ -874,13 +875,13 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
                       <Input placeholder="Qty" value={l.qty} onChange={e => setSmLines(ls => ls.map((x, i2) => i2 === idx ? { ...x, qty: e.target.value } : x))}
                         className="h-8 w-16 text-xs" inputMode="decimal" />
                       {smLines.length > 1 && (
-                        <button className="p-0.5 opacity-60 hover:opacity-100" onClick={() => setSmLines(ls => ls.filter((_, i2) => i2 !== idx))}>✕</button>
+                        <button className="p-2 -m-1 opacity-60 hover:opacity-100" onClick={() => setSmLines(ls => ls.filter((_, i2) => i2 !== idx))}>✕</button>
                       )}
                     </div>
                   ))}
                   <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSmLines(ls => [...ls, { product: '', qty: '' }])}>+ line</Button>
                 </div>
-                {smMsg && <p className="text-xs text-red-600">{smMsg}</p>}
+                {smMsg && <p className="text-xs text-rose-400">{smMsg}</p>}
                 <div className="flex justify-end gap-2">
                   <Button size="sm" variant="ghost" onClick={() => setScanModal(null)}>Cancel</Button>
                   <Button size="sm" disabled={smBusy} onClick={logAndReceive}>
@@ -896,7 +897,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
             const on = productFilter.has(pr.id);
             return (
               <button key={pr.id}
-                className={`rounded text-[11px] font-semibold px-2 py-0.5 ${productChipClass(pr.id)} ${on ? 'ring-2 ring-violet-500' : 'opacity-70'}`}
+                className={`rounded text-[11px] font-semibold px-2 py-0.5 ${productChipClass(pr.id)} ${on ? 'ring-2 ring-primary' : 'opacity-70'}`}
                 onClick={() => setProductFilter(s => { const n = new Set(s); if (n.has(pr.id)) n.delete(pr.id); else n.add(pr.id); return n; })}
                 title={on ? 'Filtering by this product — click to clear' : 'Scope the dashboard to addresses expecting this product'}>
                 {pr.sku_code}
@@ -930,26 +931,26 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
                         title={p.tracking_detail || undefined}>
                         {trackLabel(p)}
                       </span>
-                      {p.received_at && <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`Received ${fmtDateTime(p.received_at)} by ${p.received_by}`}>received</span>}
+                      {p.received_at && <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={`Received ${fmtDateTime(p.received_at)} by ${p.received_by}`}>received</span>}
                       {p.received_at && (p.items || []).some(i => (remainingByPkg.get(Number(p.id))?.get(Number(i.product_id)) ?? Math.round(Number(i.qty) * 100)) < Math.round(Number(i.qty) * 100)) && (
-                        <span className="rounded bg-violet-100 text-violet-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Part of this box left through finalized transfers — quantities below are what's still here">parted</span>
+                        <span className="rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Part of this box left through finalized transfers — quantities below are what's still here">parted</span>
                       )}
-                      {p.vendor_code && <span className="rounded bg-zinc-200 text-zinc-800 text-[10px] font-semibold px-1.5 py-0.5">{p.vendor_code}</span>}
+                      {p.vendor_code && <span className="rounded bg-slate-400/10 text-slate-300 text-[10px] font-semibold px-1.5 py-0.5">{p.vendor_code}</span>}
                       {p.eta && !p.received_at && <span className="text-[10px] text-muted-foreground">ETA {fmtDate(p.eta)}</span>}
                     </div>
                     <div className="text-xs font-mono break-all text-muted-foreground" title={p.note || undefined}>
                       {p.carrier.toUpperCase()} · {p.tracking_mangled
-                        ? <span className="text-amber-700">(tracking number unreadable here)</span>
+                        ? <span className="text-amber-300">(tracking number unreadable here)</span>
                         : p.tracking_number}
                     </div>
                     {p.tracking_mangled && (
-                      <p className="text-[11px] rounded border border-amber-300 bg-amber-50 text-amber-900 p-1.5">
+                      <p className="text-[11px] rounded border border-amber-400/40 bg-amber-400/5 text-amber-200 p-1.5">
                         The platform returned this tracking number rounded (too many digits), so this page can't show or track the real number. The database record is intact — delete this package and re-log it with the exact number from the label.
                       </p>
                     )}
-                    {p.tracking_error && <p className="text-[11px] text-red-600">{p.tracking_error}</p>}
+                    {p.tracking_error && <p className="text-[11px] text-rose-400">{p.tracking_error}</p>}
                     {p.received_at && p.tracking_status === 'RETURNED' && (
-                      <p className="text-[11px] rounded border border-amber-300 bg-amber-50 text-amber-900 p-1.5">Received but tracking now says RETURNED — un-receive if the box left.</p>
+                      <p className="text-[11px] rounded border border-amber-400/40 bg-amber-400/5 text-amber-200 p-1.5">Received but tracking now says RETURNED — un-receive if the box left.</p>
                     )}
                     {!p.received_at && p.auto_receive_suppressed && (
                       <p className="text-[11px] text-muted-foreground">Auto-receive is OFF for this package (it was un-received) — use Mark received when it's really here.</p>
@@ -966,7 +967,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
                             title={parted ? `Received ${fmtNum(i.qty)}; part-outs took the difference` : undefined}>
                             {i.sku_code} × {fmtNum(parted ? remC / 100 : i.qty)}{parted && <span className="opacity-70"> of {fmtNum(i.qty)}</span>}
                             {!p.received_at && (
-                              <button className="ml-1 opacity-60 hover:opacity-100" title="Remove line" onClick={() => removeItemFromCard(p, i.id)}>✕</button>
+                              <button className="ml-1 px-1.5 py-1 -my-1 opacity-60 hover:opacity-100" title="Remove line" onClick={() => removeItemFromCard(p, i.id)}>✕</button>
                             )}
                           </span>
                         );
@@ -1008,10 +1009,10 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
                           Part out
                         </Button>
                       )}
-                      {p.received_at && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-amber-700" onClick={() => unreceivePkg(p)}>Un-receive</Button>}
-                      {!p.received_at && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-red-600" onClick={() => deletePkg(p)}>Delete</Button>}
+                      {p.received_at && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-amber-300" onClick={() => unreceivePkg(p)}>Un-receive</Button>}
+                      {!p.received_at && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-rose-400" onClick={() => deletePkg(p)}>Delete</Button>}
                     </div>
-                    {rowMsg[p.id] && <p className="text-[11px] text-red-600">{rowMsg[p.id]}</p>}
+                    {rowMsg[p.id] && <p className="text-[11px] text-rose-400">{rowMsg[p.id]}</p>}
                   </div>
                 ))}
                 {pkgs.length === 0 && <p className="text-xs text-muted-foreground">No packages match the filters.</p>}
@@ -1029,7 +1030,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
           </Card>
         )}
       </div>
-      {testMode && <p className="text-[11px] text-amber-700">Test mode: statuses shown are simulated; auto-receive is off.</p>}
+      {testMode && <p className="text-[11px] text-amber-300">Test mode: statuses shown are simulated; auto-receive is off.</p>}
 
       <Dialog open={correcting != null} onOpenChange={o => { if (!o) setCorrecting(null); }}>
         <DialogContent className="max-w-md">
@@ -1038,7 +1039,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
             <p className="text-xs text-muted-foreground flex items-start gap-1"><AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> Saving clears the fetched tracking status (it belonged to the old number). Locked once received.</p>
             <Input placeholder="carrier token (usps, ups, fedex…)" value={cCarrier} onChange={e => setCCarrier(e.target.value)} className="h-9 font-mono text-xs" />
             <Input placeholder="Tracking number" value={cTracking} onChange={e => setCTracking(e.target.value)} className="h-9 font-mono text-xs" />
-            {cMsg && <p className="text-xs text-red-600">{cMsg}</p>}
+            {cMsg && <p className="text-xs text-rose-400">{cMsg}</p>}
             <div className="flex gap-2 justify-end">
               <Button size="sm" variant="ghost" onClick={() => setCorrecting(null)}>Cancel</Button>
               <Button size="sm" onClick={saveCorrection}>Save</Button>

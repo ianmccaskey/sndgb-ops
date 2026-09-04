@@ -30,14 +30,14 @@ export function TxHash({ method, hash }: { method: string | null | undefined; ha
   return (
     <span className="inline-flex items-center gap-1 font-mono text-xs">
       {url ? (
-        <a href={url} target="_blank" rel="noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5" title={h}>
+        <a href={url} target="_blank" rel="noreferrer" className="text-cyan-300 hover:underline inline-flex items-center gap-0.5" title={h}>
           {label}<ExternalLink className="w-3 h-3" />
         </a>
       ) : (
         <span title={h}>{label}</span>
       )}
       <button type="button" onClick={copy} title="Copy full hash" className="text-muted-foreground hover:text-foreground">
-        {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+        {copied ? <Check className="w-3 h-3 text-emerald-300" /> : <Copy className="w-3 h-3" />}
       </button>
     </span>
   );

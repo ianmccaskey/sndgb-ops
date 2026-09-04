@@ -148,27 +148,27 @@ export function boxConsumption(packages: Pkg[], transfers: TransferRow[]): BoxCo
 // its color everywhere. Chips always carry SKU text — color is never the
 // only signal.
 const PRODUCT_CHIP_CLASSES = [
-  'bg-emerald-100 text-emerald-900',
-  'bg-sky-100 text-sky-900',
-  'bg-violet-100 text-violet-900',
-  'bg-amber-100 text-amber-900',
-  'bg-rose-100 text-rose-900',
-  'bg-indigo-100 text-indigo-900',
-  'bg-teal-100 text-teal-900',
-  'bg-orange-100 text-orange-900',
-  'bg-fuchsia-100 text-fuchsia-900',
-  'bg-lime-100 text-lime-900',
+  'bg-emerald-400/10 text-emerald-300',
+  'bg-sky-400/10 text-sky-300',
+  'bg-violet-400/10 text-violet-300',
+  'bg-amber-400/10 text-amber-300',
+  'bg-rose-400/10 text-rose-300',
+  'bg-indigo-400/10 text-indigo-300',
+  'bg-teal-400/10 text-teal-300',
+  'bg-orange-400/10 text-orange-300',
+  'bg-fuchsia-400/10 text-fuchsia-300',
+  'bg-lime-400/10 text-lime-300',
 ];
 export const productChipClass = (productId: number) =>
   PRODUCT_CHIP_CLASSES[Math.abs(Number(productId)) % PRODUCT_CHIP_CLASSES.length];
 
 export const TRACK_STYLES: Record<string, string> = {
-  PRE_TRANSIT: 'bg-gray-100 text-gray-700',
-  TRANSIT: 'bg-blue-100 text-blue-800',
-  DELIVERED: 'bg-green-100 text-green-800',
-  RETURNED: 'bg-red-100 text-red-800',
-  FAILURE: 'bg-red-100 text-red-800',
-  UNKNOWN: 'bg-gray-200 text-gray-600',
+  PRE_TRANSIT: 'bg-slate-400/10 text-slate-300',
+  TRANSIT: 'bg-blue-400/10 text-blue-300',
+  DELIVERED: 'bg-emerald-400/10 text-emerald-300',
+  RETURNED: 'bg-rose-400/10 text-rose-300',
+  FAILURE: 'bg-rose-400/10 text-rose-300',
+  UNKNOWN: 'bg-slate-400/10 text-slate-400',
 };
 
 export function trackLabel(p: Pkg): string {
@@ -179,9 +179,9 @@ export function trackLabel(p: Pkg): string {
   return p.tracking_status;
 }
 export function trackClass(p: Pkg): string {
-  if (!p.committed_at || !p.tracking_status) return 'bg-gray-100 text-gray-600';
-  if (p.tracking_substatus === 'out_for_delivery' && p.tracking_status !== 'DELIVERED') return 'bg-amber-100 text-amber-900';
-  return TRACK_STYLES[p.tracking_status] || 'bg-gray-200 text-gray-600';
+  if (!p.committed_at || !p.tracking_status) return 'bg-slate-400/10 text-slate-400';
+  if (p.tracking_substatus === 'out_for_delivery' && p.tracking_status !== 'DELIVERED') return 'bg-amber-400/10 text-amber-300';
+  return TRACK_STYLES[p.tracking_status] || 'bg-slate-400/10 text-slate-400';
 }
 
 export function isOutForDeliveryToday(p: Pkg): boolean {

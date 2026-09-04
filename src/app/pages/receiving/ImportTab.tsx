@@ -477,7 +477,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
             <Button size="sm" variant="outline" disabled={!aText.trim()} onClick={parseAddresses}>Parse & preview</Button>
             {aRows && <Button size="sm" disabled={aBusy || validAddrCount === 0} onClick={importAddresses}>{aBusy ? 'Importing…' : `Import ${validAddrCount} address${validAddrCount === 1 ? '' : 'es'}`}</Button>}
           </div>
-          {aErr && <p className="text-xs text-red-600">{aErr}</p>}
+          {aErr && <p className="text-xs text-rose-400">{aErr}</p>}
           {aRows && (
             <div className="border rounded-lg overflow-x-auto">
               <Table>
@@ -488,7 +488,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
                       <TableCell className="text-xs">{r.line}</TableCell>
                       <TableCell className="text-xs font-medium whitespace-nowrap">{r.label || '—'}</TableCell>
                       <TableCell className="text-xs">{[r.name, r.street1, r.street2, r.city, r.state, r.zip].filter(Boolean).join(', ')}</TableCell>
-                      <TableCell className={`text-xs ${r.ok ? (r.reason ? 'text-amber-700' : 'text-green-700') : 'text-red-600'}`}>{r.ok ? (r.reason || 'new') : `invalid — ${r.reason}`}</TableCell>
+                      <TableCell className={`text-xs ${r.ok ? (r.reason ? 'text-amber-300' : 'text-emerald-300') : 'text-rose-400'}`}>{r.ok ? (r.reason || 'new') : `invalid — ${r.reason}`}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -497,7 +497,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
           )}
           {aResults.length > 0 && (
             <div className="text-xs space-y-0.5">
-              {aResults.map((m, i) => <p key={i} className={m.includes('saved') ? 'text-green-700' : 'text-red-600'}>{m}</p>)}
+              {aResults.map((m, i) => <p key={i} className={m.includes('saved') ? 'text-emerald-300' : 'text-rose-400'}>{m}</p>)}
             </div>
           )}
         </CardContent>
@@ -520,7 +520,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
             <Button size="sm" variant="outline" disabled={!pText.trim()} onClick={parsePackages}>Parse & preview</Button>
             {pGroups && <Button size="sm" disabled={pBusy || validPkgCount === 0} onClick={importPackages}>{pBusy ? 'Importing…' : `Import ${validPkgCount} package${validPkgCount === 1 ? '' : 's'}`}</Button>}
           </div>
-          {pErr && <p className="text-xs text-red-600">{pErr}</p>}
+          {pErr && <p className="text-xs text-rose-400">{pErr}</p>}
           {pGroups && (
             <div className="border rounded-lg overflow-x-auto">
               <Table>
@@ -538,7 +538,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
                           ))}
                         </div>
                       </TableCell>
-                      <TableCell className={`text-xs ${g.ok ? (g.warnings.length ? 'text-amber-700' : 'text-green-700') : 'text-red-600'}`}>
+                      <TableCell className={`text-xs ${g.ok ? (g.warnings.length ? 'text-amber-300' : 'text-emerald-300') : 'text-rose-400'}`}>
                         {g.ok ? (g.warnings[0] || 'ready') : g.reasons[0]}
                       </TableCell>
                     </TableRow>
@@ -549,7 +549,7 @@ export function ImportTab({ addresses, vendors, products, reloadAddresses, after
           )}
           {pResults.length > 0 && (
             <div className="text-xs space-y-0.5">
-              {pResults.map((m, i) => <p key={i} className={m.includes('created') ? 'text-green-700' : 'text-red-600'}>{m}</p>)}
+              {pResults.map((m, i) => <p key={i} className={m.includes('created') ? 'text-emerald-300' : 'text-rose-400'}>{m}</p>)}
             </div>
           )}
         </CardContent>

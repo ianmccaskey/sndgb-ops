@@ -39,7 +39,7 @@ function AddressForm({ title, hint, onSave, msg }: {
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" onClick={async () => { if (await onSave(d)) setD(EMPTY); }}>Save</Button>
-          {msg && <p className="text-xs text-red-600">{msg}</p>}
+          {msg && <p className="text-xs text-rose-400">{msg}</p>}
         </div>
         <p className="text-[11px] text-muted-foreground">{hint}</p>
       </CardContent>
@@ -61,14 +61,14 @@ function AddressList({ title, items, onToggle, onMakeDefault, onSetOrigin }: {
             <div className="min-w-0 text-sm">
               <div className="font-medium">
                 {a.label}
-                {a.is_default_ship_from && <span className="ml-1.5 rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The Ship dialog preselects this address">default ship-from</span>}
+                {a.is_default_ship_from && <span className="ml-1.5 rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The Ship dialog preselects this address">default ship-from</span>}
                 {!a.active && <span className="ml-1 text-xs font-normal text-muted-foreground">(archived)</span>}
               </div>
               <div className="text-xs text-muted-foreground">
                 {a.name} · {a.street1}{a.street2 ? `, ${a.street2}` : ''}, {a.city}, {a.state} {a.zip}
               </div>
               {onMakeDefault && !a.phone && a.active && (
-                <div className="text-[11px] text-amber-700">No phone — Shippo refuses label purchases without a ship-from phone; update this label above with one.</div>
+                <div className="text-[11px] text-amber-300">No phone — Shippo refuses label purchases without a ship-from phone; update this label above with one.</div>
               )}
               {onSetOrigin && a.active && (
                 <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-0.5">

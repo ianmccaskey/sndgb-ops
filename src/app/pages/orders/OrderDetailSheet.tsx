@@ -58,6 +58,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { StatusPill } from '@/components/StatusPill';
+import { Led } from '@/components/Led';
 import { TxHash } from '@/components/TxHash';
 
 type OrderRow = {
@@ -1466,7 +1467,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
               </div>
 
               {o.customer_note && (
-                <div className="rounded border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                <div className="rounded border border-amber-200 bg-amber-400/5 p-2 text-amber-200">
                   <span className="text-xs font-semibold uppercase">Customer note</span>
                   <p className="mt-0.5 whitespace-pre-wrap">{o.customer_note}</p>
                 </div>
@@ -1484,30 +1485,30 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   const shipState = it.removed_at || it.direct_ship || !(lineShipped > 0) ? 'none'
                     : lineShipped >= lineEff ? 'full' : 'part';
                   return (
-                  <div key={it.id} className={`py-0.5 ${shipState === 'full' ? 'bg-green-50 rounded px-1 -mx-1' : shipState === 'part' ? 'bg-amber-50 rounded px-1 -mx-1' : ''}`}>
+                  <div key={it.id} className={`py-0.5 ${shipState === 'full' ? 'bg-emerald-400/10 rounded px-1 -mx-1' : shipState === 'part' ? 'bg-amber-400/5 rounded px-1 -mx-1' : ''}`}>
                     <div className="flex justify-between items-center gap-2">
                       <span className="flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
                         <span className={`truncate ${it.removed_at ? 'line-through text-muted-foreground' : ''}`}>
                           {it.sku_code} × {effQty(it) || Number(it.qty)}
                           {it.qty_override != null && !it.removed_at && (
-                            <span className="text-amber-700" title={`Ordering app: ${Number(it.qty)}`}> (edited)</span>
+                            <span className="text-amber-300" title={`Ordering app: ${Number(it.qty)}`}> (edited)</span>
                           )}
                         </span>
                         {shipState === 'full' && (
-                          <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Every unit of this line is in a finalized shipment">shipped</span>
+                          <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Every unit of this line is in a finalized shipment">shipped</span>
                         )}
                         {shipState === 'part' && (
-                          <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title={`${fmtNum(lineShipped)} of ${fmtNum(lineEff)} units are in finalized shipments — the rest is still to pack`}>{fmtNum(lineShipped)}/{fmtNum(lineEff)} shipped</span>
+                          <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title={`${fmtNum(lineShipped)} of ${fmtNum(lineEff)} units are in finalized shipments — the rest is still to pack`}>{fmtNum(lineShipped)}/{fmtNum(lineEff)} shipped</span>
                         )}
                         {it.removed_at && (
-                          <span className="rounded bg-red-100 text-red-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                             title="Removed in this app — the ordering app still carries it until you push">
                             removed
                           </span>
                         )}
                         {Number(it.comp_qty) > 0 && (
                           <span
-                            className="rounded bg-green-100 text-green-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                            className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                             title={it.comp_reason || ''}
                           >
                             comp {Number(it.comp_qty)} · −{fmtUSD(it.comp_value_usd)}
@@ -1515,7 +1516,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         )}
                         {it.item_source === 'local' && (
                           <span
-                            className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                            className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                             title="Added in this app — not in the ordering app yet; survives pulls and bills on top of the order total"
                           >
                             added here
@@ -1523,7 +1524,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         )}
                         {effQty(it) % 1 !== 0 && (
                           <span
-                            className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                            className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                             title="Half kit — billed at half the kit price plus the split kit fee (already in the order total)"
                           >
                             split kit
@@ -1531,7 +1532,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         )}
                         {it.direct_ship && (
                           <span
-                            className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${it.direct_fulfilled_at ? 'bg-green-100 text-green-900' : 'bg-violet-100 text-violet-900'}`}
+                            className={`rounded text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap ${it.direct_fulfilled_at ? 'bg-emerald-400/10 text-emerald-300' : 'bg-violet-400/10 text-violet-300'}`}
                             title={`${it.direct_ship_source === 'manual' ? 'Set manually here' : 'From the ordering app'}${it.direct_fulfilled_at ? ` · shipped ${fmtDateTime(it.direct_fulfilled_at)}` : ' · not shipped yet'}${it.direct_tracking_number ? ` · ${(it.direct_carrier || '').toUpperCase()} ${it.direct_tracking_number} (label bought via Receiving → Transfers)` : ''}`}
                           >
                             {it.direct_fulfilled_at ? 'direct ✓' : 'direct ship'}
@@ -1576,7 +1577,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                               </DropdownMenuItem>
                             )}
                             {it.item_source === 'local' ? (
-                              <DropdownMenuItem className="text-red-600" onClick={() => removeLocalItem(it)}>
+                              <DropdownMenuItem className="text-rose-400" onClick={() => removeLocalItem(it)}>
                                 Remove
                               </DropdownMenuItem>
                             ) : it.removed_at ? (
@@ -1584,7 +1585,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                                 Restore
                               </DropdownMenuItem>
                             ) : (
-                              <DropdownMenuItem className="text-red-600" onClick={() => toggleRemoved(it)}>
+                              <DropdownMenuItem className="text-rose-400" onClick={() => toggleRemoved(it)}>
                                 Remove
                               </DropdownMenuItem>
                             )}
@@ -1606,7 +1607,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         <Input placeholder="Why is this free? (audited)" value={compReason} onChange={e => setCompReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
                         <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveComp(it, compQty || '0', compReason)}>Save</Button>
                         {Number(it.comp_qty) > 0 && (
-                          <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" disabled={saving} onClick={() => saveComp(it, '0', '')}>Remove comp</Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400" disabled={saving} onClick={() => saveComp(it, '0', '')}>Remove comp</Button>
                         )}
                         <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setCompingId(null); setCompMsg(''); }}>Cancel</Button>
                       </div>
@@ -1614,7 +1615,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   </div>
                   );
                 })}
-                {compMsg && <p className="text-xs text-red-600 mt-1">{compMsg}</p>}
+                {compMsg && <p className="text-xs text-rose-400 mt-1">{compMsg}</p>}
                 <div className="flex flex-wrap gap-1.5 mt-2 items-center">
                   <Select value={addSku} onValueChange={v => { setAddSku(v); setAddMsg(''); }}>
                     <SelectTrigger className="h-7 flex-1 min-w-36 text-xs"><SelectValue placeholder="Add item…" /></SelectTrigger>
@@ -1636,17 +1637,17 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 <p className="text-[11px] text-muted-foreground mt-0.5">
                   Added items bill on top of the order total and survive pulls; they're marked until the ordering app learns about them.
                 </p>
-                {addMsg && <p className="text-xs text-red-600 mt-1">{addMsg}</p>}
+                {addMsg && <p className="text-xs text-rose-400 mt-1">{addMsg}</p>}
                 <Separator className="my-2" />
                 <div className="space-y-0.5 text-muted-foreground">
                   <div className="flex justify-between"><span>Subtotal</span><span>{fmtUSD(o.subtotal_usd)}</span></div>
                   {(eff(o.tip_override_usd, o.tip_usd) > 0 || o.tip_override_usd != null) && (
-                    <div className="flex justify-between"><span>Tip{o.tip_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.tip_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.tip_override_usd, o.tip_usd))}</span></div>
+                    <div className="flex justify-between"><span>Tip{o.tip_override_usd != null && <span className="text-amber-300" title={`Ordering app: ${fmtUSD(o.tip_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.tip_override_usd, o.tip_usd))}</span></div>
                   )}
-                  <div className="flex justify-between"><span>Admin fee{o.admin_fee_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.admin_fee_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.admin_fee_override_usd, o.admin_fee_usd))}</span></div>
-                  <div className="flex justify-between"><span>Shipping fee{o.shipping_fee_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.shipping_fee_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.shipping_fee_override_usd, o.shipping_fee_usd))}</span></div>
+                  <div className="flex justify-between"><span>Admin fee{o.admin_fee_override_usd != null && <span className="text-amber-300" title={`Ordering app: ${fmtUSD(o.admin_fee_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.admin_fee_override_usd, o.admin_fee_usd))}</span></div>
+                  <div className="flex justify-between"><span>Shipping fee{o.shipping_fee_override_usd != null && <span className="text-amber-300" title={`Ordering app: ${fmtUSD(o.shipping_fee_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.shipping_fee_override_usd, o.shipping_fee_usd))}</span></div>
                   {(eff(o.shipping_insurance_override_usd, o.shipping_insurance_usd) > 0 || o.shipping_insurance_override_usd != null) && (
-                    <div className="flex justify-between"><span>Shipping insurance{o.shipping_insurance_override_usd != null && <span className="text-amber-700" title={`Ordering app: ${fmtUSD(o.shipping_insurance_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.shipping_insurance_override_usd, o.shipping_insurance_usd))}</span></div>
+                    <div className="flex justify-between"><span>Shipping insurance{o.shipping_insurance_override_usd != null && <span className="text-amber-300" title={`Ordering app: ${fmtUSD(o.shipping_insurance_usd)}`}> (edited)</span>}</span><span>{fmtUSD(eff(o.shipping_insurance_override_usd, o.shipping_insurance_usd))}</span></div>
                   )}
                   {Number(o.split_fee_usd) > 0 && (
                     <div className="flex justify-between"><span title="Charged by the ordering app for splitting a kit — already inside the total">Split kit fee</span><span>{fmtUSD(o.split_fee_usd)}</span></div>
@@ -1655,9 +1656,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{fmtUSD(o.total_usd)}</span></div>
                   {(localItemsUsd > 0 || feeDeltaUsd !== 0 || itemDeltaUsd !== 0) && (
                     <>
-                      {localItemsUsd > 0 && <div className="flex justify-between text-amber-700"><span>Added in this app</span><span>+{fmtUSD(localItemsUsd)}</span></div>}
-                      {itemDeltaUsd !== 0 && <div className="flex justify-between text-amber-700"><span>Item edits</span><span>{itemDeltaUsd > 0 ? '+' : '−'}{fmtUSD(Math.abs(itemDeltaUsd))}</span></div>}
-                      {feeDeltaUsd !== 0 && <div className="flex justify-between text-amber-700"><span>Fee edits</span><span>{feeDeltaUsd > 0 ? '+' : '−'}{fmtUSD(Math.abs(feeDeltaUsd))}</span></div>}
+                      {localItemsUsd > 0 && <div className="flex justify-between text-amber-300"><span>Added in this app</span><span>+{fmtUSD(localItemsUsd)}</span></div>}
+                      {itemDeltaUsd !== 0 && <div className="flex justify-between text-amber-300"><span>Item edits</span><span>{itemDeltaUsd > 0 ? '+' : '−'}{fmtUSD(Math.abs(itemDeltaUsd))}</span></div>}
+                      {feeDeltaUsd !== 0 && <div className="flex justify-between text-amber-300"><span>Fee edits</span><span>{feeDeltaUsd > 0 ? '+' : '−'}{fmtUSD(Math.abs(feeDeltaUsd))}</span></div>}
                       <div className="flex justify-between font-semibold text-foreground"><span>Expected total</span><span>{fmtUSD(Number(o.total_usd) + localItemsUsd + feeDeltaUsd + itemDeltaUsd)}</span></div>
                     </>
                   )}
@@ -1675,37 +1676,37 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingFees(false)}>Cancel</Button>
                         </div>
                         <p className="text-[11px] text-muted-foreground">Blank = follow the ordering app. A value wins over every pull; billing shifts by the difference.</p>
-                        {feeMsg && <p className="text-xs text-red-600">{feeMsg}</p>}
+                        {feeMsg && <p className="text-xs text-rose-400">{feeMsg}</p>}
                       </div>
                     )}
                   </div>
                   {Number(o.comp_usd) > 0 && (
-                    <div className="flex justify-between text-green-700"><span>Comped items</span><span>−{fmtUSD(o.comp_usd)}</span></div>
+                    <div className="flex justify-between text-emerald-300"><span>Comped items</span><span>−{fmtUSD(o.comp_usd)}</span></div>
                   )}
                   {credits.map(c => (
-                    <div key={c.id} className="flex justify-between text-green-700 items-center gap-2">
+                    <div key={c.id} className="flex justify-between text-emerald-300 items-center gap-2">
                       <span className="truncate" title={c.reason}>Credit — {c.reason}</span>
                       <span className="flex items-center gap-1 shrink-0">
                         −{fmtUSD(c.amount_usd)}
-                        <Button size="sm" variant="ghost" className="h-4 px-1 text-[10px] text-red-600" disabled={saving} onClick={() => removeCredit(c)}>✕</Button>
+                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-xs text-rose-400" disabled={saving} onClick={() => removeCredit(c)}>✕</Button>
                       </span>
                     </div>
                   ))}
                   {Number(o.writeoff_usd) > 0 && (
-                    <div className="flex justify-between text-green-700"><span>Write-off</span><span>−{fmtUSD(o.writeoff_usd)}</span></div>
+                    <div className="flex justify-between text-emerald-300"><span>Write-off</span><span>−{fmtUSD(o.writeoff_usd)}</span></div>
                   )}
                   {(Number(o.comp_usd) > 0 || Number(o.writeoff_usd) > 0 || credits.length > 0) && (
                     <div className="flex justify-between font-semibold text-foreground"><span>Due</span><span>{fmtUSD(o.due_usd)}</span></div>
                   )}
                   <div className="flex justify-between"><span>Received (effective)</span><span>{fmtUSD(o.effective_received_usd)}</span></div>
                   {refunds.map(rf => (
-                    <div key={rf.id} className="flex justify-between text-amber-700 items-center gap-2">
+                    <div key={rf.id} className="flex justify-between text-amber-300 items-center gap-2">
                       <span className="truncate" title={`${rf.reason}${rf.tx_ref ? ` · ${rf.tx_ref}` : ''}`}>
                         Refunded ({rf.method}{rf.wallet_name ? ` · ${rf.wallet_name}` : ''}) — {rf.reason}
                       </span>
                       <span className="flex items-center gap-1 shrink-0">
                         −{fmtUSD(rf.amount_usd)}
-                        <Button size="sm" variant="ghost" className="h-4 px-1 text-[10px] text-red-600" disabled={saving} onClick={() => removeRefund(rf)}>✕</Button>
+                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-xs text-rose-400" disabled={saving} onClick={() => removeRefund(rf)}>✕</Button>
                       </span>
                     </div>
                   ))}
@@ -1718,7 +1719,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         the amount that will still be over AFTER that clear (matches
                         the server cap) */}
                     {!addingRefund && Number(o.diff_usd) + Number(o.writeoff_usd || 0) < -0.005 && (
-                      <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] text-amber-700 border-amber-300"
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] text-amber-300 border-amber-400/40"
                         onClick={() => {
                           setAddingRefund(true); setAddingCredit(false);
                           setRefundAmt(String(-(Number(o.diff_usd) + Number(o.writeoff_usd || 0))));
@@ -1762,7 +1763,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setAddingRefund(false); setCrMsg(''); }}>Cancel</Button>
                     </div>
                   )}
-                  {crMsg && <p className="text-xs text-red-600 mt-0.5">{crMsg}</p>}
+                  {crMsg && <p className="text-xs text-rose-400 mt-0.5">{crMsg}</p>}
                   {(Number(o.diff_usd) > 0.005 || Number(o.writeoff_usd) > 0) && (
                     <div className="mt-1">
                       {Number(o.pending_payment_count) > 0 && Number(o.writeoff_usd) === 0 ? (
@@ -1783,15 +1784,15 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                           <Input placeholder="Why write this off? (audited)" value={woReason} onChange={e => setWoReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
                           <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveWriteoff(woAmt, woReason)}>Save</Button>
                           {Number(o.writeoff_usd) > 0 && (
-                            <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" disabled={saving} onClick={() => saveWriteoff('0', '')}>Remove</Button>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400" disabled={saving} onClick={() => saveWriteoff('0', '')}>Remove</Button>
                           )}
                           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setWoEditing(false); setWoMsg(''); }}>Cancel</Button>
                         </div>
                       )}
-                      {woMsg && <p className="text-xs text-red-600 mt-0.5">{woMsg}</p>}
+                      {woMsg && <p className="text-xs text-rose-400 mt-0.5">{woMsg}</p>}
                     </div>
                   )}
-                  {o.override_usd != null && <div className="flex justify-between text-violet-700"><span>Manual override active</span><span>{fmtUSD(o.override_usd)}</span></div>}
+                  {o.override_usd != null && <div className="flex justify-between text-violet-300"><span>Manual override active</span><span>{fmtUSD(o.override_usd)}</span></div>}
                 </div>
               </div>
 
@@ -1802,14 +1803,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   <div key={s.id} className={`py-1 border-b last:border-0 text-xs space-y-0.5 ${s.refund_status === 'SUCCESS' ? 'opacity-50' : ''}`}>
                     <div className="flex flex-wrap items-center gap-1.5">
                       <StatusPill value={s.refund_status === 'SUCCESS' ? 'refunded' : (s.finalized_at ? s.status : 'pending')} />
-                      {!s.finalized_at && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Unfinished draft — continue or delete it from the Fulfillment page's Ship dialog">draft</span>}
+                      {!s.finalized_at && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Unfinished draft — continue or delete it from the Fulfillment page's Ship dialog">draft</span>}
                       {s.tracking_number && <span className="font-mono">{(s.carrier || '').toUpperCase()} {s.tracking_number}</span>}
                       <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${Number(i.qty)}`).join(', ')}</span>
                       {Number(s.label_cost_usd) > 0 && <span className="text-muted-foreground">{fmtUSD(s.label_cost_usd)}</span>}
                       {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}
-                      {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">refund {s.refund_status}</span>}
+                      {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">refund {s.refund_status}</span>}
                       {s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && (
-                        <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The ordering app has not been told about this shipment yet">not pushed</span>
+                        <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The ordering app has not been told about this shipment yet"><Led className="w-1.5 h-1.5" />not pushed</span>
                       )}
                     </div>
                     {shipPhotos.filter(ph => Number(ph.shipment_id) === s.id).length > 0 && (
@@ -1828,10 +1829,10 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     </div>
                   </div>
                 ))}
-                {shipPushMsg && <p className={`text-xs mt-1 ${shipPushMsg.startsWith('Pushed') ? 'text-green-700' : 'text-amber-700'}`}>{shipPushMsg}</p>}
+                {shipPushMsg && <p className={`text-xs mt-1 ${shipPushMsg.startsWith('Pushed') ? 'text-emerald-300' : 'text-amber-300'}`}>{shipPushMsg}</p>}
                 {stranded.length > 0 && (
-                  <div className="mt-2 rounded border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-2 space-y-1.5">
-                    <p className="text-xs font-medium text-amber-900 dark:text-amber-200">
+                  <div className="mt-2 rounded border border-amber-400/40 bg-amber-400/5 dark:bg-amber-950/30 p-2 space-y-1.5">
+                    <p className="text-xs font-medium text-amber-200 dark:text-amber-200">
                       {stranded.length} package photo(s) saved on this device never finished uploading.
                     </p>
                     <div className="flex flex-wrap gap-2">
@@ -1875,7 +1876,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                                 </Button>
                               </>
                             )}
-                            <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Discard this saved photo"
+                            <button className="absolute -top-2.5 -right-2.5 rounded-full bg-background border w-6 h-6 text-xs leading-none" title="Discard this saved photo"
                               onClick={async () => {
                                 if (!window.confirm('Discard this saved photo? It has not been uploaded anywhere.')) return;
                                 const durable = await stashRemove(s.key);
@@ -1886,7 +1887,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         );
                       })}
                     </div>
-                    {strandedMsg && <p className="text-[11px] text-amber-800 dark:text-amber-300">{strandedMsg}</p>}
+                    {strandedMsg && <p className="text-[11px] text-amber-200 dark:text-amber-300">{strandedMsg}</p>}
                   </div>
                 )}
               </div>
@@ -1902,13 +1903,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                           <StatusPill value={p.status} />
                           <span className="text-xs uppercase text-muted-foreground">{p.method}</span>
                           {p.native_symbol && (
-                            <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
+                            <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">
                               native {Number(p.native_amount)} {p.native_symbol}
                             </span>
                           )}
                         </div>
                         {p.native_symbol && p.value_at_pay_usd == null && p.status !== 'rejected' && o.override_usd == null && (
-                          <div className="text-xs text-amber-700">This payment includes native {p.native_symbol} with no USD value yet. To count it, set an override below for the order's TOTAL received USD — all payments combined (the override replaces, not adds to, the verified sum).</div>
+                          <div className="text-xs text-amber-300">This payment includes native {p.native_symbol} with no USD value yet. To count it, set an override below for the order's TOTAL received USD — all payments combined (the override replaces, not adds to, the verified sum).</div>
                         )}
                         {p.tx_hash && <div><TxHash method={p.method} hash={p.tx_hash} /></div>}
                         {p.receipt_ref && <div className="text-xs text-muted-foreground">receipt: {p.receipt_ref}</div>}
@@ -1947,7 +1948,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                           </Button>
                         )}
                         {p.status !== 'rejected' && rejectingId !== p.id && (
-                          <Button size="sm" variant="ghost" className="h-6 text-xs text-red-600" onClick={() => { setRejectingId(p.id); setRejectReason(''); setPayMsg(''); }}>
+                          <Button size="sm" variant="ghost" className="h-6 text-xs text-rose-400" onClick={() => { setRejectingId(p.id); setRejectReason(''); setPayMsg(''); }}>
                             Reject
                           </Button>
                         )}
@@ -1964,7 +1965,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 ))}
 
                 {railMismatch && (
-                  <div className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-amber-900">
+                  <div className="mt-2 rounded border border-amber-400/40 bg-amber-400/5 p-2 text-amber-200">
                     <p className="text-xs">
                       This order's rail is <span className="font-semibold uppercase">{o.payment_rail}</span> but its verified payment is on{' '}
                       <span className="font-semibold uppercase">{railMismatch}</span> — the ordering app still attributes it to the wrong network
@@ -1983,9 +1984,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 )}
                 {railMsg && <p className="text-xs mt-1 text-muted-foreground">{railMsg}</p>}
 
-                <div className={`mt-2 rounded p-2 ${o.payment_rail === 'cash' ? 'border border-green-200 bg-green-50/50' : ''}`}>
+                <div className={`mt-2 rounded p-2 ${o.payment_rail === 'cash' ? 'border border-emerald-400/30 bg-emerald-400/5' : ''}`}>
                   {o.payment_rail === 'cash' && (
-                    <p className="text-xs font-medium text-green-900 mb-1.5">Cash order — record the payment here:</p>
+                    <p className="text-xs font-medium text-emerald-300 mb-1.5">Cash order — record the payment here:</p>
                   )}
                   <div className="flex flex-wrap gap-2">
                     <Input placeholder="Amount $" value={cashAmt} onChange={e => setCashAmt(e.target.value)} className="h-8 w-28 text-xs" />
@@ -2058,7 +2059,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 </div>
               </div>
 
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p className="text-sm text-rose-400">{error}</p>}
             </div>
           </>
         )}

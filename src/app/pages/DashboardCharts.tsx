@@ -226,33 +226,33 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
           </div>
         </div>
         <div className="text-sm space-y-1 border-t pt-2">
-          <div className="flex justify-between"><span className="text-muted-foreground">Expenses + labels</span><span className="text-red-600">−{fmtUSD(deductions, { cents: false })}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Expenses + labels</span><span className="text-rose-400">−{fmtUSD(deductions, { cents: false })}</span></div>
           {Number(pnl.comps_usd) > 0 && (
-            <div className="flex justify-between"><span className="text-muted-foreground">Comped product</span><span className="text-red-600">−{fmtUSD(pnl.comps_usd, { cents: false })}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Comped product</span><span className="text-rose-400">−{fmtUSD(pnl.comps_usd, { cents: false })}</span></div>
           )}
           {Number(pnl.writeoffs_usd) > 0 && (
-            <div className="flex justify-between"><span className="text-muted-foreground">Write-offs</span><span className="text-red-600">−{fmtUSD(pnl.writeoffs_usd, { cents: false })}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Write-offs</span><span className="text-rose-400">−{fmtUSD(pnl.writeoffs_usd, { cents: false })}</span></div>
           )}
           {Number(pnl.adj_both_usd) !== 0 && (
             <div className="flex justify-between">
               <span className="text-muted-foreground">Adjustments (both)</span>
               {Number(pnl.adj_both_usd) > 0
-                ? <span className="text-red-600">−{fmtUSD(pnl.adj_both_usd, { cents: false })}</span>
-                : <span className="text-green-700">+{fmtUSD(-Number(pnl.adj_both_usd), { cents: false })}</span>}
+                ? <span className="text-rose-400">−{fmtUSD(pnl.adj_both_usd, { cents: false })}</span>
+                : <span className="text-emerald-300">+{fmtUSD(-Number(pnl.adj_both_usd), { cents: false })}</span>}
             </div>
           )}
           {(pnl.adjustments || []).filter(a => a.beneficiary !== 'both' && Number(a.value_usd) !== 0).map(a => (
             <div key={a.beneficiary} className="flex justify-between">
               <span className="text-muted-foreground">Adjustments — {a.beneficiary} (from their split)</span>
               {Number(a.value_usd) > 0
-                ? <span className="text-red-600">−{fmtUSD(a.value_usd, { cents: false })}</span>
-                : <span className="text-green-700">+{fmtUSD(-Number(a.value_usd), { cents: false })}</span>}
+                ? <span className="text-rose-400">−{fmtUSD(a.value_usd, { cents: false })}</span>
+                : <span className="text-emerald-300">+{fmtUSD(-Number(a.value_usd), { cents: false })}</span>}
             </div>
           ))}
-          <div className="flex justify-between font-semibold"><span>Net profit</span><span className="text-green-700">{fmtUSD(net, { cents: false })}</span></div>
+          <div className="flex justify-between font-semibold"><span>Net profit</span><span className="text-emerald-300">{fmtUSD(net, { cents: false })}</span></div>
         </div>
         {orphanedAdj.length > 0 && (
-          <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+          <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs text-amber-200">
             <span className="font-semibold">Unattributed adjustments:</span>{' '}
             {orphanedAdj.map(a => `${a.beneficiary} (${fmtUSD(a.value_usd)})`).join(', ')} — no current split party matches, so this value is deducted from NO ONE's payout. Reassign these adjustments on the Products page.
           </div>
@@ -319,7 +319,7 @@ export function ProductBars({ products }: { products: ProductPerfRow[] }) {
         <div className="text-xs text-muted-foreground mt-2 space-y-0.5">
           {withMoq.length > 0 && <p>{moqMet} of {withMoq.length} SKUs with a target have hit MOQ.</p>}
           {soldOut.length > 0 && (
-            <p className="text-amber-700 font-medium">
+            <p className="text-amber-300 font-medium">
               SOLD OUT (at cap): {soldOut.map(p => p.sku_code).join(', ')}
             </p>
           )}

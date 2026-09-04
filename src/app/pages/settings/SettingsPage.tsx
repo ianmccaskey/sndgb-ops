@@ -233,8 +233,8 @@ export function SettingsPage() {
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <SettingsIcon className="h-6 w-6 text-violet-600" /> Settings
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+          <SettingsIcon className="h-6 w-6 text-cyan-300" /> Settings
         </h1>
       </div>
 
@@ -321,7 +321,7 @@ export function SettingsPage() {
             Tare = empty box + packaging weight, added to the shipping modal's auto-calculated weight (product weights come from the Products page). Always adjustable per shipment.
           </p>
           {shippoKey.trim().toLowerCase().startsWith('shippo_test') && (
-            <p className="text-xs rounded border border-amber-300 bg-amber-50 text-amber-900 p-2">
+            <p className="text-xs rounded border border-amber-400/40 bg-amber-400/5 text-amber-200 p-2">
               TEST token — tracking data on the Receiving page will be simulated and auto-receive is disabled; labels purchased are test labels.
             </p>
           )}

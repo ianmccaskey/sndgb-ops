@@ -164,8 +164,8 @@ export function FinancialsPage() {
   return (
     <div className="p-4 sm:p-6 space-y-5">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <BarChart3 className="h-6 w-6 text-violet-600" /> Financials
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+          <BarChart3 className="h-6 w-6 text-cyan-300" /> Financials
         </h1>
         <p className="text-sm text-muted-foreground mt-1">P&L is computed live from orders, products, expenses, and shipments — nothing is typed twice.</p>
       </div>
@@ -198,26 +198,26 @@ export function FinancialsPage() {
               <div className="flex justify-between"><span className="text-muted-foreground">Split kit fees</span><span>{fmtUSD(pnl?.split_fees_usd)}</span></div>
             )}
             {Number(pnl?.comps_usd) > 0 && (
-              <div className="flex justify-between"><span className="text-muted-foreground">Comped product (free to customers)</span><span className="text-red-600">−{fmtUSD(pnl?.comps_usd)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Comped product (free to customers)</span><span className="text-rose-400">−{fmtUSD(pnl?.comps_usd)}</span></div>
             )}
             {Number(pnl?.credits_usd) > 0 && (
-              <div className="flex justify-between"><span className="text-muted-foreground">Customer credits</span><span className="text-red-600">−{fmtUSD(pnl?.credits_usd)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Customer credits</span><span className="text-rose-400">−{fmtUSD(pnl?.credits_usd)}</span></div>
             )}
             {Number(pnl?.writeoffs_usd) > 0 && (
-              <div className="flex justify-between"><span className="text-muted-foreground">Write-offs (forgiven shortfalls)</span><span className="text-red-600">−{fmtUSD(pnl?.writeoffs_usd)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Write-offs (forgiven shortfalls)</span><span className="text-rose-400">−{fmtUSD(pnl?.writeoffs_usd)}</span></div>
             )}
             {Number(pnl?.at_cost_margin_usd) !== 0 && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground" title="Kits sold to outside customers at vendor cost + freight — this waives exactly their P&L contribution so the sale nets zero">At-cost sales (margin waived)</span>
                 {Number(pnl?.at_cost_margin_usd) > 0
-                  ? <span className="text-red-600">−{fmtUSD(pnl?.at_cost_margin_usd)}</span>
-                  : <span className="text-green-700">+{fmtUSD(-Number(pnl?.at_cost_margin_usd))}</span>}
+                  ? <span className="text-rose-400">−{fmtUSD(pnl?.at_cost_margin_usd)}</span>
+                  : <span className="text-emerald-300">+{fmtUSD(-Number(pnl?.at_cost_margin_usd))}</span>}
               </div>
             )}
             {Number(pnl?.stock_cost_usd) > 0 && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground" title="Stock-plan commits: the group's own kits at vendor cost + freight, taken out of net profit BEFORE the split — no receivable, nobody pays this back">Group stock (at cost + freight, pre-split)</span>
-                <span className="text-red-600">−{fmtUSD(pnl?.stock_cost_usd)}</span>
+                <span className="text-rose-400">−{fmtUSD(pnl?.stock_cost_usd)}</span>
               </div>
             )}
             {/* sign-aware and shown for ANY non-zero delta: a lowered GB
@@ -227,24 +227,24 @@ export function FinancialsPage() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground" title="Product profit above counts the stock kits as if sold at GB price — this cancels that hypothetical margin, since group stock is never sold. Also absorbs any cost/freight drift since commit: the line above shows the committed snapshot, while the books track the live vendor cost (what we will actually pay).">Group stock margin (never sold)</span>
                 {Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd) > 0
-                  ? <span className="text-red-600">−{fmtUSD(Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd))}</span>
-                  : <span className="text-green-700">+{fmtUSD(Number(pnl?.stock_cost_usd) - Number(pnl?.stock_retail_usd))}</span>}
+                  ? <span className="text-rose-400">−{fmtUSD(Number(pnl?.stock_retail_usd) - Number(pnl?.stock_cost_usd))}</span>
+                  : <span className="text-emerald-300">+{fmtUSD(Number(pnl?.stock_cost_usd) - Number(pnl?.stock_retail_usd))}</span>}
               </div>
             )}
             {Number(pnl?.adj_both_usd) !== 0 && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Admin adjustments (both, at GB price)</span>
                 {Number(pnl?.adj_both_usd) > 0
-                  ? <span className="text-red-600">−{fmtUSD(pnl?.adj_both_usd)}</span>
-                  : <span className="text-green-700">+{fmtUSD(-Number(pnl?.adj_both_usd))}</span>}
+                  ? <span className="text-rose-400">−{fmtUSD(pnl?.adj_both_usd)}</span>
+                  : <span className="text-emerald-300">+{fmtUSD(-Number(pnl?.adj_both_usd))}</span>}
               </div>
             )}
             <div className="flex justify-between font-medium border-t pt-1"><span>Total revenue</span><span>{fmtUSD(pnl?.total_revenue_usd)}</span></div>
             <div className="flex justify-between mt-2"><span className="text-muted-foreground">Product profit</span><span>{fmtUSD(pnl?.product_profit_usd)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Expenses (supplies, shipping, testing…)</span><span className="text-red-600">−{fmtUSD(pnl?.expenses_usd)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Label costs (from shipments)</span><span className="text-red-600">−{fmtUSD(pnl?.label_costs_usd)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Expenses (supplies, shipping, testing…)</span><span className="text-rose-400">−{fmtUSD(pnl?.expenses_usd)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Label costs (from shipments)</span><span className="text-rose-400">−{fmtUSD(pnl?.label_costs_usd)}</span></div>
             {Number(pnl?.direct_freight_usd) > 0 && (
-              <div className="flex justify-between"><span className="text-muted-foreground">Direct-ship freight (internal, to vendors)</span><span className="text-red-600">−{fmtUSD(pnl?.direct_freight_usd)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Direct-ship freight (internal, to vendors)</span><span className="text-rose-400">−{fmtUSD(pnl?.direct_freight_usd)}</span></div>
             )}
             {freightByVendor.length > 0 && (
               <div className="rounded bg-muted/50 px-2 py-1 space-y-0.5">
@@ -262,12 +262,12 @@ export function FinancialsPage() {
               </div>
             )}
             <div className="flex justify-between font-semibold text-base border-t pt-1">
-              <span>Net profit</span><span className={netProfit >= 0 ? 'text-green-700' : 'text-red-600'}>{fmtUSD(netProfit)}</span>
+              <span>Net profit</span><span className={netProfit >= 0 ? 'text-emerald-300' : 'text-rose-400'}>{fmtUSD(netProfit)}</span>
             </div>
             {((pnl?.adjustments || []).filter(a =>
               a.beneficiary !== 'both' && Number(a.value_usd) !== 0 && !(pnl?.splits || []).some(s => s.party === a.beneficiary)
             )).length > 0 && (
-              <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+              <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs text-amber-200">
                 <span className="font-semibold">Unattributed adjustments:</span>{' '}
                 {(pnl?.adjustments || [])
                   .filter(a => a.beneficiary !== 'both' && Number(a.value_usd) !== 0 && !(pnl?.splits || []).some(s => s.party === a.beneficiary))
@@ -299,7 +299,7 @@ export function FinancialsPage() {
                       ? <>{fmtUSD(w.latest_balance_usd)} stable{w.latest_native_balance ? ` + ${Number(w.latest_native_balance).toFixed(4)} native` : ''} · {fmtDateTime(w.latest_snapshot_at)} ({w.latest_source})</>
                       : 'No snapshot yet'}
                   </div>
-                  {refreshing[w.id] && refreshing[w.id] !== 'fetching…' && <div className="text-xs text-red-600">{refreshing[w.id]}</div>}
+                  {refreshing[w.id] && refreshing[w.id] !== 'fetching…' && <div className="text-xs text-rose-400">{refreshing[w.id]}</div>}
                 </div>
                 {w.chain === 'fiat' ? (
                   <div className="flex gap-1">
@@ -327,7 +327,7 @@ export function FinancialsPage() {
             </Button>
             <span className="text-xs text-muted-foreground">Live ETH + SOL wallet stablecoins vs what non-COA products still owe vendors (all campaigns).</span>
           </div>
-          {covError && <p className="text-sm text-red-600">{covError}</p>}
+          {covError && <p className="text-sm text-rose-400">{covError}</p>}
           {covBalances && (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1">
@@ -355,7 +355,7 @@ export function FinancialsPage() {
             </div>
           )}
           {covBalances && (
-            <div className={`text-base font-bold ${covHeld - covOwed >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <div className={`text-base font-bold ${covHeld - covOwed >= 0 ? 'text-emerald-300' : 'text-rose-400'}`}>
               {covHeld - covOwed >= 0
                 ? `Over by ${fmtUSD(covHeld - covOwed)} — wallets cover what's owed`
                 : `Under by ${fmtUSD(covOwed - covHeld)} — wallets do NOT cover what's owed`}
@@ -384,7 +384,7 @@ export function FinancialsPage() {
             <Input placeholder="Qty" value={eQty} onChange={e => setEQty(e.target.value)} className="h-9 w-20" />
             <Button size="sm" onClick={submitExpense}>Add</Button>
           </div>
-          {eError && <p className="text-sm text-red-600">{eError}</p>}
+          {eError && <p className="text-sm text-rose-400">{eError}</p>}
           <div className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -406,7 +406,7 @@ export function FinancialsPage() {
                   <TableCell className="text-right">{Number(e.qty)}</TableCell>
                   <TableCell className="text-right font-medium">{fmtUSD(e.total_usd)}</TableCell>
                   <TableCell>
-                    <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600"
+                    <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400"
                       onClick={() => doDelExpense({ id: e.id }).then(() => { reloadExpenses(); reloadPnl(); })}>
                       Remove
                     </Button>

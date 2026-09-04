@@ -378,6 +378,9 @@ export function PlannerPage() {
   };
 
   const removeAllocation = async (it: PlanItem) => {
+    // 6px from "Mark ordered" on a phone — a mis-tap must not silently
+    // delete a plan line (mobile audit item 7)
+    if (!window.confirm('Remove this plan allocation?')) return;
     const res = await doDeleteItem({ item_id: it.id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
     if (!(Array.isArray(res) ? res.length > 0 : !!res)) { setAMsg('Not removed — an ordered line is locked to its vendor payment, and a committed line is locked to its adjustment (remove it on Products first).'); return; }
     reloadPlan();
@@ -468,8 +471,8 @@ export function PlannerPage() {
   return (
     <div className="p-4 sm:p-6 space-y-5">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <GitBranch className="h-6 w-6 text-violet-600" /> Stock Planner
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
+          <GitBranch className="h-6 w-6 text-cyan-300" /> Stock Planner
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
           What the wallets hold, what vendors are owed, and how the rest distributes into personal-stock orders (valued at vendor cost + freight). The plan is saved and shared.
@@ -477,19 +480,19 @@ export function PlannerPage() {
       </div>
 
       {sankey.uncoveredOwed > 0 && (
-        <div className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800 flex items-center gap-2">
+        <div className="rounded border border-rose-400/40 bg-rose-400/10 p-3 text-sm text-rose-300 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           <span>Vendor GB is short <span className="font-semibold">{fmtUSD(sankey.uncoveredOwed)}</span> even counting the expected float payments — cover the gap before allocating stock.</span>
         </div>
       )}
       {sankey.uncoveredOwed <= 0 && sankey.floatToOwed > 0 && (
-        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 flex items-center gap-2">
+        <div className="rounded border border-amber-400/40 bg-amber-400/5 p-3 text-sm text-amber-200 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           <span><span className="font-semibold">{fmtUSD(sankey.floatToOwed)}</span> of the Vendor GB coverage depends on float payments that haven't arrived yet (dashed flow).</span>
         </div>
       )}
       {sankey.overAllocated > 0 && (
-        <div className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800 flex items-center gap-2">
+        <div className="rounded border border-rose-400/40 bg-rose-400/10 p-3 text-sm text-rose-300 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           <span>Over-allocated by <span className="font-semibold">{fmtUSD(sankey.overAllocated)}</span> — planned purchases exceed the Vendor STOCK budget ({fmtUSD(sankey.pool)}).</span>
         </div>
@@ -506,7 +509,7 @@ export function PlannerPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {refreshMsg && <p className="text-xs text-red-600 mb-2">{refreshMsg}</p>}
+          {refreshMsg && <p className="text-xs text-rose-400 mb-2">{refreshMsg}</p>}
           {sankey.links.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">Nothing to draw yet — refresh wallet balances or enter sources below.</p>
           ) : (
@@ -555,7 +558,7 @@ export function PlannerPage() {
               </div>
               <div className="flex justify-between gap-2 border-t pt-1">
                 <span className="text-muted-foreground min-w-0">Owed to vendors (non-COA, all campaigns)</span>
-                <span className="text-red-600 shrink-0 whitespace-nowrap">−{fmtUSD(owedTotal)}</span>
+                <span className="text-rose-400 shrink-0 whitespace-nowrap">−{fmtUSD(owedTotal)}</span>
               </div>
               {committedUnorderedValue > 0 && (
                 <div className="flex justify-between gap-2">
@@ -564,7 +567,7 @@ export function PlannerPage() {
               )}
               <div className="flex justify-between gap-2">
                 <span className="text-muted-foreground min-w-0">Expected at-cost payments ({receivables.length})</span>
-                <span className="text-amber-700 shrink-0 whitespace-nowrap">{fmtUSD(receivableTotal)}</span>
+                <span className="text-amber-300 shrink-0 whitespace-nowrap">{fmtUSD(receivableTotal)}</span>
               </div>
             </div>
             <div className="border-t pt-2 space-y-2">
@@ -587,8 +590,8 @@ export function PlannerPage() {
                     figures typed on the left (not just the saved plan) */}
                 <div className={`flex-1 min-w-44 rounded border p-2 text-xs ${
                   allocTotal <= 0 ? 'border-border text-muted-foreground'
-                    : liveShortfall > 0 ? 'border-red-300 bg-red-50 text-red-800'
-                      : 'border-green-300 bg-green-50 text-green-800'}`}>
+                    : liveShortfall > 0 ? 'border-rose-400/40 bg-rose-400/10 text-rose-300'
+                      : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'}`}>
                   <p className="font-semibold uppercase text-[10px]">Stock allocations · {fmtUSD(allocTotal)}</p>
                   {allocTotal <= 0 ? (
                     <p className="mt-0.5">No stock allocated yet.</p>
@@ -601,7 +604,7 @@ export function PlannerPage() {
                 </div>
               </div>
               <Button size="sm" className="h-8" onClick={saveSources}>Save sources</Button>
-              {srcMsg && <p className="text-xs text-red-600">{srcMsg}</p>}
+              {srcMsg && <p className="text-xs text-rose-400">{srcMsg}</p>}
               {plan?.updated_by && <p className="text-[11px] text-muted-foreground">Last saved by {plan.updated_by} {plan.updated_at ? fmtDateTime(plan.updated_at) : ''}</p>}
             </div>
             {receivables.length > 0 && (
@@ -610,9 +613,9 @@ export function PlannerPage() {
                 {receivables.map(r => (
                   <div key={r.id} className="flex justify-between gap-2 text-xs">
                     <span className="text-muted-foreground min-w-0 truncate" title={`${r.sku_code} × ${fmtNum(r.qty)}${r.preordered ? ' (already ordered)' : ''} — ${r.reason}`}>
-                      {r.sku_code} × {fmtNum(r.qty)}{r.preordered && <span className="text-sky-700"> (ordered)</span>} — {r.reason}
+                      {r.sku_code} × {fmtNum(r.qty)}{r.preordered && <span className="text-sky-300"> (ordered)</span>} — {r.reason}
                     </span>
-                    <span className="text-amber-700 shrink-0 whitespace-nowrap">{fmtUSD(r.expected_usd)}</span>
+                    <span className="text-amber-300 shrink-0 whitespace-nowrap">{fmtUSD(r.expected_usd)}</span>
                   </div>
                 ))}
               </div>
@@ -640,7 +643,7 @@ export function PlannerPage() {
             {aChosen && Number(aKits) > 0 && (
               <p className="text-xs text-muted-foreground">= {fmtUSD(Math.round(Number(aKits) * aPerKit * 100) / 100)} at vendor cost + freight</p>
             )}
-            {aMsg && <p className="text-xs text-red-600">{aMsg}</p>}
+            {aMsg && <p className="text-xs text-rose-400">{aMsg}</p>}
             <div className="space-y-1 pt-1">
               {items.map(it => (
                 <div key={it.id} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b last:border-0 pb-1">
@@ -648,11 +651,11 @@ export function PlannerPage() {
                     {it.sku_code} × {fmtNum(it.kits)}
                     <span className="text-muted-foreground"> · {it.vendor_code}</span>
                     {it.ordered_at && (
-                      <span className="ml-1.5 rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                      <span className="ml-1.5 rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                         title={`Vendor payment recorded ${fmtDateTime(it.ordered_at)} by ${it.ordered_by}`}>ordered</span>
                     )}
                     {!it.ordered_at && it.committed_adjustment_id != null && (
-                      <span className="ml-1.5 rounded bg-emerald-100 text-emerald-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                      <span className="ml-1.5 rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                         title={`In vendor demand since ${it.committed_at ? fmtDateTime(it.committed_at) : ''} — ${fmtUSD(it.committed_value_usd || 0)} pulls from net profit pre-split`}>committed</span>
                     )}
                   </span>
@@ -660,11 +663,11 @@ export function PlannerPage() {
                     {fmtUSD(it.ordered_at ? (it.ordered_value_usd ?? it.planned_value_usd) : it.planned_value_usd)}
                     {!it.ordered_at && (
                       <>
-                        <Button size="sm" variant="outline" className="h-6 px-1.5 text-[11px]" onClick={() => openOrderDialog(it)}>Mark ordered</Button>
+                        <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={() => openOrderDialog(it)}>Mark ordered</Button>
                         {/* a committed line's kits live in an adjustment now —
                             removing it goes through Products, not here */}
                         {it.committed_adjustment_id == null && (
-                          <Button size="sm" variant="ghost" className="h-6 px-1 text-[11px] text-red-600" onClick={() => removeAllocation(it)}>✕</Button>
+                          <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-xs text-rose-400" onClick={() => removeAllocation(it)}>✕</Button>
                         )}
                       </>
                     )}
@@ -714,7 +717,7 @@ export function PlannerPage() {
                 <Input placeholder="Method" value={oMethod} disabled={oSaving} onChange={e => setOMethod(e.target.value)} className="h-9 w-28" />
                 <Input placeholder="Receipt / tx ref (optional)" value={oRef} disabled={oSaving} onChange={e => setORef(e.target.value)} className="h-9 flex-1 min-w-40" />
               </div>
-              {oMsg && <p className="text-xs text-red-600">{oMsg}</p>}
+              {oMsg && <p className="text-xs text-rose-400">{oMsg}</p>}
               <div className="flex gap-2 justify-end">
                 <Button size="sm" variant="ghost" disabled={oSaving} onClick={() => setOrdering(null)}>Cancel</Button>
                 <Button size="sm" disabled={oSaving} onClick={commitOrder}>{oSaving ? 'Recording…' : 'Record payment'}</Button>

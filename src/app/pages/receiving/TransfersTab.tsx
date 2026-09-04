@@ -960,7 +960,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                         const lines = [...sums.entries()].map(([pid, cents]) => ({ product: String(pid), qty: String(cents / 100) }));
                         setFLines(lines.length === 0 ? [{ product: '', qty: '' }] : lines);
                       }}
-                      className={`rounded-lg border p-2 text-left text-xs space-y-1 max-w-full ${sel ? 'border-violet-500 ring-1 ring-violet-500 bg-violet-50' : 'hover:bg-muted/50'}`}>
+                      className={`rounded-lg border p-2 text-left text-xs space-y-1 max-w-full ${sel ? 'border-primary ring-1 ring-primary bg-cyan-400/10' : 'hover:bg-muted/50'}`}>
                       <div className="font-mono text-[10px] text-muted-foreground break-all">
                         {b.carrier.toUpperCase()} · {b.tracking_number}{b.vendor_code ? ` · ${b.vendor_code}` : ''}
                       </div>
@@ -983,7 +983,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             </div>
           )}
           {directShipsOverflow && (
-            <p className="text-[11px] text-amber-700">
+            <p className="text-[11px] text-amber-300">
               More than 1,000 eligible direct-ship lines exist in this buy — the destination list shows the first 1,000 by order number. A line you expect but don't see may be past the window; ship it from its order in Fulfillment or narrow the campaign's outstanding list first.
             </p>
           )}
@@ -1051,9 +1051,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                   </SelectContent>
                 </Select>
                 <Input placeholder="Count" value={l.qty} onChange={e => setFLines(ls => ls.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} className="h-9 w-24" />
-                {fLines.length > 1 && <Button size="sm" variant="ghost" className="h-9 px-2 text-red-600" onClick={() => setFLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>}
+                {fLines.length > 1 && <Button size="sm" variant="ghost" className="h-9 px-2 text-rose-400" onClick={() => setFLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>}
                 {l.product && fFrom && (
-                  <span className={`text-[11px] ${over ? 'text-amber-700 font-medium' : 'text-muted-foreground'}`}>
+                  <span className={`text-[11px] ${over ? 'text-amber-300 font-medium' : 'text-muted-foreground'}`}>
                     {over ? `only ${fmtNum(oh ?? 0)} on hand — sending more asks for confirmation at purchase` : `${fmtNum(oh ?? 0)} on hand`}
                   </span>
                 )}
@@ -1067,12 +1067,12 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
               ? <Button size="sm" className="h-8" onClick={recordManual} disabled={manualBusy}>{manualBusy ? 'Recording…' : 'Record transfer'}</Button>
               : <Button size="sm" className="h-8" onClick={fetchRates} disabled={ratesLoading}>{ratesLoading ? 'Fetching rates…' : 'Get rates (UPS / USPS)'}</Button>}
           </div>
-          {fMsg && <p className="text-xs text-red-600">{fMsg}</p>}
+          {fMsg && <p className="text-xs text-rose-400">{fMsg}</p>}
 
           {!manualMode && ratesResult && (
             <div className="space-y-2 border-t pt-2">
               {ratesResult.messages.length > 0 && (
-                <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs text-amber-200">
                   Shippo messages: {ratesResult.messages.join(' · ')}
                 </div>
               )}
@@ -1115,11 +1115,11 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                   {purchasing ? 'Purchasing…' : `Buy label — ${fmtUSD(ratesResult.rates.find(r => r.object_id === pickedRate)?.amount)}${testMode ? ' (TEST)' : ''}`}
                 </Button>
               )}
-              {purchaseMsg && <p className="text-xs text-red-600 break-all">{purchaseMsg}</p>}
+              {purchaseMsg && <p className="text-xs text-rose-400 break-all">{purchaseMsg}</p>}
             </div>
           )}
           {manualSuccess && (
-            <div className="rounded border border-green-300 bg-green-50 p-3 text-sm text-green-900 space-y-1">
+            <div className="rounded border border-emerald-400/30 bg-emerald-400/10 p-3 text-sm text-emerald-300 space-y-1">
               <p className="font-semibold">Transfer recorded (manual label).</p>
               <p className="text-xs">Tracking: <span className="font-mono">{manualSuccess}</span> — inventory moved; no label PDF (bought outside the app), no refund flow.</p>
               {successDirect && (
@@ -1129,7 +1129,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             </div>
           )}
           {success && (
-            <div className="rounded border border-green-300 bg-green-50 p-3 text-sm text-green-900 space-y-1">
+            <div className="rounded border border-emerald-400/30 bg-emerald-400/10 p-3 text-sm text-emerald-300 space-y-1">
               <p className="font-semibold">Label purchased and saved.</p>
               <p className="text-xs">Tracking: <span className="font-mono">{success.trackingNumber || '—'}</span></p>
               <p className="text-xs">
@@ -1137,7 +1137,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                 {' '}— public unauthenticated link, don't share.
               </p>
               {successDirect && (
-                <p className={`text-xs ${successDirect.startsWith('NOTE:') ? 'text-amber-800 font-medium' : ''}`}>{successDirect}</p>
+                <p className={`text-xs ${successDirect.startsWith('NOTE:') ? 'text-amber-200 font-medium' : ''}`}>{successDirect}</p>
               )}
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setSuccess(null); setSuccessDirect(''); }}>Done</Button>
             </div>
@@ -1161,12 +1161,12 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                   ))}
                 </div>
                 {t.direct_link_reclaimed_at && (
-                  <p className="text-[11px] text-amber-700 font-medium">
+                  <p className="text-[11px] text-amber-300 font-medium">
                     Direct-ship reservation moved to a NEWER draft — buying here is blocked; recover an already-purchased label (it will be tied to no order line) or delete this draft.
                   </p>
                 )}
                 {!t.direct_link_reclaimed_at && t.direct_order_item_id != null && t.purchase_attempted_at && (
-                  <p className="text-[11px] text-amber-700">
+                  <p className="text-[11px] text-amber-300">
                     This unfinished draft is HOLDING its customer's direct-ship line (a purchase was attempted — a label may exist at Shippo). "Check Shippo & retry" verifies: it recovers a real label, or proves none exists and releases the hold early.
                   </p>
                 )}
@@ -1176,9 +1176,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                     : <Button size="sm" variant="outline" className="h-7 text-xs" title="Checks Shippo for an already-purchased label first — recovers it if found, only buys if none exists" onClick={() => retryPurchase(t)}>Check Shippo & retry</Button>}
                   <Input placeholder="…or recover by transaction id" value={recoverTxn[t.id] || ''} onChange={e => setRecoverTxn(m => ({ ...m, [t.id]: e.target.value }))} className="h-7 w-56 text-xs font-mono" />
                   <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => recoverByTxn(t)}>Recover</Button>
-                  {!pendingFinalize[t.id] && <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" onClick={() => deleteDraft(t)}>Delete draft</Button>}
+                  {!pendingFinalize[t.id] && <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400" onClick={() => deleteDraft(t)}>Delete draft</Button>}
                 </div>
-                {draftMsg[t.id] && <p className="text-xs text-red-600 break-all">{draftMsg[t.id]}</p>}
+                {draftMsg[t.id] && <p className="text-xs text-rose-400 break-all">{draftMsg[t.id]}</p>}
               </div>
             ))}
           </CardContent>
@@ -1222,7 +1222,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                     <TableCell className="text-xs whitespace-nowrap">
                       {t.carrier} {t.servicelevel}
                       {!t.shippo_rate_id && (
-                        <span className="ml-1 rounded bg-gray-100 text-gray-700 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Label bought outside the app — tracking entered manually">manual</span>
+                        <span className="ml-1 rounded bg-slate-400/10 text-slate-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Label bought outside the app — tracking entered manually">manual</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">{fmtUSD(t.rate_amount)}</TableCell>
@@ -1235,13 +1235,13 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                         ? <span className="text-[11px] text-muted-foreground whitespace-nowrap" title="This label was not bought through Shippo here — refund it wherever it was purchased">no in-app refund</span>
                         : t.refund_status
                           ? <span className="inline-flex items-center gap-1">
-                              <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Re-check records the final outcome — a SUCCESS refund returns the items to on-hand (the label was never used)">refund {t.refund_status}</span>
+                              <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap" title="Re-check records the final outcome — a SUCCESS refund returns the items to on-hand (the label was never used)">refund {t.refund_status}</span>
                               <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Ask Shippo for this refund's real status — records it, or clears the marker if no refund exists" onClick={() => recheckRefund(t)}>Re-check</Button>
                             </span>
                           : shippoKey
                             ? <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => refund(t)}>Request refund</Button>
                             : <span className="text-[11px] text-muted-foreground whitespace-nowrap" title="Add the Shippo API token in Settings to request refunds">refund needs key</span>}
-                      {draftMsg[t.id] && <p className="text-[11px] text-red-600">{draftMsg[t.id]}</p>}
+                      {draftMsg[t.id] && <p className="text-[11px] text-rose-400">{draftMsg[t.id]}</p>}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -35,6 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { StatusPill } from '@/components/StatusPill';
+import { Led } from '@/components/Led';
 import type { RxAddress } from '@/app/pages/receiving/shared';
 
 /*
@@ -1113,7 +1114,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Ship — {order.order_number} · {order.customer_name}{testMode && <span className="ml-2 rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase align-middle">Shippo test mode</span>}</DialogTitle>
+          <DialogTitle>Ship — {order.order_number} · {order.customer_name}{testMode && <span className="ml-2 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase align-middle">Shippo test mode</span>}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           {/* ship-to, stated clearly — this is what goes on the label */}
@@ -1125,7 +1126,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             {(order.contact_phone || order.contact_email) && (
               <p className="text-xs text-muted-foreground mt-1">{[order.contact_phone, order.contact_email].filter(Boolean).join(' · ')}</p>
             )}
-            {order.customer_note && <p className="text-xs text-amber-700 mt-1">“{order.customer_note}”</p>}
+            {order.customer_note && <p className="text-xs text-amber-300 mt-1">“{order.customer_note}”</p>}
           </div>
 
           {/* items in the box */}
@@ -1147,11 +1148,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   const eff = Number(l.effective_qty), shp = Number(l.shipped_qty);
                   const state = eff > 0 && shp >= eff ? 'full' : shp > 0 ? 'part' : 'none';
                   return (
-                    <TableRow key={l.order_item_id} className={state === 'full' ? 'bg-green-50' : state === 'part' ? 'bg-amber-50' : undefined}>
+                    <TableRow key={l.order_item_id} className={state === 'full' ? 'bg-emerald-400/10' : state === 'part' ? 'bg-amber-400/5' : undefined}>
                       <TableCell className="text-xs">
                         <span className="font-medium">{l.sku_code}</span> <span className="text-muted-foreground">{l.product_name}</span>
-                        {state === 'full' && <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">shipped</span>}
-                        {state === 'part' && <span className="rounded bg-amber-100 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">{fmtNum(shp)}/{fmtNum(eff)} shipped</span>}
+                        {state === 'full' && <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">shipped</span>}
+                        {state === 'part' && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">{fmtNum(shp)}/{fmtNum(eff)} shipped</span>}
                       </TableCell>
                       <TableCell className="text-right">{fmtNum(l.effective_qty)}</TableCell>
                       <TableCell className="text-right">{fmtNum(l.shipped_qty)}{Number(l.attributed_qty) > Number(l.shipped_qty) && <span className="block text-[10px] text-muted-foreground">+{fmtNum(Number(l.attributed_qty) - Number(l.shipped_qty))} in draft</span>}</TableCell>
@@ -1165,14 +1166,14 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 })}
                 {directLines.map(l => (
                   <TableRow key={l.order_item_id} className="opacity-60">
-                    <TableCell className="text-xs"><span className="font-medium">{l.sku_code}</span> <span className="rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">direct</span></TableCell>
+                    <TableCell className="text-xs"><span className="font-medium">{l.sku_code}</span> <span className="rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">direct</span></TableCell>
                     <TableCell className="text-right">{fmtNum(l.effective_qty)}</TableCell>
                     <TableCell className="text-right text-xs" colSpan={3}>{l.direct_fulfilled_at ? 'vendor shipped' : 'vendor ships this line'}</TableCell>
                   </TableRow>
                 ))}
                 {digitalLines.map(l => (
                   <TableRow key={l.order_item_id} className="opacity-60">
-                    <TableCell className="text-xs"><span className="font-medium">{l.sku_code}</span> <span className="rounded bg-sky-100 text-sky-900 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">digital</span></TableCell>
+                    <TableCell className="text-xs"><span className="font-medium">{l.sku_code}</span> <span className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">digital</span></TableCell>
                     <TableCell className="text-right">{fmtNum(l.effective_qty)}</TableCell>
                     <TableCell className="text-right text-xs" colSpan={3}>delivered digitally — not packed</TableCell>
                   </TableRow>
@@ -1184,7 +1185,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             </Table>
           </div>
           <p className="text-xs text-muted-foreground -mt-2">
-            {isPartial ? <span className="rounded bg-blue-100 text-blue-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase mr-1">partial</span> : <span className="rounded bg-green-100 text-green-800 text-[10px] font-semibold px-1.5 py-0.5 uppercase mr-1">full</span>}
+            {isPartial ? <span className="rounded bg-blue-400/10 text-blue-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase mr-1">partial</span> : <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase mr-1">full</span>}
             Defaults ship everything remaining; lower a quantity to split the order across boxes — the rest stays in the ready queue.
           </p>
 
@@ -1197,16 +1198,20 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
               </SelectContent>
             </Select>
             {!manualMode && fromRow && !s(fromRow.phone).trim() && (
-              <span className="text-[11px] text-amber-700">No phone on "{fromRow.label}" — Shippo refuses purchases without one; add it on Receiving &gt; Addresses (UPS purchases are re-quoted without the phone so it never prints on the label).</span>
+              <span className="text-[11px] text-amber-300">No phone on "{fromRow.label}" — Shippo refuses purchases without one; add it on Receiving &gt; Addresses (UPS purchases are re-quoted without the phone so it never prints on the label).</span>
             )}
             {!manualMode && (
               <>
                 <span className="inline-flex rounded-md border overflow-hidden text-xs h-9">
-                  <button className={`px-2.5 ${packaging === 'box' ? 'bg-violet-600 text-white' : 'bg-background text-muted-foreground'}`}
-                    title="Rigid box — length, width, and height" onClick={() => setPackaging('box')}>box</button>
-                  <button className={`px-2.5 border-l ${packaging === 'polymailer' ? 'bg-violet-600 text-white' : 'bg-background text-muted-foreground'}`}
-                    title="Soft polymailer — length and width only (a nominal 1 in height is sent to Shippo)" onClick={() => setPackaging('polymailer')}>polymailer</button>
+                  <button className={`px-2.5 ${packaging === 'box' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
+                    onClick={() => setPackaging('box')}>box</button>
+                  <button className={`px-2.5 border-l ${packaging === 'polymailer' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
+                    onClick={() => setPackaging('polymailer')}>polymailer</button>
                 </span>
+                {/* was hover-only (title=) — invisible on touch (mobile audit #5) */}
+                {packaging === 'polymailer' && (
+                  <span className="text-[10px] text-muted-foreground w-full">polymailer: L × W only — a nominal 1 in height is sent to Shippo</span>
+                )}
                 <Input placeholder="L in" value={dims.length} onChange={e => setDims(d => ({ ...d, length: e.target.value }))} className="h-9 w-20" />
                 <Input placeholder="W in" value={dims.width} onChange={e => setDims(d => ({ ...d, width: e.target.value }))} className="h-9 w-20" />
                 {packaging === 'box' && (
@@ -1220,13 +1225,14 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   ? `The customer paid ${fmtUSD(insuranceFee)} shipping insurance on this order — the label is insured by default`
                   : 'This order has no customer insurance fee — tick to insure anyway'}>
                   <input type="checkbox" checked={insureBox} onChange={e => setInsureBox(e.target.checked)} />
-                  Insure{customerInsured && <span className="rounded bg-violet-100 text-violet-900 text-[10px] font-semibold px-1 py-0.5 uppercase">paid {fmtUSD(insuranceFee)}</span>}
+                  Insure{customerInsured && <span className="rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1 py-0.5 uppercase">paid {fmtUSD(insuranceFee)}</span>}
                 </label>
                 {insureBox && (
                   <>
                     <Input placeholder="Value $" value={insuredValue}
-                      onChange={e => { setInsuredValue(e.target.value); setInsuredTouched(true); }} className="h-9 w-24"
-                      title="Insured (declared) value — prefilled so Shippo's premium ($1.27 per $100 insured) matches what the customer paid; the premium is billed by Shippo with the label" />
+                      onChange={e => { setInsuredValue(e.target.value); setInsuredTouched(true); }} className="h-9 w-24" />
+                    {/* was hover-only (title=) — invisible on touch */}
+                    <span className="text-[10px] text-muted-foreground">declared value · Shippo bills $1.27 per $100 insured</span>
                     {insuredTouched && (
                       <button className="text-xs text-muted-foreground underline" onClick={() => { setInsuredTouched(false); }}>recalc</button>
                     )}
@@ -1241,7 +1247,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             </label>
           </div>
           {!manualMode && missingWeightSkus.length > 0 && (
-            <p className="text-[11px] text-amber-700">No catalog weight for {missingWeightSkus.join(', ')} — they count as 0 in the prefill; adjust the weight by hand (set weights on the Products page).</p>
+            <p className="text-[11px] text-amber-300">No catalog weight for {missingWeightSkus.join(', ')} — they count as 0 in the prefill; adjust the weight by hand (set weights on the Products page).</p>
           )}
           {/* package photos: capture BEFORE shipping; they attach to the
               shipment record the moment it exists */}
@@ -1262,7 +1268,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                       title={ph.recovered ? 'Recovered from a failed or removed shipment — will NOT attach automatically' : undefined}
                       onClick={() => setViewPhoto(ph.full)} />
                     {ph.recovered && (
-                      <button className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-amber-100 text-amber-900 border border-amber-400 px-1.5 text-[9px] leading-tight" title="Allow this photo to attach to the next shipment you create"
+                      <button className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-amber-400/10 text-amber-300 border border-amber-400 px-1.5 text-[9px] leading-tight" title="Allow this photo to attach to the next shipment you create"
                         onClick={async () => {
                           // a landing already snapshotted its pending set —
                           // flipping a recovered photo back to ordinary
@@ -1278,7 +1284,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                           else if (!res.durable) setPhotoMsg('Allowed onto the next shipment, but this device’s storage is unavailable — the change survives only while this page stays open.');
                         }}>use</button>
                     )}
-                    <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove before shipping"
+                    <button className="absolute -top-2.5 -right-2.5 rounded-full bg-background border w-6 h-6 text-xs leading-none" title="Remove before shipping"
                       onClick={async () => {
                         const durable = await stashRemove(ph.key);
                         await refreshPendingView();
@@ -1288,7 +1294,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 ))}
               </div>
             )}
-            {photoMsg && <p className="text-[11px] text-amber-700">{photoMsg}</p>}
+            {photoMsg && <p className="text-[11px] text-amber-300">{photoMsg}</p>}
           </div>
           <input ref={fileInputRef} type="file" accept="image/*" capture="environment" multiple className="hidden"
             onChange={e => onFilesPicked(e.target.files)} />
@@ -1320,10 +1326,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 )}
               </div>
               {ratesResult && ratesResult.messages.length > 0 && (
-                <div className="text-[11px] text-amber-700 space-y-0.5">{ratesResult.messages.map((m, i) => <p key={i}>{m}</p>)}</div>
+                <div className="text-[11px] text-amber-300 space-y-0.5">{ratesResult.messages.map((m, i) => <p key={i}>{m}</p>)}</div>
               )}
               {ratesResult && ratesResult.rates.length === 0 && (
-                <p className="text-xs text-red-600">No UPS/USPS rates returned{ratesResult.allRateCount > 0 ? ` (${ratesResult.allRateCount} other-carrier rates were filtered)` : ''} — check the addresses above{ratesResult.allRateCount === 0 ? ' and that UPS/USPS are enabled on your Shippo account' : ''}.</p>
+                <p className="text-xs text-rose-400">No UPS/USPS rates returned{ratesResult.allRateCount > 0 ? ` (${ratesResult.allRateCount} other-carrier rates were filtered)` : ''} — check the addresses above{ratesResult.allRateCount === 0 ? ' and that UPS/USPS are enabled on your Shippo account' : ''}.</p>
               )}
               {ratesResult && ratesResult.rates.length > 0 && (
                 <div className="border rounded-lg overflow-x-auto">
@@ -1348,30 +1354,30 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             </div>
           )}
 
-          {msg && <p className="text-sm text-red-600">{msg}</p>}
-          {purchaseMsg && <p className="text-sm text-red-600">{purchaseMsg}</p>}
+          {msg && <p className="text-sm text-rose-400">{msg}</p>}
+          {purchaseMsg && <p className="text-sm text-rose-400">{purchaseMsg}</p>}
           {success && (
-            <div className="rounded border border-green-300 bg-green-50 p-2 text-sm space-y-1">
-              <p className="font-medium text-green-900">Label purchased — tracking <span className="font-mono">{success.trackingNumber}</span></p>
+            <div className="rounded border border-emerald-400/30 bg-emerald-400/10 p-2 text-sm space-y-1">
+              <p className="font-medium text-emerald-300">Label purchased — tracking <span className="font-mono">{success.trackingNumber}</span></p>
               {success.labelUrl && <p className="text-xs"><a className="underline" href={success.labelUrl} target="_blank" rel="noreferrer">Open label (PDF)</a> <span className="text-muted-foreground">— public unauthenticated link, don't share</span></p>}
             </div>
           )}
           {manualSuccess && (
-            <div className="rounded border border-green-300 bg-green-50 p-2 text-sm">
-              <p className="font-medium text-green-900">Shipment recorded — tracking <span className="font-mono">{manualSuccess}</span> <span className="text-xs font-normal text-muted-foreground">(manual label — no in-app refund)</span></p>
+            <div className="rounded border border-emerald-400/30 bg-emerald-400/10 p-2 text-sm">
+              <p className="font-medium text-emerald-300">Shipment recorded — tracking <span className="font-mono">{manualSuccess}</span> <span className="text-xs font-normal text-muted-foreground">(manual label — no in-app refund)</span></p>
             </div>
           )}
-          {pushMsg && <p className={`text-sm ${pushMsg.startsWith('Pushed') ? 'text-green-700' : 'text-amber-700'}`}>{pushMsg}</p>}
+          {pushMsg && <p className={`text-sm ${pushMsg.startsWith('Pushed') ? 'text-emerald-300' : 'text-amber-300'}`}>{pushMsg}</p>}
 
           {/* existing shipments incl. drafts needing recovery */}
           {(drafts.length > 0 || finals.length > 0) && (
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase text-muted-foreground">Shipments on this order</p>
               {drafts.map(s => (
-                <div key={s.id} className="rounded border border-amber-300 bg-amber-50 p-2 text-xs space-y-1">
-                  <p className="font-medium text-amber-900">
+                <div key={s.id} className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs space-y-1">
+                  <p className="font-medium text-amber-200">
                     DRAFT — {s.carrier} {s.servicelevel} {fmtUSD(s.rate_amount || 0)} · {(s.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}
-                    {s.purchase_attempted_at && !s.attempt_verified_no_label_at && <span className="ml-1 rounded bg-red-100 text-red-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase">may hold a paid label</span>}
+                    {s.purchase_attempted_at && !s.attempt_verified_no_label_at && <span className="ml-1 rounded bg-rose-400/10 text-rose-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase">may hold a paid label</span>}
                   </p>
                   <div className="flex flex-wrap gap-1 items-center">
                     {pendingFinalize[s.id]
@@ -1381,7 +1387,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => recoverByTxn(s)}>Recover</Button>
                     <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={photoBusy} onClick={() => capturePhotos(s.id)}>+ photo</Button>
                     {!pendingFinalize[s.id] && (
-                      <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" onClick={() => deleteDraft(s)}>Delete draft</Button>
+                      <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400" onClick={() => deleteDraft(s)}>Delete draft</Button>
                     )}
                   </div>
                   {photos.filter(ph => Number(ph.shipment_id) === s.id).length > 0 && (
@@ -1389,13 +1395,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                       {photos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
                         <span key={ph.id} className="relative">
                           <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id, s.id)} />
-                          <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
+                          <button className="absolute -top-2.5 -right-2.5 rounded-full bg-background border w-6 h-6 text-xs leading-none" title="Remove photo (audited)"
                             onClick={() => removePhoto(ph.id, s.id)}>×</button>
                         </span>
                       ))}
                     </div>
                   )}
-                  {rowMsg[s.id] && <p className="text-red-700">{rowMsg[s.id]}</p>}
+                  {rowMsg[s.id] && <p className="text-rose-300">{rowMsg[s.id]}</p>}
                 </div>
               ))}
               {finals.map(s => (
@@ -1406,15 +1412,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}</span>
                     <span className="text-muted-foreground">{fmtUSD(s.label_cost_usd)}</span>
                     {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}
-                    {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase">refund {s.refund_status}</span>}
-                    {!s.b44_pushed_at && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase" title="The ordering app has not been told about this shipment yet">not pushed</span>}
+                    {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase">refund {s.refund_status}</span>}
+                    {!s.b44_pushed_at && s.refund_status !== 'SUCCESS' && <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase" title="The ordering app has not been told about this shipment yet"><Led className="w-1.5 h-1.5" />not pushed</span>}
                   </p>
                   {photos.filter(ph => Number(ph.shipment_id) === s.id).length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {photos.filter(ph => Number(ph.shipment_id) === s.id).map(ph => (
                         <span key={ph.id} className="relative">
                           <img src={ph.thumb_data} alt="package photo" className="h-12 w-12 object-cover rounded border cursor-pointer" onClick={() => enlargePhoto(ph.id, s.id)} />
-                          <button className="absolute -top-1.5 -right-1.5 rounded-full bg-background border w-4 h-4 text-[10px] leading-none" title="Remove photo (audited)"
+                          <button className="absolute -top-2.5 -right-2.5 rounded-full bg-background border w-6 h-6 text-xs leading-none" title="Remove photo (audited)"
                             onClick={() => removePhoto(ph.id, s.id)}>×</button>
                         </span>
                       ))}
@@ -1429,13 +1435,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                       <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => retryPushRow(s)}>Push upstream</Button>
                     )}
                     {s.shippo_transaction_id && !s.refund_status && (
-                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-red-600" onClick={() => refund(s)}>Request refund</Button>
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-rose-400" onClick={() => refund(s)}>Request refund</Button>
                     )}
                     {s.shippo_transaction_id && s.refund_status && s.refund_status !== 'SUCCESS' && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => recheckRefund(s)}>Re-check refund</Button>
                     )}
                   </div>
-                  {rowMsg[s.id] && <p className="text-amber-800">{rowMsg[s.id]}</p>}
+                  {rowMsg[s.id] && <p className="text-amber-200">{rowMsg[s.id]}</p>}
                 </div>
               ))}
             </div>

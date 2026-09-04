@@ -12,6 +12,7 @@ import {
   GitBranch,
   PackageOpen,
   Settings,
+  MoreHorizontal,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -57,18 +58,18 @@ function AppSidebar() {
   const { setOpenMobile } = useSidebar();
 
   return (
-    <Sidebar className="border-r border-border/60 bg-[#0f1117]" collapsible="icon">
+    <Sidebar className="border-r border-border/60 bg-[#0b111e]" collapsible="icon">
       <SidebarHeader className="px-4 py-3 border-b border-white/10">
         <div className="flex items-center gap-2 text-white">
-          <div className="w-7 h-7 rounded bg-violet-600 flex items-center justify-center">
-            <Package className="w-4 h-4 text-white" />
+          <div className="w-7 h-7 rounded bg-gradient-to-r from-cyan-400 to-indigo-400 flex items-center justify-center">
+            <Package className="w-4 h-4 text-[#070b16]" />
           </div>
           <span className="font-semibold text-sm tracking-tight group-data-[collapsible=icon]:hidden">
             SND GB Ops
           </span>
         </div>
       </SidebarHeader>
-      <SidebarContent className="bg-[#0f1117]">
+      <SidebarContent className="bg-[#0b111e]">
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -101,22 +102,59 @@ function AppSidebar() {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-700',
-  open: 'bg-green-100 text-green-800',
-  closed: 'bg-amber-100 text-amber-800',
-  ordering: 'bg-blue-100 text-blue-800',
-  fulfillment: 'bg-violet-100 text-violet-800',
-  complete: 'bg-gray-200 text-gray-600',
+  draft: 'bg-slate-400/10 text-slate-300',
+  open: 'bg-emerald-400/10 text-emerald-300',
+  closed: 'bg-amber-400/10 text-amber-300',
+  ordering: 'bg-blue-400/10 text-blue-300',
+  fulfillment: 'bg-violet-400/10 text-violet-300',
+  complete: 'bg-slate-400/10 text-slate-400',
 };
+
+// mobile bottom tab bar — the audit's biggest structural gap: every page was
+// two taps behind a hamburger. The four daily surfaces are one thumb-tap;
+// "More" opens the sidebar sheet for the rest. Hidden at md+ (sidebar rules).
+const BOTTOM_NAV: NavItem[] = [
+  { label: 'Home', href: '/', icon: Home },
+  { label: 'Orders', href: '/orders', icon: ShoppingCart },
+  { label: 'Fulfill', href: '/fulfillment', icon: Truck },
+  { label: 'Receive', href: '/receiving', icon: PackageOpen },
+];
+
+function BottomNav() {
+  const location = useLocation();
+  const { setOpenMobile } = useSidebar();
+  return (
+    <nav className="md:hidden flex items-stretch border-t bg-card px-2 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      {BOTTOM_NAV.map(item => {
+        const isActive = item.href === '/' ? location.pathname === '/' : location.pathname.startsWith(item.href);
+        return (
+          <Link key={item.href} to={item.href}
+            className={`flex-1 flex flex-col items-center gap-0.5 pt-1 min-h-11 ${isActive ? 'text-primary border-t-2 border-primary -mt-[7px] pt-[9px]' : 'text-muted-foreground'}`}>
+            <item.icon className="w-5 h-5" />
+            <span className={`text-[10px] ${isActive ? 'font-semibold' : 'font-medium'}`}>{item.label}</span>
+          </Link>
+        );
+      })}
+      <button className="flex-1 flex flex-col items-center gap-0.5 pt-1 min-h-11 text-muted-foreground" onClick={() => setOpenMobile(true)}>
+        <MoreHorizontal className="w-5 h-5" />
+        <span className="text-[10px] font-medium">More</span>
+      </button>
+    </nav>
+  );
+}
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const { groupBuys, groupBuy, groupBuyId, setGroupBuyId, userName } = useApp();
   return (
     <SidebarProvider defaultOpen={true}>
-      <div className="flex h-screen w-full overflow-hidden bg-background">
+      {/* h-dvh, not h-screen: 100vh on mobile browsers includes the area
+          behind the browser chrome, which overflow-hidden then makes
+          permanently unreachable (audit #1) */}
+      <div className="flex h-dvh w-full overflow-hidden bg-background">
         <AppSidebar />
         <div className="flex flex-1 flex-col min-w-0">
-          <header className="flex items-center gap-3 border-b px-4 py-2 bg-background">
+          <header className="relative overflow-hidden flex items-center gap-3 border-b px-4 py-2 bg-background">
+            <div className="scanline" aria-hidden="true"></div>
             <SidebarTrigger />
             <Separator orientation="vertical" className="h-5" />
             <div className="flex items-center gap-2">
@@ -143,6 +181,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <div className="ml-auto text-sm text-muted-foreground hidden sm:block">{userName}</div>
           </header>
           <main className="flex-1 overflow-y-auto">{children}</main>
+          <BottomNav />
         </div>
       </div>
     </SidebarProvider>
