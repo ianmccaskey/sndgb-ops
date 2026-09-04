@@ -67,6 +67,10 @@ body {
   letter-spacing: var(--tracking-normal);
   font-family: var(--font-sans);
   background: var(--background);
+  /* unstyled text (table cells, plain spans) INHERITS its color — without
+     this it falls back to browser-default black, invisible on the dark
+     ground. The light theme only ever worked by that coincidence. */
+  color: var(--foreground);
   color-scheme: dark;
 }
 
