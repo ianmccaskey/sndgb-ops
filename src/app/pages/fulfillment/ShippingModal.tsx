@@ -1047,15 +1047,32 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     if (!window.confirm(`Request a refund for this label (${fmtUSD(s.rate_amount || s.label_cost_usd)})? Carrier refunds settle over days and only succeed for UNUSED labels. When "Re-check" records SUCCESS, this shipment is VOIDED: its quantities return to remaining and the order re-enters the pack queue.`)) return;
     refundInFlight.current = true;
     try {
-      const mark = await doSetRefund({ shipment_id: s.id, refund_status: 'REQUESTING', prior_requested_at: '', actor: userName }) as unknown[] | null;
-      const markRow = Array.isArray(mark) && mark.length > 0 ? mark[0] as { requested_at?: string } : null;
+      // the marker write must NOT fail silently: before 2026-09-08 a
+      // thrown doSetRefund here escaped past the finally with no catch —
+      // no message, no marker, and the operator (Ian, order 087) was left
+      // believing the refund was requested when NOTHING had happened
+      let markRow: { requested_at?: string } | null = null;
+      try {
+        const mark = await doSetRefund({ shipment_id: s.id, refund_status: 'REQUESTING', prior_requested_at: '', actor: userName }) as unknown[] | null;
+        markRow = Array.isArray(mark) && mark.length > 0 ? mark[0] as { requested_at?: string } : null;
+      } catch (e: unknown) {
+        setRowMsg(m => ({ ...m, [s.id]: `Refund NOT requested — the request marker could not be saved (${e instanceof Error ? e.message : 'network error'}). Nothing was sent to Shippo; click Request refund again.` }));
+        return;
+      }
       if (!markRow) {
         setRowMsg(m => ({ ...m, [s.id]: 'Not sent — a refund for this label was already requested (possibly by the other admin). Use "Re-check".' }));
         reloadShipments();
         return;
       }
       if (markRow.requested_at) {
-        const hb = await doSetRefund({ shipment_id: s.id, refund_status: 'REQUESTING', prior_requested_at: markRow.requested_at, actor: userName }) as unknown[] | null;
+        let hb: unknown[] | null = null;
+        try {
+          hb = await doSetRefund({ shipment_id: s.id, refund_status: 'REQUESTING', prior_requested_at: markRow.requested_at, actor: userName }) as unknown[] | null;
+        } catch (e: unknown) {
+          setRowMsg(m => ({ ...m, [s.id]: `Refund NOT sent to Shippo — the marker heartbeat failed (${e instanceof Error ? e.message : 'network error'}). Use "Re-check" to reconcile before requesting again.` }));
+          reloadShipments();
+          return;
+        }
         if (!(Array.isArray(hb) && hb.length > 0)) {
           setRowMsg(m => ({ ...m, [s.id]: 'Not sent — this request marker was cleared or superseded while the page was idle. Use "Re-check" before requesting again.' }));
           reloadShipments();
