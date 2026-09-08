@@ -29,7 +29,10 @@ function setTransferRefund() {
           -- window learns its marker was cleared/superseded and aborts
           AND (NULLIF(TRIM({{params.refund_status}}::text), '') IS DISTINCT FROM 'REQUESTING'
                OR t.refund_status IS NULL
-               OR ({{params.prior_requested_at}}::text <> '' AND t.refund_status = 'REQUESTING' AND t.refund_requested_at = {{params.prior_requested_at}}::timestamptz))
+               -- NULLIF-guarded cast: ''::timestamptz raises 22007 whether
+               -- or not the AND short-circuits (same class as the refund
+               -- marker failure, 2026-09-08)
+               OR ({{params.prior_requested_at}}::text <> '' AND t.refund_status = 'REQUESTING' AND t.refund_requested_at = NULLIF({{params.prior_requested_at}}::text, '')::timestamptz))
           -- a CLEAR (empty status) refuses while a REQUESTING marker is
           -- fresher than 10 minutes: another session's Shippo POST may be
           -- in flight and not yet listed — wiping its marker would

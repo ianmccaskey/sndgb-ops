@@ -37,7 +37,11 @@ function setShipmentRefund() {
           -- window learns its marker was cleared/superseded and aborts
           AND (NULLIF(TRIM({{params.refund_status}}::text), '') IS DISTINCT FROM 'REQUESTING'
                OR s.refund_status IS NULL
-               OR ({{params.prior_requested_at}}::text <> '' AND s.refund_status = 'REQUESTING' AND s.refund_requested_at = {{params.prior_requested_at}}::timestamptz))
+               -- NULLIF-guarded cast: ''::timestamptz raises 22007 whether
+               -- or not the AND short-circuits (Ian's refund click on order
+               -- 087 died on exactly this); NULL::timestamptz compares
+               -- false, which is the intended no-match
+               OR ({{params.prior_requested_at}}::text <> '' AND s.refund_status = 'REQUESTING' AND s.refund_requested_at = NULLIF({{params.prior_requested_at}}::text, '')::timestamptz))
           -- a CLEAR (empty status) refuses while a REQUESTING marker is
           -- fresher than 10 minutes: another session's Shippo POST may be
           -- in flight and not yet listed — wiping its marker would

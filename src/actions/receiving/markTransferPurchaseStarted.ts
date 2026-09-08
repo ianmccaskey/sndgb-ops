@@ -113,7 +113,10 @@ function markTransferPurchaseStarted() {
           -- aborts BEFORE any money moves
           AND (t.purchase_started_at IS NULL
                OR t.purchase_started_at < now() - interval '10 minutes'
-               OR ({{params.prior_claimed_at}}::text <> '' AND t.purchase_started_at = {{params.prior_claimed_at}}::timestamptz))
+               -- NULLIF-guarded cast: ''::timestamptz raises 22007 whether
+               -- or not the AND short-circuits (same class as the refund
+               -- marker failure, 2026-09-08)
+               OR ({{params.prior_claimed_at}}::text <> '' AND t.purchase_started_at = NULLIF({{params.prior_claimed_at}}::text, '')::timestamptz))
         RETURNING t.id, t.shippo_rate_id, t.purchase_started_at
       )
       INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
