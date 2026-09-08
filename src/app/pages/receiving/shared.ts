@@ -34,8 +34,13 @@ export type Pkg = {
 export type InvRow = {
   receive_address_id: number; address_label: string; product_id: number;
   sku_code: string; product_name: string;
-  received_qty: string; transferred_qty: string; on_hand_qty: string;
+  received_qty: string; transferred_qty: string; shipped_qty: string; on_hand_qty: string;
 };
+
+// finalized order shipments' per-product depletion at a ship-from ORIGIN
+// group — the Receiving side's view of fulfillment packing (Ian
+// 2026-09-07: a box emptied into customer orders must not read "sealed")
+export type DrainRow = { receive_address_id: number; product_id: number; qty: string };
 export type TransferRow = {
   id: number; from_address_id: number; from_label: string;
   // the received package this transfer parted out (provenance; null =
@@ -88,7 +93,16 @@ export type BoxConsumption = {
   // packages with nothing left of any product
   consumedIds: Set<number>;
 };
-export function boxConsumption(packages: Pkg[], transfers: TransferRow[]): BoxConsumption {
+// Optional third input: fulfillment shipment drains. Order shipments carry
+// no box provenance (the picker was removed by design), so their depletion
+// is attributed FIFO — oldest received box of that product in the ship-from
+// GROUP first. Approximate at the box level, exact at the unit level; the
+// point is that a box emptied into customer orders stops reading "sealed"
+// on the Dashboard (Ian 2026-09-07, the KPV30 case).
+export function boxConsumption(
+  packages: Pkg[], transfers: TransferRow[],
+  fulfillment?: { drains: DrainRow[]; addresses: RxAddress[] },
+): BoxConsumption {
   const use = new Map<number, Map<number, number>>();
   const add = (pkgId: number, pid: number, cents: number) => {
     const m = use.get(pkgId) || new Map<number, number>();
@@ -127,6 +141,34 @@ export function boxConsumption(packages: Pkg[], transfers: TransferRow[]): BoxCo
       if (rem > 0 && chain.length > 0) add(Number(chain[0].id), pid, rem);
     }
   }
+  // fulfillment drains: FIFO over the group's received boxes, applied on
+  // top of the transfer-specific attribution above. Membership: a box at
+  // any address whose transfer-origin is the drain's ship-from id.
+  if (fulfillment && fulfillment.drains.length > 0) {
+    const originOf = new Map(fulfillment.addresses.map(a =>
+      [Number(a.id), Number(a.transfer_origin_id ?? a.id)]));
+    for (const d of fulfillment.drains) {
+      const origin = Number(d.receive_address_id);
+      const pid = Number(d.product_id);
+      let rem = Math.round(Number(d.qty) * 100);
+      const boxes = packages
+        .filter(p => p.received_at
+          && originOf.get(Number(p.receive_address_id)) === origin
+          && (p.items || []).some(i => Number(i.product_id) === pid))
+        .sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)));
+      for (const box of boxes) {
+        if (rem <= 0) break;
+        const cap = (box.items || []).filter(i => Number(i.product_id) === pid)
+          .reduce((s, i) => s + Math.round(Number(i.qty) * 100), 0);
+        const cur = use.get(Number(box.id))?.get(pid) || 0;
+        const take = Math.min(rem, Math.max(0, cap - cur));
+        if (take > 0) { add(Number(box.id), pid, take); rem -= take; }
+      }
+      // excess beyond every box's recorded contents is dropped: the units
+      // physically left regardless; inventory (the view) stays the ledger
+    }
+  }
+
   const remainingByPkg = new Map<number, Map<number, number>>();
   const consumedIds = new Set<number>();
   for (const p of packages) {

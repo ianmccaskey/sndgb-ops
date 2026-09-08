@@ -21,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { rows } from '@/lib/rows';
 import { productChipClass, boxConsumption } from './shared';
-import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCandidate } from './shared';
+import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCandidate, DrainRow } from './shared';
 
 type ItemLine = { product: string; qty: string };
 
@@ -40,9 +40,9 @@ const toShippoAddress = (a: RxAddress | CustomDest): ShippoAddress => ({
 type CustomDest = { name: string; street1: string; street2: string; city: string; state: string; zip: string; country: string; phone: string; email: string };
 const EMPTY_DEST: CustomDest = { name: '', street1: '', street2: '', city: '', state: '', zip: '', country: 'US', phone: '', email: '' };
 
-export function TransfersTab({ addresses, destinations, products, packages, transfers, inventory, shippoKey, shippoHttp, testMode, reloadTransfers, reloadDestinations, partOutSeed, onPartOutSeedConsumed }: {
+export function TransfersTab({ addresses, destinations, products, packages, transfers, drains, inventory, shippoKey, shippoHttp, testMode, reloadTransfers, reloadDestinations, partOutSeed, onPartOutSeedConsumed }: {
   addresses: RxAddress[]; destinations: RxAddress[]; products: CatalogProduct[]; packages: Pkg[];
-  transfers: TransferRow[]; inventory: InvRow[]; shippoKey: string; shippoHttp: ShippoHttp; testMode: boolean;
+  transfers: TransferRow[]; drains: DrainRow[]; inventory: InvRow[]; shippoKey: string; shippoHttp: ShippoHttp; testMode: boolean;
   reloadTransfers: () => void; reloadDestinations: () => void;
   // "Part out" on a Receiving package card jumps here with the box
   // preselected (from = its transfer-origin group)
@@ -867,7 +867,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // (which transfers emptied which boxes) is the shared boxConsumption
   // in ./shared — the Dashboard and History tabs read the same math.
   const { remainingByPkg, consumedIds } = React.useMemo(
-    () => boxConsumption(packages, transfers), [packages, transfers]);
+    () => boxConsumption(packages, transfers, { drains, addresses }), [packages, transfers, drains, addresses]);
   const boxRemaining = React.useCallback(
     (p: Pkg) => remainingByPkg.get(Number(p.id)) || new Map<number, number>(), [remainingByPkg]);
   const boxesAtFrom = packages.filter(p =>

@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { productChipClass, boxConsumption } from './shared';
-import type { RxAddress, Pkg, TransferRow } from './shared';
+import type { RxAddress, Pkg, TransferRow, DrainRow } from './shared';
 
 /**
  * The auditable receiving record (Ian 2026-08-31): EVERY received
@@ -14,14 +14,14 @@ import type { RxAddress, Pkg, TransferRow } from './shared';
  * which shows only what's physically on hand). Original contents are
  * shown as received; the Status column says what has since happened.
  */
-export function HistoryTab({ packages, transfers, addresses }: {
-  packages: Pkg[]; transfers: TransferRow[]; addresses: RxAddress[];
+export function HistoryTab({ packages, transfers, drains, addresses }: {
+  packages: Pkg[]; transfers: TransferRow[]; drains: DrainRow[]; addresses: RxAddress[];
 }) {
   const [addrFilter, setAddrFilter] = useState('all');
   const [q, setQ] = useState('');
 
   const { remainingByPkg, consumedIds } = React.useMemo(
-    () => boxConsumption(packages, transfers), [packages, transfers]);
+    () => boxConsumption(packages, transfers, { drains, addresses }), [packages, transfers, drains, addresses]);
 
   const received = packages
     .filter(p => p.received_at)

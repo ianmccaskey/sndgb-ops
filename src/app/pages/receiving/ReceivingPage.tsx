@@ -4,6 +4,7 @@ import listReceiveAddresses from '@/actions/receiving/listReceiveAddresses';
 import listInboundPackages from '@/actions/receiving/listInboundPackages';
 import listAddressInventory from '@/actions/receiving/listAddressInventory';
 import listTransfers from '@/actions/receiving/listTransfers';
+import listShipmentDrains from '@/actions/receiving/listShipmentDrains';
 import listDestinations from '@/actions/receiving/listDestinations';
 import listProducts from '@/actions/products/listProducts';
 import listShippingVendors from '@/actions/receiving/listShippingVendors';
@@ -20,7 +21,7 @@ import { TransfersTab } from './TransfersTab';
 import { HistoryTab } from './HistoryTab';
 import { AddressesTab } from './AddressesTab';
 import { ImportTab } from './ImportTab';
-import type { RxAddress, Pkg, InvRow, TransferRow, CatalogProduct, VendorRow } from './shared';
+import type { RxAddress, Pkg, InvRow, TransferRow, CatalogProduct, VendorRow, DrainRow } from './shared';
 
 /*
  * Receiving: what's coming, where it is, and whether it was transferred.
@@ -42,6 +43,8 @@ export function ReceivingPage() {
   const [rawPackages, , , reloadPackages] = useLoadAction(listInboundPackages, [], {});
   const [rawInventory, , , reloadInventory] = useLoadAction(listAddressInventory, [], {});
   const [rawTransfers, , , reloadTransfers] = useLoadAction(listTransfers, [], {});
+  // fulfillment packing depletion for the box display (FIFO in boxConsumption)
+  const [rawDrains] = useLoadAction(listShipmentDrains, [], {});
   const [rawDestinations, , , reloadDestinations] = useLoadAction(listDestinations, [], {});
   const [rawProducts] = useLoadAction(listProducts, [], {});
   // only vendors that actually ship product IN THE SELECTED CAMPAIGN (no
@@ -71,6 +74,7 @@ export function ReceivingPage() {
     ...t, tracking_number: t.tracking_number == null ? null : dbText(t.tracking_number),
   })), [rawTransfers]);
   const destinations = rows<RxAddress>(rawDestinations);
+  const drains = rows<DrainRow>(rawDrains);
   const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active), [rawProducts]);
   const vendors = rows<VendorRow>(rawVendors);
 
@@ -178,7 +182,7 @@ export function ReceivingPage() {
 
         <TabsContent value="dashboard" className="mt-4">
           <DashboardTab
-            addresses={addresses} packages={packages} transfers={transfers} products={products} vendors={vendors} vendorsReady={vendorsReady}
+            addresses={addresses} packages={packages} transfers={transfers} drains={drains} products={products} vendors={vendors} vendorsReady={vendorsReady}
             refreshOne={refreshOne} refreshAll={refreshAll} refreshingIds={refreshingIds}
             refreshAllProgress={refreshAllProgress} afterChange={afterPackageChange}
             hasKey={!!shippoKey} testMode={testMode} onPartOut={partOut}
@@ -190,14 +194,14 @@ export function ReceivingPage() {
         <TabsContent value="transfers" className="mt-4">
           <TransfersTab
             addresses={addresses} destinations={destinations} products={products} packages={packages}
-            transfers={transfers} inventory={inventory} shippoKey={shippoKey} shippoHttp={shippoHttp} testMode={testMode}
+            transfers={transfers} drains={drains} inventory={inventory} shippoKey={shippoKey} shippoHttp={shippoHttp} testMode={testMode}
             reloadTransfers={() => { reloadTransfers(); reloadInventory(); }}
             reloadDestinations={reloadDestinations}
             partOutSeed={partOutSeed} onPartOutSeedConsumed={() => setPartOutSeed(null)}
           />
         </TabsContent>
         <TabsContent value="history" className="mt-4">
-          <HistoryTab packages={packages} transfers={transfers} addresses={addresses} />
+          <HistoryTab packages={packages} transfers={transfers} drains={drains} addresses={addresses} />
         </TabsContent>
         <TabsContent value="addresses" className="mt-4">
           <AddressesTab

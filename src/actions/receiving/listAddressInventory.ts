@@ -18,6 +18,7 @@ function listAddressInventory() {
              inv.product_id, pr.sku_code, pr.name AS product_name,
              SUM(inv.received_qty) AS received_qty,
              SUM(inv.transferred_qty) AS transferred_qty,
+             SUM(inv.shipped_qty) AS shipped_qty,
              SUM(inv.on_hand_qty) AS on_hand_qty
       FROM v_address_inventory inv
       JOIN receive_addresses ra ON ra.id = inv.receive_address_id

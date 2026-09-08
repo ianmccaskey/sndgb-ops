@@ -21,7 +21,7 @@ import { openPrinterPage, niimbotSupported } from '@/lib/niimbotPrint';
 import type { PackageLabelData } from '@/lib/niimbotPrint';
 import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday, boxConsumption } from './shared';
 import { Led } from '@/components/Led';
-import type { RxAddress, Pkg, CatalogProduct, VendorRow, TransferRow } from './shared';
+import type { RxAddress, Pkg, CatalogProduct, VendorRow, TransferRow, DrainRow } from './shared';
 
 const CARRIERS = [
   { token: 'usps', label: 'USPS' },
@@ -35,8 +35,8 @@ const CARRIERS = [
 
 type ItemLine = { product: string; qty: string };
 
-export function DashboardTab({ addresses, packages, transfers, products, vendors, vendorsReady, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode, onPartOut }: {
-  addresses: RxAddress[]; packages: Pkg[]; transfers: TransferRow[]; products: CatalogProduct[]; vendors: VendorRow[]; vendorsReady: boolean;
+export function DashboardTab({ addresses, packages, transfers, drains, products, vendors, vendorsReady, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode, onPartOut }: {
+  addresses: RxAddress[]; packages: Pkg[]; transfers: TransferRow[]; drains: DrainRow[]; products: CatalogProduct[]; vendors: VendorRow[]; vendorsReady: boolean;
   refreshOne: (p: Pkg) => Promise<string | null>;
   refreshAll: () => Promise<void>;
   refreshingIds: Set<number>;
@@ -609,7 +609,7 @@ export function DashboardTab({ addresses, packages, transfers, products, vendors
   // tab keeps the auditable record. Partially parted boxes stay, showing
   // their REMAINING contents.
   const { remainingByPkg, consumedIds } = React.useMemo(
-    () => boxConsumption(packages, transfers), [packages, transfers]);
+    () => boxConsumption(packages, transfers, { drains, addresses }), [packages, transfers, drains, addresses]);
   const visible = packages.filter(p =>
     pkgMatchesProduct(p) && pkgMatchesStatus(p)
     && !(p.received_at && consumedIds.has(Number(p.id)))
