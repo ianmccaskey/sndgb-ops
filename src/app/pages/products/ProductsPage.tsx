@@ -489,38 +489,93 @@ export function ProductsPage() {
                 {cEditing ? 'Edit campaign product' : 'Add / update campaign product'}
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2">
-              <div className="flex flex-wrap gap-2">
-                <Select value={cProduct} onValueChange={setCProduct} disabled={cEditing != null}>
-                  <SelectTrigger className="h-9 w-48"><SelectValue placeholder="Product" /></SelectTrigger>
-                  <SelectContent>
-                    {products.filter(p => p.active).map(p => <SelectItem key={p.id} value={String(p.id)}>{p.sku_code}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Select value={cVendor} onValueChange={setCVendor}>
-                  <SelectTrigger className="h-9 w-40"><SelectValue placeholder="Vendor" /></SelectTrigger>
-                  <SelectContent>
-                    {vendors.filter(v => v.active).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Input placeholder="Unit cost $" value={cCost} onChange={e => setCCost(e.target.value)} disabled={cTierQty.trim() !== '' && cTierPrice.trim() !== ''} className="h-9 w-28" />
-                <Input placeholder="GB price $ (to customer)" value={cPrice} onChange={e => setCPrice(e.target.value)} className="h-9 w-44" />
-                <Input placeholder="Target MOQ" value={cMoq} onChange={e => setCMoq(e.target.value)} className="h-9 w-28" />
-                <Input placeholder="Testing $" value={cTesting} onChange={e => setCTesting(e.target.value)} className="h-9 w-24" />
-                <Input placeholder="Freight $/kit" value={cFreight} onChange={e => setCFreight(e.target.value)} className="h-9 w-24" />
-                <Input placeholder="Direct freight $/box" value={cDirectFreight} onChange={e => setCDirectFreight(e.target.value)} className="h-9 w-32" title="Internal cost per box the vendor charges to ship a direct-ship line to the customer (0 = none)" />
-                <Input placeholder="Box size (kits)" value={cDirectBox} onChange={e => setCDirectBox(e.target.value)} className="h-9 w-28" title="Kits per box — a 40-kit direct line in one order needs 2 boxes of 30" />
-                <Input placeholder="Split fee $" value={cSplitFee} onChange={e => setCSplitFee(e.target.value)} className="h-9 w-24" title="Fee the ordering app charges a customer for a half kit (0 = halves not offered)" />
-                <Input placeholder="Max available (optional)" value={cCap} onChange={e => setCCap(e.target.value)} className="h-9 w-44" />
-                <Input placeholder="Cost tier $ (optional)" value={cTierPrice} onChange={e => setCTierPrice(e.target.value)} className="h-9 w-36" />
-                <Input placeholder="…per N units" value={cTierQty} onChange={e => setCTierQty(e.target.value)} className="h-9 w-28" />
+            <CardContent className="space-y-3">
+              {/* every field carries a PERSISTENT label — the old form was
+                  placeholder-as-label across 12 fields, so any filled form
+                  became a memory test (Ian 2026-09-12); the three title=
+                  tooltips are now visible captions (invisible on touch) */}
+              <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Product</p>
+                  <Select value={cProduct} onValueChange={setCProduct} disabled={cEditing != null}>
+                    <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                    <SelectContent>
+                      {products.filter(p => p.active).map(p => <SelectItem key={p.id} value={String(p.id)}>{p.sku_code}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Vendor</p>
+                  <Select value={cVendor} onValueChange={setCVendor}>
+                    <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                    <SelectContent>
+                      {vendors.filter(v => v.active).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Unit cost $</p>
+                  <Input inputMode="decimal" value={cCost} onChange={e => setCCost(e.target.value)} disabled={cTierQty.trim() !== '' && cTierPrice.trim() !== ''} className="h-9 w-full" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">GB price $ · to customer</p>
+                  <Input inputMode="decimal" value={cPrice} onChange={e => setCPrice(e.target.value)} className="h-9 w-full" />
+                </div>
               </div>
               {cTierQty.trim() !== '' && cTierPrice.trim() !== '' && Number(cTierQty) > 0
                 ? <p className="text-xs text-muted-foreground">Tiered vendor cost: ${Number(cTierPrice).toFixed(2)} per {cTierQty} units (unit cost ignored). GB price ${cPrice || '0'} to customer.</p>
                 : (cCost !== '' && cPrice !== '' && Number(cPrice) >= Number(cCost) && (
                     <p className="text-xs text-muted-foreground">Margin per unit: ${(Number(cPrice) - Number(cCost)).toFixed(2)}</p>
                   ))}
-              <p className="text-xs text-muted-foreground">Max available caps a limited item (e.g. a COA product at 25) — the Available column flags SOLD OUT at that demand. Cost tier is for stepped vendor pricing (e.g. $50 per 4 units); fill both tier fields to use it and unit cost is ignored.</p>
+
+              <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Target MOQ</p>
+                  <Input inputMode="numeric" value={cMoq} onChange={e => setCMoq(e.target.value)} className="h-9 w-full" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Max available</p>
+                  <Input inputMode="numeric" placeholder="no cap" value={cCap} onChange={e => setCCap(e.target.value)} className="h-9 w-full" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Testing $</p>
+                  <Input inputMode="decimal" value={cTesting} onChange={e => setCTesting(e.target.value)} className="h-9 w-full" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Freight $ / kit</p>
+                  <Input inputMode="decimal" value={cFreight} onChange={e => setCFreight(e.target.value)} className="h-9 w-full" />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Cost tier · stepped vendor pricing (optional)</p>
+                <div className="flex items-center gap-2">
+                  <Input inputMode="decimal" placeholder="tier $" value={cTierPrice} onChange={e => setCTierPrice(e.target.value)} className="h-9 w-28" />
+                  <span className="text-xs text-muted-foreground">per</span>
+                  <Input inputMode="numeric" placeholder="N units" value={cTierQty} onChange={e => setCTierQty(e.target.value)} className="h-9 w-24" />
+                  <span className="text-[10px] text-muted-foreground">fill both and unit cost is ignored (e.g. $50 per 4)</span>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Direct ship · vendor → customer</p>
+                <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+                  <div className="space-y-0.5">
+                    <Input inputMode="decimal" value={cDirectFreight} onChange={e => setCDirectFreight(e.target.value)} className="h-9 w-full" />
+                    <p className="text-[10px] text-muted-foreground">freight $ / box — vendor's charge to ship a direct line (0 = none)</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <Input inputMode="numeric" value={cDirectBox} onChange={e => setCDirectBox(e.target.value)} className="h-9 w-full" />
+                    <p className="text-[10px] text-muted-foreground">box size, kits — a 40-kit line with 30/box needs 2 boxes</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <Input inputMode="decimal" value={cSplitFee} onChange={e => setCSplitFee(e.target.value)} className="h-9 w-full" />
+                    <p className="text-[10px] text-muted-foreground">split fee $ — charged for a half kit (0 = halves not offered)</p>
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground">Max available caps a limited item (e.g. a COA product at 25) — the Available column flags SOLD OUT at that demand.</p>
               {cError && <p className="text-sm text-rose-400">{cError}</p>}
               <div className="flex gap-2">
                 <Button size="sm" onClick={saveCampaignProduct}>{cEditing ? 'Save changes' : 'Save'}</Button>
