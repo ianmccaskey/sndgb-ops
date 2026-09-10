@@ -142,7 +142,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [weight, setWeight] = useState('');
   const [weightTouched, setWeightTouched] = useState(false);
   const [shipFrom, setShipFrom] = useState('');
-  const [box, setBox] = useState('');
+  // (the free-text "box name" field was removed 2026-09-11 per Ian: it was
+  // saved but never displayed anywhere, and Dimensions already captures the
+  // carton in structured form. The shipments.box column stays; '' is sent.)
   const [note, setNote] = useState('');
   const [msg, setMsg] = useState('');
   const [ratesLoading, setRatesLoading] = useState(false);
@@ -772,7 +774,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           carrier: buyRate.provider, servicelevel: buyRate.servicelevel?.name || buyRate.servicelevel?.token || '',
           rate_amount: buyRate.amount, rate_currency: buyRate.currency, shippo_rate_id: buyRate.object_id,
           items: JSON.stringify(chosen.map(c => ({ order_item_id: String(c.line.order_item_id), qty: c.qty }))),
-          box: box.trim(), note: note.trim(), actor: userName,
+          box: '', note: note.trim(), actor: userName,
         }) as unknown[] | null;
         const row = Array.isArray(res) && res.length > 0 ? res[0] as { id: string; claimed_at?: string } : null;
         draftId = row ? Number(row.id) : null;
@@ -874,7 +876,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           expected_to: JSON.stringify(expectedTo),
           carrier, tracking_number: mTracking.trim(), cost: mCost.trim(),
           items: JSON.stringify(chosen.map(c => ({ order_item_id: String(c.line.order_item_id), qty: c.qty }))),
-          box: box.trim(), note: note.trim(), actor: userName,
+          box: '', note: note.trim(), actor: userName,
         }) as unknown[] | null;
         const row = Array.isArray(res) && res.length > 0 ? res[0] as { id: string } : null;
         recordedId = row ? Number(row.id) : null;
@@ -1268,24 +1270,21 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{manualMode ? 'Box name' : 'Packaging'}</p>
-                <div className="flex items-center gap-2">
-                  {!manualMode && (
-                    <span className="inline-flex rounded-md border overflow-hidden text-xs h-9 shrink-0">
-                      <button className={`px-2.5 ${packaging === 'box' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
-                        onClick={() => setPackaging('box')}>box</button>
-                      <button className={`px-2.5 border-l ${packaging === 'polymailer' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
-                        onClick={() => setPackaging('polymailer')}>polymailer</button>
-                    </span>
+              {!manualMode && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Packaging</p>
+                  <span className="inline-flex rounded-md border overflow-hidden text-xs h-9">
+                    <button className={`px-3 ${packaging === 'box' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
+                      onClick={() => setPackaging('box')}>box</button>
+                    <button className={`px-3 border-l ${packaging === 'polymailer' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
+                      onClick={() => setPackaging('polymailer')}>polymailer</button>
+                  </span>
+                  {/* was hover-only (title=) — invisible on touch (mobile audit #5) */}
+                  {packaging === 'polymailer' && (
+                    <p className="text-[10px] text-muted-foreground">polymailer: L × W only — a nominal 1 in height is sent to Shippo</p>
                   )}
-                  <Input placeholder="Box (e.g. 8x6x4)" value={box} onChange={e => setBox(e.target.value)} className="h-9 flex-1 min-w-0" />
                 </div>
-                {/* was hover-only (title=) — invisible on touch (mobile audit #5) */}
-                {!manualMode && packaging === 'polymailer' && (
-                  <p className="text-[10px] text-muted-foreground">polymailer: L × W only — a nominal 1 in height is sent to Shippo</p>
-                )}
-              </div>
+              )}
             </div>
             {!manualMode && fromRow && !s(fromRow.phone).trim() && (
               <p className="text-[11px] text-amber-300">No phone on "{fromRow.label}" — Shippo refuses purchases without one; add it on Receiving &gt; Addresses (UPS purchases are re-quoted without the phone so it never prints on the label).</p>
