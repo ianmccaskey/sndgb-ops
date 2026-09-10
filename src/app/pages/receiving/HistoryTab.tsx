@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Skeleton } from '@/components/ui/skeleton';
 import { productChipClass, boxConsumption } from './shared';
 import type { RxAddress, Pkg, TransferRow, DrainRow } from './shared';
 
@@ -14,8 +15,8 @@ import type { RxAddress, Pkg, TransferRow, DrainRow } from './shared';
  * which shows only what's physically on hand). Original contents are
  * shown as received; the Status column says what has since happened.
  */
-export function HistoryTab({ packages, transfers, drains, addresses }: {
-  packages: Pkg[]; transfers: TransferRow[]; drains: DrainRow[]; addresses: RxAddress[];
+export function HistoryTab({ packages, transfers, drains, addresses, loading }: {
+  packages: Pkg[]; transfers: TransferRow[]; drains: DrainRow[]; addresses: RxAddress[]; loading: boolean;
 }) {
   const [addrFilter, setAddrFilter] = useState('all');
   const [q, setQ] = useState('');
@@ -105,7 +106,12 @@ export function HistoryTab({ packages, transfers, drains, addresses }: {
                   </TableRow>
                 );
               })}
-              {received.length === 0 && (
+              {loading && received.length === 0 && (
+                <TableRow><TableCell colSpan={6} className="py-4">
+                  <Skeleton className="h-5 w-full mb-2" /><Skeleton className="h-5 w-2/3" />
+                </TableCell></TableRow>
+              )}
+              {!loading && received.length === 0 && (
                 <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-6 text-sm">Nothing received{q || addrFilter !== 'all' ? ' matching the filters' : ' yet'}.</TableCell></TableRow>
               )}
             </TableBody>

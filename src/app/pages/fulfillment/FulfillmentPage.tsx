@@ -28,6 +28,7 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@
 import { fmtNum } from '@/lib/fmt';
 import { StatusPill } from '@/components/StatusPill';
 import { Led } from '@/components/Led';
+import { Skeleton } from '@/components/ui/skeleton';
 import { productChipClass } from '@/app/pages/receiving/shared';
 import type { RxAddress } from '@/app/pages/receiving/shared';
 import { ShippingModal } from './ShippingModal';
@@ -72,7 +73,7 @@ export function FulfillmentPage() {
   };
   const productIdsCsv = Array.from(filterIds).sort((a, b) => a - b).join(',');
   const enabled = groupBuyId != null;
-  const [raw, , , reload] = useLoadAction(listFulfillmentQueue,
+  const [raw, queueLoading, , reload] = useLoadAction(listFulfillmentQueue,
     [groupBuyId, stage, productIdsCsv, filterMode],
     { group_buy_id: groupBuyId, stage, product_ids: productIdsCsv, filter_mode: filterMode },
     { enabled });
@@ -933,7 +934,14 @@ export function FulfillmentPage() {
             {r.tracking_numbers && <p className="text-[11px] font-mono text-muted-foreground break-all">{r.tracking_numbers}</p>}
           </div>
         ))}
-        {visibleQueue.length === 0 && (
+        {/* loading must never wear the empty state's clothes — "Nothing in
+            this stage" while the queue is still fetching reads as truth */}
+        {queueLoading && visibleQueue.length === 0 && (
+          <div className="px-3 py-4 space-y-2">
+            <Skeleton className="h-5 w-full" /><Skeleton className="h-5 w-3/4" /><Skeleton className="h-5 w-5/6" />
+          </div>
+        )}
+        {!queueLoading && visibleQueue.length === 0 && (
           <p className="text-center text-muted-foreground py-6 text-sm">{searchQ ? `No order in this stage matches “${search.trim()}” — try the All tab, or clear the search.` : showFlaggedOnly && upstreamLive ? 'No flagged orders in this stage — "Show all orders" in the banner restores the full list.' : `Nothing in this stage${filterIds.size > 0 ? ' matching the product filter' : ''}.`}</p>
         )}
       </div>
@@ -1016,7 +1024,13 @@ export function FulfillmentPage() {
               </TableRow>
             ))}
             {visibleQueue.length === 0 && (
-              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">{searchQ ? `No order in this stage matches “${search.trim()}” — try the All tab, or clear the search.` : showFlaggedOnly && upstreamLive ? 'No flagged orders in this stage — "Show all orders" in the banner restores the full list.' : `Nothing in this stage${filterIds.size > 0 ? ' matching the product filter (filters match REMAINING work to pack)' : ''}.`}</TableCell></TableRow>
+              queueLoading ? (
+                <TableRow><TableCell colSpan={8} className="py-4">
+                  <Skeleton className="h-5 w-full mb-2" /><Skeleton className="h-5 w-3/4 mb-2" /><Skeleton className="h-5 w-5/6" />
+                </TableCell></TableRow>
+              ) : (
+                <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">{searchQ ? `No order in this stage matches “${search.trim()}” — try the All tab, or clear the search.` : showFlaggedOnly && upstreamLive ? 'No flagged orders in this stage — "Show all orders" in the banner restores the full list.' : `Nothing in this stage${filterIds.size > 0 ? ' matching the product filter (filters match REMAINING work to pack)' : ''}.`}</TableCell></TableRow>
+              )
             )}
           </TableBody>
         </Table>

@@ -1146,8 +1146,47 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             {order.customer_note && <p className="text-xs text-amber-300 mt-1">“{order.customer_note}”</p>}
           </div>
 
-          {/* items in the box */}
-          <div className="border rounded-lg overflow-x-auto">
+          {/* items in the box — phones get stacked rows: the qty input was
+              the 5th column of a horizontally-scrolling table, i.e. the core
+              packing action required sideways scrolling inside a vertically
+              scrolling modal (UX audit P0, 2026-09-10) */}
+          <div className="md:hidden border rounded-lg divide-y divide-border/60">
+            {packLines.map(l => {
+              const eff = Number(l.effective_qty), shp = Number(l.shipped_qty);
+              const state = eff > 0 && shp >= eff ? 'full' : shp > 0 ? 'part' : 'none';
+              return (
+                <div key={l.order_item_id} className={`flex items-center gap-2 p-2.5 ${state === 'full' ? 'bg-emerald-400/10' : state === 'part' ? 'bg-amber-400/5' : ''}`}>
+                  <div className="min-w-0">
+                    <span className="text-xs font-medium">{l.sku_code}</span>
+                    {state === 'full' && <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">shipped</span>}
+                    {state === 'part' && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase ml-1">{fmtNum(shp)}/{fmtNum(eff)}</span>}
+                    <span className="block text-[11px] text-muted-foreground">remaining {fmtNum(l.remaining_qty)} of {fmtNum(l.effective_qty)}</span>
+                  </div>
+                  <Input value={qtys[Number(l.order_item_id)] ?? ''} inputMode="decimal"
+                    className="ml-auto h-11 w-20 shrink-0 text-right"
+                    onChange={e => setQtys(q => ({ ...q, [Number(l.order_item_id)]: e.target.value }))} />
+                </div>
+              );
+            })}
+            {directLines.map(l => (
+              <div key={l.order_item_id} className="flex items-center gap-2 p-2.5 opacity-60 text-xs">
+                <span className="font-medium">{l.sku_code}</span>
+                <span className="rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">direct</span>
+                <span className="ml-auto text-muted-foreground">{l.direct_fulfilled_at ? 'vendor shipped' : 'vendor ships this line'}</span>
+              </div>
+            ))}
+            {digitalLines.map(l => (
+              <div key={l.order_item_id} className="flex items-center gap-2 p-2.5 opacity-60 text-xs">
+                <span className="font-medium">{l.sku_code}</span>
+                <span className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">digital</span>
+                <span className="ml-auto text-muted-foreground">delivered digitally</span>
+              </div>
+            ))}
+            {packLines.length === 0 && (
+              <p className="text-center text-muted-foreground text-sm py-4">Nothing left to pack on this order.</p>
+            )}
+          </div>
+          <div className="hidden md:block border rounded-lg overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>

@@ -21,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { rows } from '@/lib/rows';
 import { productChipClass, boxConsumption } from './shared';
+import { Skeleton } from '@/components/ui/skeleton';
 import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCandidate, DrainRow } from './shared';
 
 type ItemLine = { product: string; qty: string };
@@ -40,9 +41,9 @@ const toShippoAddress = (a: RxAddress | CustomDest): ShippoAddress => ({
 type CustomDest = { name: string; street1: string; street2: string; city: string; state: string; zip: string; country: string; phone: string; email: string };
 const EMPTY_DEST: CustomDest = { name: '', street1: '', street2: '', city: '', state: '', zip: '', country: 'US', phone: '', email: '' };
 
-export function TransfersTab({ addresses, destinations, products, packages, transfers, drains, inventory, shippoKey, shippoHttp, testMode, reloadTransfers, reloadDestinations, partOutSeed, onPartOutSeedConsumed }: {
+export function TransfersTab({ addresses, destinations, products, packages, transfers, drains, transfersLoading, inventory, shippoKey, shippoHttp, testMode, reloadTransfers, reloadDestinations, partOutSeed, onPartOutSeedConsumed }: {
   addresses: RxAddress[]; destinations: RxAddress[]; products: CatalogProduct[]; packages: Pkg[];
-  transfers: TransferRow[]; drains: DrainRow[]; inventory: InvRow[]; shippoKey: string; shippoHttp: ShippoHttp; testMode: boolean;
+  transfers: TransferRow[]; drains: DrainRow[]; transfersLoading: boolean; inventory: InvRow[]; shippoKey: string; shippoHttp: ShippoHttp; testMode: boolean;
   reloadTransfers: () => void; reloadDestinations: () => void;
   // "Part out" on a Receiving package card jumps here with the box
   // preselected (from = its transfer-origin group)
@@ -1245,7 +1246,12 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                     </TableCell>
                   </TableRow>
                 ))}
-                {finalized.length === 0 && (
+                {transfersLoading && finalized.length === 0 && (
+                  <TableRow><TableCell colSpan={8} className="py-4">
+                    <Skeleton className="h-5 w-full mb-2" /><Skeleton className="h-5 w-2/3" />
+                  </TableCell></TableRow>
+                )}
+                {!transfersLoading && finalized.length === 0 && (
                   <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6 text-sm">No transfers yet.</TableCell></TableRow>
                 )}
               </TableBody>

@@ -21,6 +21,7 @@ import { openPrinterPage, niimbotSupported } from '@/lib/niimbotPrint';
 import type { PackageLabelData } from '@/lib/niimbotPrint';
 import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday, boxConsumption } from './shared';
 import { Led } from '@/components/Led';
+import { Skeleton } from '@/components/ui/skeleton';
 import type { RxAddress, Pkg, CatalogProduct, VendorRow, TransferRow, DrainRow } from './shared';
 
 const CARRIERS = [
@@ -35,8 +36,8 @@ const CARRIERS = [
 
 type ItemLine = { product: string; qty: string };
 
-export function DashboardTab({ addresses, packages, transfers, drains, products, vendors, vendorsReady, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode, onPartOut }: {
-  addresses: RxAddress[]; packages: Pkg[]; transfers: TransferRow[]; drains: DrainRow[]; products: CatalogProduct[]; vendors: VendorRow[]; vendorsReady: boolean;
+export function DashboardTab({ addresses, packages, transfers, drains, loading, products, vendors, vendorsReady, refreshOne, refreshAll, refreshingIds, refreshAllProgress, afterChange, hasKey, testMode, onPartOut }: {
+  addresses: RxAddress[]; packages: Pkg[]; transfers: TransferRow[]; drains: DrainRow[]; loading: boolean; products: CatalogProduct[]; vendors: VendorRow[]; vendorsReady: boolean;
   refreshOne: (p: Pkg) => Promise<string | null>;
   refreshAll: () => Promise<void>;
   refreshingIds: Set<number>;
@@ -911,6 +912,15 @@ export function DashboardTab({ addresses, packages, transfers, drains, products,
       </div>
 
       {/* address cards */}
+      {loading && packages.length === 0 && (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {[0, 1].map(i => (
+            <div key={i} className="rounded-xl border p-4 space-y-3">
+              <Skeleton className="h-5 w-32" /><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" />
+            </div>
+          ))}
+        </div>
+      )}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cardAddresses.map(a => {
           const pkgs = visible.filter(p => p.receive_address_id === a.id);

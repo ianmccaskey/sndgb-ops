@@ -1,6 +1,7 @@
 import React from 'react';
 import { fmtNum } from '@/lib/fmt';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { productChipClass } from './shared';
 import type { RxAddress, InvRow } from './shared';
@@ -11,7 +12,7 @@ import type { RxAddress, InvRow } from './shared';
  * amber — it means an un-receive happened after a transfer, and hiding
  * it would hide a real discrepancy.
  */
-export function InventoryTab({ inventory, addresses }: { inventory: InvRow[]; addresses: RxAddress[] }) {
+export function InventoryTab({ inventory, addresses, loading }: { inventory: InvRow[]; addresses: RxAddress[]; loading: boolean }) {
   const byAddress = addresses
     .map(a => ({ address: a, rows: inventory.filter(r => r.receive_address_id === a.id) }))
     .filter(g => g.rows.length > 0);
@@ -59,7 +60,14 @@ export function InventoryTab({ inventory, addresses }: { inventory: InvRow[]; ad
           </CardContent>
         </Card>
       ))}
-      {byAddress.length === 0 && (
+      {loading && byAddress.length === 0 && (
+        <Card className="lg:col-span-2">
+          <CardContent className="py-6 space-y-2">
+            <Skeleton className="h-5 w-40" /><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-2/3" />
+          </CardContent>
+        </Card>
+      )}
+      {!loading && byAddress.length === 0 && (
         <Card className="lg:col-span-2">
           <CardContent className="py-8 text-center text-sm text-muted-foreground">
             Nothing received yet — inventory appears when a package is delivered (or marked received).

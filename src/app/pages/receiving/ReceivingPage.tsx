@@ -40,9 +40,9 @@ export function ReceivingPage() {
   const shippoHttp = useShippoHttp();
 
   const [rawAddresses, , , reloadAddresses] = useLoadAction(listReceiveAddresses, [], {});
-  const [rawPackages, , , reloadPackages] = useLoadAction(listInboundPackages, [], {});
-  const [rawInventory, , , reloadInventory] = useLoadAction(listAddressInventory, [], {});
-  const [rawTransfers, , , reloadTransfers] = useLoadAction(listTransfers, [], {});
+  const [rawPackages, packagesLoading, , reloadPackages] = useLoadAction(listInboundPackages, [], {});
+  const [rawInventory, inventoryLoading, , reloadInventory] = useLoadAction(listAddressInventory, [], {});
+  const [rawTransfers, transfersLoading, , reloadTransfers] = useLoadAction(listTransfers, [], {});
   // fulfillment packing depletion for the box display (FIFO in boxConsumption)
   const [rawDrains] = useLoadAction(listShipmentDrains, [], {});
   const [rawDestinations, , , reloadDestinations] = useLoadAction(listDestinations, [], {});
@@ -182,26 +182,26 @@ export function ReceivingPage() {
 
         <TabsContent value="dashboard" className="mt-4">
           <DashboardTab
-            addresses={addresses} packages={packages} transfers={transfers} drains={drains} products={products} vendors={vendors} vendorsReady={vendorsReady}
+            addresses={addresses} packages={packages} transfers={transfers} drains={drains} loading={packagesLoading} products={products} vendors={vendors} vendorsReady={vendorsReady}
             refreshOne={refreshOne} refreshAll={refreshAll} refreshingIds={refreshingIds}
             refreshAllProgress={refreshAllProgress} afterChange={afterPackageChange}
             hasKey={!!shippoKey} testMode={testMode} onPartOut={partOut}
           />
         </TabsContent>
         <TabsContent value="inventory" className="mt-4">
-          <InventoryTab inventory={inventory} addresses={addresses} />
+          <InventoryTab inventory={inventory} addresses={addresses} loading={inventoryLoading} />
         </TabsContent>
         <TabsContent value="transfers" className="mt-4">
           <TransfersTab
             addresses={addresses} destinations={destinations} products={products} packages={packages}
-            transfers={transfers} drains={drains} inventory={inventory} shippoKey={shippoKey} shippoHttp={shippoHttp} testMode={testMode}
+            transfers={transfers} drains={drains} transfersLoading={transfersLoading} inventory={inventory} shippoKey={shippoKey} shippoHttp={shippoHttp} testMode={testMode}
             reloadTransfers={() => { reloadTransfers(); reloadInventory(); }}
             reloadDestinations={reloadDestinations}
             partOutSeed={partOutSeed} onPartOutSeedConsumed={() => setPartOutSeed(null)}
           />
         </TabsContent>
         <TabsContent value="history" className="mt-4">
-          <HistoryTab packages={packages} transfers={transfers} drains={drains} addresses={addresses} />
+          <HistoryTab packages={packages} transfers={transfers} drains={drains} addresses={addresses} loading={packagesLoading} />
         </TabsContent>
         <TabsContent value="addresses" className="mt-4">
           <AddressesTab

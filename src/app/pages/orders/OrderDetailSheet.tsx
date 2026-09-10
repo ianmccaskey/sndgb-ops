@@ -1456,6 +1456,17 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 {o.order_number} <StatusPill value={o.recon_status || 'awaiting'} />
               </SheetTitle>
             </SheetHeader>
+            {/* section jump nav — this sheet is ~10 sections deep; blind
+                scrolling on a phone was the audit's #3 finding (2026-09-10) */}
+            <div className="sticky top-0 z-10 -mx-6 px-4 mt-3 bg-card/95 backdrop-blur-sm border-b flex gap-1 py-1.5 overflow-x-auto">
+              {([['ods-items', 'Items'], ['ods-shipments', 'Shipments'], ['ods-payments', 'Payments'], ['ods-admin', 'Admin']] as const).map(([id, label]) => (
+                <button key={id} type="button"
+                  className="h-8 px-3 rounded-md text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground whitespace-nowrap"
+                  onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="space-y-5 mt-4 text-sm">
               <div>
                 <div className="font-medium">{o.customer_name}</div>
@@ -1474,7 +1485,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
               )}
 
               <div>
-                <h3 className="font-semibold mb-1">Items</h3>
+                <h3 id="ods-items" className="font-semibold mb-1 scroll-mt-14">Items</h3>
                 {items.map(it => {
                   // finalized-shipped progress for packable lines: green =
                   // whole line shipped, amber = part of it, plain = none.
@@ -1797,7 +1808,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
               </div>
 
               <div>
-                <h3 className="font-semibold mb-1">Shipments</h3>
+                <h3 id="ods-shipments" className="font-semibold mb-1 scroll-mt-14">Shipments</h3>
                 {shipRows.length === 0 && <p className="text-muted-foreground text-xs">No shipments yet — boxes ship from the Fulfillment page.</p>}
                 {shipRows.map(s => (
                   <div key={s.id} className={`py-1 border-b last:border-0 text-xs space-y-0.5 ${s.refund_status === 'SUCCESS' ? 'opacity-50' : ''}`}>
@@ -1893,7 +1904,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
               </div>
 
               <div>
-                <h3 className="font-semibold mb-1">Payments</h3>
+                <h3 id="ods-payments" className="font-semibold mb-1 scroll-mt-14">Payments</h3>
                 {payments.length === 0 && <p className="text-muted-foreground">No payment records.</p>}
                 {payments.map(p => (
                   <div key={p.id} className={`py-1 border-b last:border-0 ${p.status === 'rejected' ? 'opacity-50' : ''}`}>
@@ -2028,7 +2039,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
               </div>
 
               <div className="space-y-2">
-                <h3 className="font-semibold">Admin</h3>
+                <h3 id="ods-admin" className="font-semibold scroll-mt-14">Admin</h3>
                 <div className="flex items-center gap-3">
                   <Select value={status} onValueChange={setStatus}>
                     <SelectTrigger className="h-8 w-36"><SelectValue /></SelectTrigger>
