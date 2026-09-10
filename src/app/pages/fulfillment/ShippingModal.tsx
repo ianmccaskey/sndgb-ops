@@ -1245,62 +1245,97 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             Defaults ship everything remaining; lower a quantity to split the order across boxes — the rest stays in the ready queue.
           </p>
 
-          {/* box + ship-from */}
-          <div className="flex flex-wrap gap-2 items-center">
-            <Select value={shipFrom} onValueChange={setShipFrom}>
-              <SelectTrigger className="h-9 w-56"><SelectValue placeholder="Ship from…" /></SelectTrigger>
-              <SelectContent>
-                {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}{a.is_default_ship_from ? ' (default)' : ''}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {!manualMode && fromRow && !s(fromRow.phone).trim() && (
-              <span className="text-[11px] text-amber-300">No phone on "{fromRow.label}" — Shippo refuses purchases without one; add it on Receiving &gt; Addresses (UPS purchases are re-quoted without the phone so it never prints on the label).</span>
-            )}
-            {!manualMode && (
-              <>
-                <span className="inline-flex rounded-md border overflow-hidden text-xs h-9">
-                  <button className={`px-2.5 ${packaging === 'box' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
-                    onClick={() => setPackaging('box')}>box</button>
-                  <button className={`px-2.5 border-l ${packaging === 'polymailer' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
-                    onClick={() => setPackaging('polymailer')}>polymailer</button>
-                </span>
+          {/* parcel: labeled groups in a card — this was a single flex-wrap
+              pouring 11 controls into whatever ragged rows fit the width
+              (Ian 2026-09-11: "stacked together randomly"). Same state and
+              handlers; only the structure changed. */}
+          <div className="rounded border p-3 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-xs font-semibold uppercase text-muted-foreground">Parcel</p>
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                <input type="checkbox" checked={manualMode} onChange={e => setManualMode(e.target.checked)} />
+                label bought outside the app
+              </label>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Ship from</p>
+                <Select value={shipFrom} onValueChange={setShipFrom}>
+                  <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Ship from…" /></SelectTrigger>
+                  <SelectContent>
+                    {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}{a.is_default_ship_from ? ' (default)' : ''}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{manualMode ? 'Box name' : 'Packaging'}</p>
+                <div className="flex items-center gap-2">
+                  {!manualMode && (
+                    <span className="inline-flex rounded-md border overflow-hidden text-xs h-9 shrink-0">
+                      <button className={`px-2.5 ${packaging === 'box' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
+                        onClick={() => setPackaging('box')}>box</button>
+                      <button className={`px-2.5 border-l ${packaging === 'polymailer' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
+                        onClick={() => setPackaging('polymailer')}>polymailer</button>
+                    </span>
+                  )}
+                  <Input placeholder="Box (e.g. 8x6x4)" value={box} onChange={e => setBox(e.target.value)} className="h-9 flex-1 min-w-0" />
+                </div>
                 {/* was hover-only (title=) — invisible on touch (mobile audit #5) */}
-                {packaging === 'polymailer' && (
-                  <span className="text-[10px] text-muted-foreground w-full">polymailer: L × W only — a nominal 1 in height is sent to Shippo</span>
+                {!manualMode && packaging === 'polymailer' && (
+                  <p className="text-[10px] text-muted-foreground">polymailer: L × W only — a nominal 1 in height is sent to Shippo</p>
                 )}
-                <Input placeholder="L in" value={dims.length} onChange={e => setDims(d => ({ ...d, length: e.target.value }))} className="h-9 w-20" />
-                <Input placeholder="W in" value={dims.width} onChange={e => setDims(d => ({ ...d, width: e.target.value }))} className="h-9 w-20" />
-                {packaging === 'box' && (
-                  <Input placeholder="H in" value={dims.height} onChange={e => setDims(d => ({ ...d, height: e.target.value }))} className="h-9 w-20" />
-                )}
-                <Input placeholder="Weight lb" value={weight} onChange={e => { setWeight(e.target.value); setWeightTouched(true); }} className="h-9 w-24" />
-                {weightTouched && (
-                  <button className="text-xs text-muted-foreground underline" onClick={() => { setWeightTouched(false); }}>recalc</button>
-                )}
-                <label className="flex items-center gap-1.5 text-xs cursor-pointer" title={customerInsured
+              </div>
+            </div>
+            {!manualMode && fromRow && !s(fromRow.phone).trim() && (
+              <p className="text-[11px] text-amber-300">No phone on "{fromRow.label}" — Shippo refuses purchases without one; add it on Receiving &gt; Addresses (UPS purchases are re-quoted without the phone so it never prints on the label).</p>
+            )}
+
+            {!manualMode && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Dimensions · inches</p>
+                  <div className={`grid gap-2 ${packaging === 'box' ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                    <Input placeholder="L" inputMode="decimal" value={dims.length} onChange={e => setDims(d => ({ ...d, length: e.target.value }))} className="h-9 w-full" />
+                    <Input placeholder="W" inputMode="decimal" value={dims.width} onChange={e => setDims(d => ({ ...d, width: e.target.value }))} className="h-9 w-full" />
+                    {packaging === 'box' && (
+                      <Input placeholder="H" inputMode="decimal" value={dims.height} onChange={e => setDims(d => ({ ...d, height: e.target.value }))} className="h-9 w-full" />
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Weight · lb</p>
+                  <div className="flex items-center gap-2">
+                    <Input placeholder="Weight" inputMode="decimal" value={weight} onChange={e => { setWeight(e.target.value); setWeightTouched(true); }} className="h-9 w-28" />
+                    {weightTouched && (
+                      <button className="text-xs text-muted-foreground underline" onClick={() => { setWeightTouched(false); }}>recalc</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!manualMode && (
+              <div className="space-y-1">
+                <label className="flex items-center gap-1.5 text-xs cursor-pointer w-fit" title={customerInsured
                   ? `The customer paid ${fmtUSD(insuranceFee)} shipping insurance on this order — the label is insured by default`
                   : 'This order has no customer insurance fee — tick to insure anyway'}>
                   <input type="checkbox" checked={insureBox} onChange={e => setInsureBox(e.target.checked)} />
                   Insure{customerInsured && <span className="rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1 py-0.5 uppercase">paid {fmtUSD(insuranceFee)}</span>}
                 </label>
                 {insureBox && (
-                  <>
-                    <Input placeholder="Value $" value={insuredValue}
-                      onChange={e => { setInsuredValue(e.target.value); setInsuredTouched(true); }} className="h-9 w-24" />
-                    {/* was hover-only (title=) — invisible on touch */}
-                    <span className="text-[10px] text-muted-foreground">declared value · Shippo bills $1.27 per $100 insured</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Input placeholder="Value $" inputMode="decimal" value={insuredValue}
+                      onChange={e => { setInsuredValue(e.target.value); setInsuredTouched(true); }} className="h-9 w-28" />
                     {insuredTouched && (
                       <button className="text-xs text-muted-foreground underline" onClick={() => { setInsuredTouched(false); }}>recalc</button>
                     )}
-                  </>
+                    {/* was hover-only (title=) — invisible on touch */}
+                    <span className="text-[10px] text-muted-foreground">declared value · Shippo bills $1.27 per $100 insured</span>
+                  </div>
                 )}
-              </>
+              </div>
             )}
-            <Input placeholder="Box (e.g. 8x6x4)" value={box} onChange={e => setBox(e.target.value)} className="h-9 w-28" />
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground ml-auto">
-              <input type="checkbox" checked={manualMode} onChange={e => setManualMode(e.target.checked)} />
-              label bought outside the app
-            </label>
           </div>
           {!manualMode && missingWeightSkus.length > 0 && (
             <p className="text-[11px] text-amber-300">No catalog weight for {missingWeightSkus.join(', ')} — they count as 0 in the prefill; adjust the weight by hand (set weights on the Products page).</p>
