@@ -42,6 +42,7 @@ type QueueRow = QueueOrder & {
   items_summary: string; item_count: string;
   remaining_summary: string; remaining_packable_qty: string; shipped_packable_qty: string;
   packable_json: { product_id: number; sku: string; remaining: number | string }[] | null;
+  shipped_json: { product_id: number; sku: string; shipped: number | string }[] | null;
   upstream_check_json: { ext: string; effective: number | string; shipped: number | string }[] | null;
   direct_items_summary: string; direct_outstanding_summary: string;
   direct_outstanding_ids: string; all_direct: boolean; direct_outstanding: boolean;
@@ -250,6 +251,31 @@ export function FulfillmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, sessionActive, stage, sessionSort, JSON.stringify(pool)]);
   const sessionLeftoverUnits = [...allocation.left.values()].reduce((s, c) => s + c, 0) / 100;
+  // ---- per-product totals strip (Ian): on 'ready', how much of each
+  // product it takes to fill everything on the tab (sum of remaining —
+  // drafts already hold their share, so this is what still needs pulling
+  // off the shelf); on 'shipped', how much of each product has actually
+  // gone out (finalized boxes only). Aggregated over the loaded stage —
+  // product filters scope it, the search box (find-an-order) does not. ----
+  const productTotals = useMemo(() => {
+    if (stage !== 'ready' && stage !== 'shipped') return [];
+    const acc = new Map<number, { sku: string; qty: number }>();
+    for (const r of queue) {
+      const lines = stage === 'ready'
+        ? (r.packable_json || []).map(l => ({ pid: Number(l.product_id), sku: l.sku, qty: Number(l.remaining) }))
+        : (r.shipped_json || []).map(l => ({ pid: Number(l.product_id), sku: l.sku, qty: Number(l.shipped) }));
+      for (const l of lines) {
+        if (!(l.qty > 0)) continue;
+        const e = acc.get(l.pid);
+        if (e) e.qty += l.qty; else acc.set(l.pid, { sku: l.sku, qty: l.qty });
+      }
+    }
+    return Array.from(acc.entries())
+      .map(([pid, v]) => ({ pid, sku: v.sku, qty: Math.round(v.qty * 100) / 100 }))
+      .sort((a, b) => b.qty - a.qty || a.sku.localeCompare(b.sku));
+  }, [queue, stage]);
+  const productTotalUnits = Math.round(productTotals.reduce((s, t) => s + t.qty, 0) * 100) / 100;
+
   const packability = (r: QueueRow): 'full' | 'partial' | 'none' => {
     if (allocation.allocated.has(Number(r.id))) return 'full';
     // partial = the pool LEFT OVER after every full fit could still start
@@ -760,6 +786,51 @@ export function FulfillmentPage() {
         </Button>
       </div>
       {pushAllMsg && stage === 'shipped' && <p className="text-xs text-amber-200">{pushAllMsg}</p>}
+
+      {/* per-product totals: the tab's whole workload (ready) or output
+          (shipped) at a glance — scoped by the product filter, NOT by the
+          search box (find-an-order, not scope-of-work) */}
+      {(stage === 'ready' || stage === 'shipped') && queueLoading && (
+        // shape-matched placeholder: collapsing during load would shove the
+        // list down twice per tab switch — and the stale queue would compute
+        // WRONG totals for the incoming stage (ready rows have no shipped_json)
+        <Card>
+          <CardContent className="py-2.5 px-3 sm:px-4">
+            <div className="h-6 w-64 max-w-full rounded bg-muted/40 animate-pulse" />
+          </CardContent>
+        </Card>
+      )}
+      {(stage === 'ready' || stage === 'shipped') && !queueLoading && productTotals.length > 0 && (
+        <Card>
+          <CardContent className="py-2.5 px-3 sm:px-4">
+            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap">
+                {stage === 'ready' ? 'To pack' : 'Shipped'} · {queueTruncated ? '1000+' : queue.length} order{queue.length === 1 ? '' : 's'}
+                {stage === 'shipped' && <span> · our boxes only</span>}
+                {filterIds.size > 0 && stage === 'ready' && <span className="text-cyan-300"> · filtered</span>}
+              </span>
+              {filterIds.size > 0 && stage === 'shipped' && (
+                // the product filter keys on REMAINING work, so on this tab it
+                // drops every fully-shipped order — these are NOT full shipped
+                // totals for the selected products
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-300 whitespace-normal">
+                  filtered by remaining work — not full shipped totals
+                </span>
+              )}
+              {productTotals.map(t => (
+                <span key={t.pid} className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+                  <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${productChipClass(t.pid)}`}>{t.sku}</span>
+                  <span className="font-mono text-sm font-semibold">{fmtNum(t.qty)}</span>
+                </span>
+              ))}
+              <span className="text-xs text-muted-foreground whitespace-nowrap ml-auto">
+                {fmtNum(productTotalUnits)} unit{productTotalUnits === 1 ? '' : 's'} total
+                {visibleQueue.length !== queue.length && <> · {visibleQueue.length} shown below</>}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* shipment session: only the products you SAY you have, as a tidy list */}
       {sessionOpen && (
