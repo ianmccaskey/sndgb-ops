@@ -33,7 +33,7 @@ import { productChipClass } from '@/app/pages/receiving/shared';
 import type { RxAddress } from '@/app/pages/receiving/shared';
 import { ShippingModal } from './ShippingModal';
 import type { QueueOrder } from './ShippingModal';
-import { Truck, PauseCircle, Filter, Check, X } from 'lucide-react';
+import { Truck, PauseCircle, Filter, Check, X, ChevronDown } from 'lucide-react';
 import { Field } from '@/components/Field';
 
 type QueueRow = QueueOrder & {
@@ -275,6 +275,16 @@ export function FulfillmentPage() {
       .sort((a, b) => b.qty - a.qty || a.sku.localeCompare(b.sku));
   }, [queue, stage]);
   const productTotalUnits = Math.round(productTotals.reduce((s, t) => s + t.qty, 0) * 100) / 100;
+  // the breakdown is opt-in (Ian: a dozen products wrapped freely on a
+  // phone is a jumble you shouldn't be forced past) — collapsed by
+  // default, sticky per device like the other fulfillment toggles
+  const [totalsOpen, setTotalsOpenState] = useState<boolean>(() => {
+    try { return localStorage.getItem('sndgb.fulfillTotalsOpen') === '1'; } catch { return false; }
+  });
+  const setTotalsOpen = (v: boolean) => {
+    setTotalsOpenState(v);
+    try { localStorage.setItem('sndgb.fulfillTotalsOpen', v ? '1' : '0'); } catch { /* per-device nicety */ }
+  };
 
   const packability = (r: QueueRow): 'full' | 'partial' | 'none' => {
     if (allocation.allocated.has(Number(r.id))) return 'full';
@@ -802,32 +812,54 @@ export function FulfillmentPage() {
       )}
       {(stage === 'ready' || stage === 'shipped') && !queueLoading && productTotals.length > 0 && (
         <Card>
-          <CardContent className="py-2.5 px-3 sm:px-4">
-            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1.5">
+          <CardContent className="py-1.5 px-3 sm:px-4">
+            {/* always-visible summary line doubles as the expand control —
+                the per-product breakdown is opt-in, never forced scroll */}
+            <button type="button" className="w-full min-h-10 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-left rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-expanded={totalsOpen} aria-controls="fulfill-totals-grid" onClick={() => setTotalsOpen(!totalsOpen)}>
               <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap">
                 {stage === 'ready' ? 'To pack' : 'Shipped'} · {queueTruncated ? '1000+' : queue.length} order{queue.length === 1 ? '' : 's'}
                 {stage === 'shipped' && <span> · our boxes only</span>}
                 {filterIds.size > 0 && stage === 'ready' && <span className="text-cyan-300"> · filtered</span>}
+                {/* the filter keys on REMAINING work, so filtered shipped
+                    numbers — the collapsed total included — are partial; the
+                    caveat cannot hide behind the expander */}
+                {filterIds.size > 0 && stage === 'shipped' && <span className="text-amber-300"> · filtered — partial</span>}
               </span>
-              {filterIds.size > 0 && stage === 'shipped' && (
-                // the product filter keys on REMAINING work, so on this tab it
-                // drops every fully-shipped order — these are NOT full shipped
-                // totals for the selected products
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-300 whitespace-normal">
-                  filtered by remaining work — not full shipped totals
-                </span>
+              <span className="font-mono text-sm font-semibold whitespace-nowrap">
+                {fmtNum(productTotalUnits)} unit{productTotalUnits === 1 ? '' : 's'}
+              </span>
+              {visibleQueue.length !== queue.length && (
+                <span className="text-[10px] text-muted-foreground whitespace-nowrap">{visibleQueue.length} shown below</span>
               )}
-              {productTotals.map(t => (
-                <span key={t.pid} className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
-                  <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${productChipClass(t.pid)}`}>{t.sku}</span>
-                  <span className="font-mono text-sm font-semibold">{fmtNum(t.qty)}</span>
-                </span>
-              ))}
-              <span className="text-xs text-muted-foreground whitespace-nowrap ml-auto">
-                {fmtNum(productTotalUnits)} unit{productTotalUnits === 1 ? '' : 's'} total
-                {visibleQueue.length !== queue.length && <> · {visibleQueue.length} shown below</>}
+              <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap">
+                {productTotals.length} product{productTotals.length === 1 ? '' : 's'}
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${totalsOpen ? 'rotate-180' : ''}`} />
               </span>
-            </div>
+            </button>
+            {totalsOpen && filterIds.size > 0 && stage === 'shipped' && (
+              // the product filter keys on REMAINING work, so on this tab it
+              // drops every fully-shipped order — these are NOT full shipped
+              // totals for the selected products
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-300 pb-1.5">
+                filtered by remaining work — not full shipped totals
+              </p>
+            )}
+            {totalsOpen && (
+              // aligned picking-list grid, not free wrap: chip left, count
+              // right in a shared mono column per cell. ONE column on the
+              // narrowest screens — 2-col at 375px truncated long SKUs
+              // ("CJC-1295 (no dac)/Ipamorelin 20mg") with only a hover
+              // title as recovery, which doesn't exist on touch
+              <div id="fulfill-totals-grid" className="grid grid-cols-1 min-[480px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-1.5 pb-1.5 pt-0.5">
+                {productTotals.map(t => (
+                  <span key={t.pid} className="flex items-center justify-between gap-2 min-w-0">
+                    <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold truncate ${productChipClass(t.pid)}`} title={t.sku}>{t.sku}</span>
+                    <span className="font-mono text-sm font-semibold shrink-0">{fmtNum(t.qty)}</span>
+                  </span>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
