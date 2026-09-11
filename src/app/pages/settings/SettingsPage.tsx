@@ -42,7 +42,7 @@ export function SettingsPage() {
 
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
   const wallets = rows<WalletRow>(rawWallets);
-  const [rawPnl, , , reloadPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
+  const [rawPnl, pnlLoading, , reloadPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
   const splits = firstRow<PnlRow>(rawPnl)?.splits || [];
 
   // API keys / addresses
@@ -80,6 +80,16 @@ export function SettingsPage() {
   // splits
   const [splitEdits, setSplitEdits] = useState<Record<string, string>>({});
   const [splitMsg, setSplitMsg] = useState('');
+  const [splitSaving, setSplitSaving] = useState(false);
+  const [newParty, setNewParty] = useState('');
+
+  // in-progress edits belong to the campaign they were typed on — switching
+  // campaigns must not carry them over (Save writes to the CURRENT groupBuyId)
+  useEffect(() => { setSplitEdits({}); setNewParty(''); setSplitMsg(''); }, [groupBuyId]);
+
+  const splitParties = Array.from(new Set([...splits.map(s => s.party), ...Object.keys(splitEdits)]));
+  const splitVal = (p: string) => splitEdits[p] ?? String(Number(splits.find(s => s.party === p)?.pct ?? 0));
+  const splitTotal = splitParties.reduce((t, p) => t + Number(splitVal(p) || 0), 0);
 
   // wallet addresses
   const [walletEdits, setWalletEdits] = useState<Record<number, string>>({});
@@ -209,16 +219,37 @@ export function SettingsPage() {
     }
   };
 
+  const addParty = () => {
+    const name = newParty.trim();
+    if (!name) return;
+    // 'paige' vs 'Paige' would become two DB rows — treat names
+    // case-insensitively and keep the casing that already exists
+    if (!splitParties.some(p => p.toLowerCase() === name.toLowerCase())) {
+      setSplitEdits(m => ({ ...m, [name]: '' }));
+    }
+    setNewParty('');
+    setSplitMsg('');
+  };
+
   const saveSplits = async () => {
     setSplitMsg('');
-    const parties = new Set([...splits.map(s => s.party), ...Object.keys(splitEdits)]);
     let total = 0;
     const values: { party: string; pct: number }[] = [];
-    for (const p of parties) {
-      const pct = Number(splitEdits[p] ?? splits.find(s => s.party === p)?.pct ?? 0);
-      if (pct > 0) { values.push({ party: p, pct }); total += pct; }
+    for (const p of splitParties) {
+      const raw = splitVal(p);
+      // a freshly added person left blank should not silently become
+      // a permanent 0% row
+      if (!splits.some(s => s.party === p) && raw.trim() === '') {
+        setSplitMsg(`Set a percentage for ${p}, or remove them.`); return;
+      }
+      const pct = Number(raw);
+      if (Number.isNaN(pct)) { setSplitMsg(`${p}'s percentage isn't a number.`); return; }
+      // 0% rows are still written — skipping them would leave a zeroed
+      // party's OLD percentage alive in the DB and the stored splits over 100
+      values.push({ party: p, pct }); total += pct;
     }
-    if (Math.abs(total - 100) > 0.01) { setSplitMsg(`Splits must total 100% (currently ${total}%).`); return; }
+    if (Math.abs(total - 100) > 0.01) { setSplitMsg(`Splits must total 100% (currently ${+total.toFixed(2)}%).`); return; }
+    setSplitSaving(true);
     try {
       for (const v of values) {
         await doSaveSplit({ group_buy_id: groupBuyId, party: v.party, pct: v.pct });
@@ -227,6 +258,8 @@ export function SettingsPage() {
       setSplitMsg('Saved.');
     } catch (e: unknown) {
       setSplitMsg(e instanceof Error ? e.message : 'Failed to save splits');
+    } finally {
+      setSplitSaving(false);
     }
   };
 
@@ -266,21 +299,50 @@ export function SettingsPage() {
 
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Profit split (this campaign)</CardTitle></CardHeader>
-        <CardContent className="space-y-2">
-          <div className="flex flex-wrap gap-3">
-            {splits.map(s => (
-              <div key={s.party} className="space-y-1">
-                <Label className="text-xs">{s.party} %</Label>
-                <Input
-                  value={splitEdits[s.party] ?? String(Number(s.pct))}
-                  onChange={e => setSplitEdits(m => ({ ...m, [s.party]: e.target.value }))}
-                  className="h-9 w-24"
-                />
-              </div>
-            ))}
+        <CardContent className="space-y-3">
+          {pnlLoading && splitParties.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Loading splits…</p>
+          ) : splitParties.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No one shares this campaign's profit yet — add each person below, then set the percentages.</p>
+          ) : (
+            <div className="flex flex-wrap gap-3 items-end">
+              {splitParties.map(party => {
+                const unsaved = !splits.some(s => s.party === party);
+                return (
+                  <div key={party} className="space-y-1">
+                    <Label className="text-xs">{party} %{unsaved && <span className="text-amber-300"> · unsaved</span>}</Label>
+                    <div className="flex items-center gap-1">
+                      <Input
+                        inputMode="decimal" placeholder="0"
+                        value={splitVal(party)}
+                        onChange={e => setSplitEdits(m => ({ ...m, [party]: e.target.value }))}
+                        className="h-9 w-24"
+                      />
+                      {unsaved && (
+                        <button className="p-2 -m-1 opacity-60 hover:opacity-100 text-xs" title={`Remove ${party} (not saved yet)`}
+                          onClick={() => setSplitEdits(m => { const n = { ...m }; delete n[party]; return n; })}>✕</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              <p className="text-xs text-muted-foreground pb-2.5">
+                Total: <span className={Math.abs(splitTotal - 100) <= 0.01 ? 'text-emerald-300 font-medium' : 'text-amber-300 font-medium'}>
+                  {Number.isNaN(splitTotal) ? '?' : +splitTotal.toFixed(2)}</span> of 100
+              </p>
+            </div>
+          )}
+          <div className="flex gap-2 items-end">
+            <div className="space-y-1">
+              <Label className="text-xs">Add person</Label>
+              <Input placeholder="e.g. Paige" value={newParty} onChange={e => setNewParty(e.target.value)} className="h-9 w-40"
+                onKeyDown={e => { if (e.key === 'Enter') addParty(); }} />
+            </div>
+            <Button size="sm" variant="outline" className="h-9" disabled={!newParty.trim()} onClick={addParty}>Add</Button>
           </div>
-          {splitMsg && <p className="text-sm text-muted-foreground">{splitMsg}</p>}
-          <Button size="sm" onClick={saveSplits}>Save splits</Button>
+          {splitMsg && <p className={`text-sm ${splitMsg === 'Saved.' ? 'text-muted-foreground' : 'text-amber-300'}`}>{splitMsg}</p>}
+          <Button size="sm" disabled={splitSaving} onClick={saveSplits}>{splitSaving ? 'Saving…' : 'Save splits'}</Button>
+          <p className="text-xs text-muted-foreground">Percentages must total 100. Set a person to 0% to take them out of the split. Added people aren't saved until you press Save splits.</p>
         </CardContent>
       </Card>
 
