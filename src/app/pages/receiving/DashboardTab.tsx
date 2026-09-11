@@ -22,6 +22,7 @@ import type { PackageLabelData } from '@/lib/niimbotPrint';
 import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday, boxConsumption } from './shared';
 import { Led } from '@/components/Led';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Field } from '@/components/Field';
 import type { RxAddress, Pkg, CatalogProduct, VendorRow, TransferRow, DrainRow } from './shared';
 
 const CARRIERS = [
@@ -647,52 +648,69 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
       {/* log an inbound package */}
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Log inbound package</CardTitle></CardHeader>
-        <CardContent className="space-y-2">
-          <div className="flex flex-wrap gap-2">
-            <Select value={fAddr} onValueChange={setFAddr}>
-              <SelectTrigger className="h-9 flex-1 min-w-36"><SelectValue placeholder="To address" /></SelectTrigger>
-              <SelectContent>
-                {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Select value={fVendor || 'none'} onValueChange={v => setFVendor(v === 'none' ? '' : v)}>
-              <SelectTrigger className="h-9 w-32"><SelectValue placeholder="Vendor" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No vendor</SelectItem>
-                {/* NEW packages: live shipping vendors only — historical-
-                    only rows exist for the filter, never the picker */}
-                {vendors.filter(v => v.shippable).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Select value={fCarrier} onValueChange={setFCarrier}>
-              <SelectTrigger className="h-9 w-40"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {CARRIERS.map(c => <SelectItem key={c.token} value={c.token}>{c.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {fCarrier === '__other__' && (
-              <Input placeholder="shippo carrier token" value={fCarrierOther} onChange={e => setFCarrierOther(e.target.value)} className="h-9 w-40 font-mono text-xs" />
-            )}
-            <Input placeholder="Tracking number" value={fTracking} onChange={e => setFTracking(e.target.value)} className="h-9 flex-1 min-w-44 font-mono text-xs" />
-          </div>
-          {fLines.map((l, i) => (
-            <div key={i} className="flex flex-wrap gap-2 items-center">
-              <Select value={l.product} onValueChange={v => setFLines(ls => ls.map((x, j) => j === i ? { ...x, product: v } : x))}>
-                <SelectTrigger className="h-9 flex-1 min-w-44"><SelectValue placeholder="Product" /></SelectTrigger>
+        <CardContent className="space-y-3">
+          {/* persistent labels (form-UX sweep 2026-09-12): placeholder-as-
+              label made every filled form a memory test */}
+          <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+            <Field label="To address">
+              <Select value={fAddr} onValueChange={setFAddr}>
+                <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
                 <SelectContent>
-                  {products.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.sku_code}</SelectItem>)}
+                  {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <Input placeholder="Count" value={l.qty} onChange={e => setFLines(ls => ls.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} className="h-9 w-24" />
-              {fLines.length > 1 && (
-                <Button size="sm" variant="ghost" className="h-9 px-2 text-rose-400" onClick={() => setFLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
-              )}
-            </div>
-          ))}
-          <div className="flex flex-wrap gap-2 items-center">
+            </Field>
+            <Field label="Vendor">
+              <Select value={fVendor || 'none'} onValueChange={v => setFVendor(v === 'none' ? '' : v)}>
+                <SelectTrigger className="h-9 w-full"><SelectValue placeholder="No vendor" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No vendor</SelectItem>
+                  {/* NEW packages: live shipping vendors only — historical-
+                      only rows exist for the filter, never the picker */}
+                  {vendors.filter(v => v.shippable).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Carrier">
+              <Select value={fCarrier} onValueChange={setFCarrier}>
+                <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CARRIERS.map(c => <SelectItem key={c.token} value={c.token}>{c.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Tracking number" className="col-span-2 sm:col-span-1">
+              <Input value={fTracking} onChange={e => setFTracking(e.target.value)} className="h-9 w-full font-mono text-xs" />
+            </Field>
+            {fCarrier === '__other__' && (
+              <Field label="Shippo carrier token">
+                <Input placeholder="e.g. dhl_ecommerce" value={fCarrierOther} onChange={e => setFCarrierOther(e.target.value)} className="h-9 w-full font-mono text-xs" />
+              </Field>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Contents</p>
+            {fLines.map((l, i) => (
+              <div key={i} className="flex flex-wrap gap-2 items-center">
+                <Select value={l.product} onValueChange={v => setFLines(ls => ls.map((x, j) => j === i ? { ...x, product: v } : x))}>
+                  <SelectTrigger className="h-9 flex-1 min-w-44"><SelectValue placeholder="Product…" /></SelectTrigger>
+                  <SelectContent>
+                    {products.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.sku_code}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Input placeholder="Count" inputMode="decimal" value={l.qty} onChange={e => setFLines(ls => ls.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} className="h-9 w-24" />
+                {fLines.length > 1 && (
+                  <Button size="sm" variant="ghost" className="h-9 px-2 text-rose-400" onClick={() => setFLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
+                )}
+              </div>
+            ))}
             <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setFLines(ls => [...ls, { product: '', qty: '' }])}>+ Add product</Button>
-            <Input placeholder="Note (optional)" value={fNote} onChange={e => setFNote(e.target.value)} className="h-8 flex-1 min-w-40" />
-            <Button size="sm" className="h-8" disabled={fSaving} onClick={createPackage}>{fSaving ? 'Saving…' : 'Create draft'}</Button>
+          </div>
+          <div className="flex flex-wrap gap-2 items-end">
+            <Field label="Note · optional" className="flex-1 min-w-40">
+              <Input value={fNote} onChange={e => setFNote(e.target.value)} className="h-9 w-full" />
+            </Field>
+            <Button size="sm" className="h-9" disabled={fSaving} onClick={createPackage}>{fSaving ? 'Saving…' : 'Create draft'}</Button>
           </div>
           {fMsg && <p className="text-xs text-rose-400">{fMsg}</p>}
           <p className="text-[11px] text-muted-foreground">Drafts are editable; Commit on the card starts tracking. Contents count into the address inventory when the package is received.</p>
@@ -839,32 +857,43 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
                 <p className="text-xs text-muted-foreground">
                   No logged package matches this label. Log it here — the scanned tracking is kept (correct it if it read wrong), then it is committed and received in one go.
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <Select value={smAddr} onValueChange={setSmAddr}>
-                    <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Receive address…" /></SelectTrigger>
-                    <SelectContent>
-                      {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Select value={smVendor} onValueChange={setSmVendor}>
-                    <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Vendor (optional)…" /></SelectTrigger>
-                    <SelectContent>
-                      {vendors.filter(v => v.shippable).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Select value={smCarrier} onValueChange={setSmCarrier}>
-                    <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Carrier…" /></SelectTrigger>
-                    <SelectContent>
-                      {CARRIERS.map(c => <SelectItem key={c.token} value={c.token}>{c.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label="Receive address">
+                    <Select value={smAddr} onValueChange={setSmAddr}>
+                      <SelectTrigger className="h-9 w-full text-xs"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                      <SelectContent>
+                        {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Vendor · optional">
+                    <Select value={smVendor} onValueChange={setSmVendor}>
+                      <SelectTrigger className="h-9 w-full text-xs"><SelectValue placeholder="No vendor" /></SelectTrigger>
+                      <SelectContent>
+                        {vendors.filter(v => v.shippable).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Carrier">
+                    <Select value={smCarrier} onValueChange={setSmCarrier}>
+                      <SelectTrigger className="h-9 w-full text-xs"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                      <SelectContent>
+                        {CARRIERS.map(c => <SelectItem key={c.token} value={c.token}>{c.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </Field>
                   {smCarrier === '__other__' && (
-                    <Input placeholder="Shippo carrier token" value={smCarrierOther} onChange={e => setSmCarrierOther(e.target.value)} className="h-9 text-xs" />
+                    <Field label="Shippo carrier token">
+                      <Input placeholder="e.g. dhl_ecommerce" value={smCarrierOther} onChange={e => setSmCarrierOther(e.target.value)} className="h-9 w-full text-xs" />
+                    </Field>
                   )}
-                  <Input placeholder="Tracking (from scan — editable)" value={smTracking} onChange={e => setSmTracking(e.target.value)}
-                    className="h-9 text-xs font-mono sm:col-span-2" />
+                  <Field label="Tracking · from scan, editable" className="sm:col-span-2">
+                    <Input value={smTracking} onChange={e => setSmTracking(e.target.value)}
+                      className="h-9 w-full text-xs font-mono" />
+                  </Field>
                 </div>
                 <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Contents</p>
                   {smLines.map((l, idx) => (
                     <div key={idx} className="flex items-center gap-1.5">
                       <Select value={l.product} onValueChange={v => setSmLines(ls => ls.map((x, i2) => i2 === idx ? { ...x, product: v } : x))}>
@@ -1047,8 +1076,12 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
           <DialogHeader><DialogTitle>Fix carrier / tracking — {correcting?.address_label}</DialogTitle></DialogHeader>
           <div className="space-y-2 text-sm">
             <p className="text-xs text-muted-foreground flex items-start gap-1"><AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> Saving clears the fetched tracking status (it belonged to the old number). Locked once received.</p>
-            <Input placeholder="carrier token (usps, ups, fedex…)" value={cCarrier} onChange={e => setCCarrier(e.target.value)} className="h-9 font-mono text-xs" />
-            <Input placeholder="Tracking number" value={cTracking} onChange={e => setCTracking(e.target.value)} className="h-9 font-mono text-xs" />
+            <Field label="Carrier token">
+              <Input placeholder="usps, ups, fedex…" value={cCarrier} onChange={e => setCCarrier(e.target.value)} className="h-9 w-full font-mono text-xs" />
+            </Field>
+            <Field label="Tracking number">
+              <Input value={cTracking} onChange={e => setCTracking(e.target.value)} className="h-9 w-full font-mono text-xs" />
+            </Field>
             {cMsg && <p className="text-xs text-rose-400">{cMsg}</p>}
             <div className="flex gap-2 justify-end">
               <Button size="sm" variant="ghost" onClick={() => setCorrecting(null)}>Cancel</Button>

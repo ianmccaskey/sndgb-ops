@@ -24,6 +24,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { GitBranch, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Field } from '@/components/Field';
 
 /*
  * Stock Planner (waterfall model, per Ian's mock):
@@ -626,19 +627,23 @@ export function PlannerPage() {
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-base">Personal-stock allocations</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <div className="flex flex-wrap gap-2">
-              <Select value={aProduct} onValueChange={setAProduct}>
-                <SelectTrigger className="h-9 flex-1 min-w-44"><SelectValue placeholder="Product" /></SelectTrigger>
-                <SelectContent>
-                  {allocatableProducts.map(p => (
-                    <SelectItem key={p.group_buy_product_id} value={String(p.group_buy_product_id)}>
-                      {p.sku_code} ({fmtUSD(Number(p.unit_cost_usd) + Number(p.freight_usd))}/kit)
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input placeholder="Kits" value={aKits} onChange={e => setAKits(e.target.value)} className="h-9 w-20" />
-              <Button size="sm" onClick={addAllocation}>Add</Button>
+            <div className="grid gap-2 grid-cols-[1fr_5rem_auto] items-end">
+              <Field label="Product">
+                <Select value={aProduct} onValueChange={setAProduct}>
+                  <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                  <SelectContent>
+                    {allocatableProducts.map(p => (
+                      <SelectItem key={p.group_buy_product_id} value={String(p.group_buy_product_id)}>
+                        {p.sku_code} ({fmtUSD(Number(p.unit_cost_usd) + Number(p.freight_usd))}/kit)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Kits">
+                <Input inputMode="numeric" value={aKits} onChange={e => setAKits(e.target.value)} className="h-9" />
+              </Field>
+              <Button size="sm" className="h-9 self-end" onClick={addAllocation}>Add</Button>
             </div>
             {aChosen && Number(aKits) > 0 && (
               <p className="text-xs text-muted-foreground">= {fmtUSD(Math.round(Number(aKits) * aPerKit * 100) / 100)} at vendor cost + freight</p>
@@ -704,18 +709,24 @@ export function PlannerPage() {
               <p className="text-muted-foreground">
                 {fmtUSD(Math.round(Number(ordering.kits) * (Number(ordering.unit_cost_usd) + Number(ordering.freight_usd)) * 100) / 100)} to {ordering.vendor_code} ({fmtNum(ordering.kits)} kits × {fmtUSD(Number(ordering.unit_cost_usd) + Number(ordering.freight_usd))} cost+freight)
               </p>
-              <div className="flex flex-wrap gap-2">
-                <Input type="date" value={oDate} disabled={oSaving} onChange={e => setODate(e.target.value)} className="h-9 w-40" />
-                <Select value={oWallet} onValueChange={setOWallet}>
-                  <SelectTrigger className="h-9 flex-1 min-w-36"><SelectValue placeholder="From wallet" /></SelectTrigger>
-                  <SelectContent>
-                    {wallets.filter(w => w.active).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Input placeholder="Method" value={oMethod} disabled={oSaving} onChange={e => setOMethod(e.target.value)} className="h-9 w-28" />
-                <Input placeholder="Receipt / tx ref (optional)" value={oRef} disabled={oSaving} onChange={e => setORef(e.target.value)} className="h-9 flex-1 min-w-40" />
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Field label="Payment date">
+                  <Input type="date" value={oDate} disabled={oSaving} onChange={e => setODate(e.target.value)} className="h-9 w-full" />
+                </Field>
+                <Field label="Paid from wallet">
+                  <Select value={oWallet} onValueChange={setOWallet}>
+                    <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                    <SelectContent>
+                      {wallets.filter(w => w.active).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Method" hint="e.g. USDC, wire">
+                  <Input value={oMethod} disabled={oSaving} onChange={e => setOMethod(e.target.value)} className="h-9" />
+                </Field>
+                <Field label="Receipt / tx ref · optional">
+                  <Input value={oRef} disabled={oSaving} onChange={e => setORef(e.target.value)} className="h-9" />
+                </Field>
               </div>
               {oMsg && <p className="text-xs text-rose-400">{oMsg}</p>}
               <div className="flex gap-2 justify-end">

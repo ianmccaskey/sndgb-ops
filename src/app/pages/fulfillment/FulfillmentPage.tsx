@@ -34,6 +34,7 @@ import type { RxAddress } from '@/app/pages/receiving/shared';
 import { ShippingModal } from './ShippingModal';
 import type { QueueOrder } from './ShippingModal';
 import { Truck, PauseCircle, Filter, Check, X } from 'lucide-react';
+import { Field } from '@/components/Field';
 
 type QueueRow = QueueOrder & {
   hold_shipping: boolean; admin_note: string | null;
@@ -1067,13 +1068,17 @@ export function FulfillmentPage() {
                         <span className="text-muted-foreground">× {fmtNum(Number(l.effective_qty))}</span>
                       </label>
                       {checked && (
-                        <div className="flex flex-wrap gap-1.5 pl-6">
-                          <Input placeholder="Carrier" value={dv.carrier}
-                            onChange={e => setDvByLine(m => ({ ...m, [id]: { ...(m[id] || { carrier: '', tracking: '' }), carrier: e.target.value } }))}
-                            className="h-7 w-28 text-xs" />
-                          <Input placeholder="Tracking (optional)" value={dv.tracking}
-                            onChange={e => setDvByLine(m => ({ ...m, [id]: { ...(m[id] || { carrier: '', tracking: '' }), tracking: e.target.value } }))}
-                            className="h-7 flex-1 min-w-36 text-xs font-mono" />
+                        <div className="grid gap-1.5 grid-cols-[7rem_1fr] pl-6">
+                          <Field label="Carrier">
+                            <Input value={dv.carrier}
+                              onChange={e => setDvByLine(m => ({ ...m, [id]: { ...(m[id] || { carrier: '', tracking: '' }), carrier: e.target.value } }))}
+                              className="h-7 text-xs" />
+                          </Field>
+                          <Field label="Tracking number · optional">
+                            <Input value={dv.tracking}
+                              onChange={e => setDvByLine(m => ({ ...m, [id]: { ...(m[id] || { carrier: '', tracking: '' }), tracking: e.target.value } }))}
+                              className="h-7 text-xs font-mono" />
+                          </Field>
                         </div>
                       )}
                     </div>

@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BarChart3, RefreshCw } from 'lucide-react';
 import { DispersionTab, type Pnl, type DispAdjustment } from './DispersionTab';
+import { Field } from '@/components/Field';
 type Expense = { id: number; category: string; description: string; unit_cost_usd: string; qty: string; total_usd: string };
 type Wallet = {
   id: number; name: string; chain: string; address: string | null; active: boolean;
@@ -372,17 +373,25 @@ export function FinancialsPage() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Expenses</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex flex-wrap gap-2">
-            <Select value={eCat} onValueChange={setECat}>
-              <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {['supplies', 'shipping', 'reship', 'testing', 'other'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Input placeholder="Description (e.g. 6x4x4 boxes)" value={eDesc} onChange={e => setEDesc(e.target.value)} className="h-9 flex-1 min-w-48" />
-            <Input placeholder="Unit cost $" value={eCost} onChange={e => setECost(e.target.value)} className="h-9 w-28" />
-            <Input placeholder="Qty" value={eQty} onChange={e => setEQty(e.target.value)} className="h-9 w-20" />
-            <Button size="sm" onClick={submitExpense}>Add</Button>
+          <div className="grid gap-2 grid-cols-2 sm:grid-cols-[8rem_1fr_7rem_5rem_auto] sm:items-end">
+            <Field label="Category">
+              <Select value={eCat} onValueChange={setECat}>
+                <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['supplies', 'shipping', 'reship', 'testing', 'other'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Description" className="col-span-2 sm:col-span-1 order-first sm:order-none">
+              <Input placeholder="e.g. 6x4x4 boxes" value={eDesc} onChange={e => setEDesc(e.target.value)} className="h-9" />
+            </Field>
+            <Field label="Unit cost $">
+              <Input inputMode="decimal" value={eCost} onChange={e => setECost(e.target.value)} className="h-9" />
+            </Field>
+            <Field label="Qty">
+              <Input inputMode="numeric" value={eQty} onChange={e => setEQty(e.target.value)} className="h-9" />
+            </Field>
+            <Button size="sm" className="h-9 self-end" onClick={submitExpense}>Add</Button>
           </div>
           {eError && <p className="text-sm text-rose-400">{eError}</p>}
           <div className="overflow-x-auto">

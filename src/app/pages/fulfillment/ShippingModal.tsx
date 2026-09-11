@@ -37,6 +37,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { StatusPill } from '@/components/StatusPill';
 import { Led } from '@/components/Led';
 import type { RxAddress } from '@/app/pages/receiving/shared';
+import { Field } from '@/components/Field';
 
 /*
  * The shipping modal: quote + buy a Shippo label (or record a manual one)
@@ -1323,15 +1324,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   Insure{customerInsured && <span className="rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1 py-0.5 uppercase">paid {fmtUSD(insuranceFee)}</span>}
                 </label>
                 {insureBox && (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <Input placeholder="Value $" inputMode="decimal" value={insuredValue}
-                      onChange={e => { setInsuredValue(e.target.value); setInsuredTouched(true); }} className="h-9 w-28" />
-                    {insuredTouched && (
-                      <button className="text-xs text-muted-foreground underline" onClick={() => { setInsuredTouched(false); }}>recalc</button>
-                    )}
-                    {/* was hover-only (title=) — invisible on touch */}
-                    <span className="text-[10px] text-muted-foreground">declared value · Shippo bills $1.27 per $100 insured</span>
-                  </div>
+                  <Field label="Declared value $" hint="Shippo bills $1.27 per $100 insured">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Input inputMode="decimal" value={insuredValue}
+                        onChange={e => { setInsuredValue(e.target.value); setInsuredTouched(true); }} className="h-9 w-28" />
+                      {insuredTouched && (
+                        <button className="text-xs text-muted-foreground underline" onClick={() => { setInsuredTouched(false); }}>recalc</button>
+                      )}
+                    </div>
+                  </Field>
                 )}
               </div>
             )}
@@ -1389,21 +1390,33 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           <input ref={fileInputRef} type="file" accept="image/*" capture="environment" multiple className="hidden"
             onChange={e => onFilesPicked(e.target.files)} />
 
-          <Input placeholder="Note (optional)" value={note} onChange={e => setNote(e.target.value)} className="h-9" />
+          <Field label="Note · optional">
+            <Input value={note} onChange={e => setNote(e.target.value)} className="h-9" />
+          </Field>
 
           {manualMode ? (
-            <div className="flex flex-wrap gap-2 items-center">
-              <Select value={mCarrier} onValueChange={setMCarrier}>
-                <SelectTrigger className="h-9 w-36"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {['usps', 'ups', 'fedex', 'dhl_express', 'dhl_ecommerce'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                  <SelectItem value="other">other…</SelectItem>
-                </SelectContent>
-              </Select>
-              {mCarrier === 'other' && <Input placeholder="carrier token" value={mCarrierOther} onChange={e => setMCarrierOther(e.target.value)} className="h-9 w-32" />}
-              <Input placeholder="Tracking number" value={mTracking} onChange={e => setMTracking(e.target.value)} className="h-9 flex-1 min-w-52 font-mono text-xs" />
-              <Input placeholder="Cost $ (optional)" value={mCost} onChange={e => setMCost(e.target.value)} className="h-9 w-32" />
-              <Button size="sm" disabled={manualBusy} onClick={recordManual}>{manualBusy ? 'Recording…' : 'Record shipment'}</Button>
+            <div className="grid gap-2 grid-cols-2 sm:grid-cols-4 items-end">
+              <Field label="Carrier" className="col-span-2 sm:col-span-1">
+                <Select value={mCarrier} onValueChange={setMCarrier}>
+                  <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {['usps', 'ups', 'fedex', 'dhl_express', 'dhl_ecommerce'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                    <SelectItem value="other">other…</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              {mCarrier === 'other' && (
+                <Field label="Carrier token" className="col-span-2 sm:col-span-1">
+                  <Input value={mCarrierOther} onChange={e => setMCarrierOther(e.target.value)} className="h-9" />
+                </Field>
+              )}
+              <Field label="Tracking number" className="col-span-2">
+                <Input value={mTracking} onChange={e => setMTracking(e.target.value)} className="h-9 font-mono text-xs" />
+              </Field>
+              <Field label="Cost $ · optional">
+                <Input inputMode="decimal" value={mCost} onChange={e => setMCost(e.target.value)} className="h-9" />
+              </Field>
+              <Button size="sm" className="h-9 self-end justify-self-start" disabled={manualBusy} onClick={recordManual}>{manualBusy ? 'Recording…' : 'Record shipment'}</Button>
             </div>
           ) : (
             <div className="space-y-2">

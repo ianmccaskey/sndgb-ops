@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { rows } from '@/lib/rows';
 import { productChipClass, boxConsumption } from './shared';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Field } from '@/components/Field';
 import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCandidate, DrainRow } from './shared';
 
 type ItemLine = { product: string; qty: string };
@@ -896,10 +897,12 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     <div className="space-y-4">
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">New transfer — buy a label via Shippo</CardTitle></CardHeader>
-        <CardContent className="space-y-2">
-          <div className="flex flex-wrap gap-2">
+        <CardContent className="space-y-3">
+          {/* persistent labels (form-UX sweep 2026-09-12) */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Ship from · receive address">
             <Select value={fFrom} onValueChange={v => { setFFrom(v); setSelectedBoxIds([]); }}>
-              <SelectTrigger className="h-9 flex-1 min-w-40"><SelectValue placeholder="Ship from (receive address)" /></SelectTrigger>
+              <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
               <SelectContent>
                 {addresses.filter(a => a.active && a.transfer_origin_id == null).map(a => {
                   const members = addresses.filter(m => Number(m.transfer_origin_id ?? 0) === Number(a.id)).length;
@@ -907,8 +910,10 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                 })}
               </SelectContent>
             </Select>
+            </Field>
+            <Field label="Destination">
             <Select value={fDest} onValueChange={setFDest}>
-              <SelectTrigger className="h-9 flex-1 min-w-40"><SelectValue placeholder="Destination" /></SelectTrigger>
+              <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
               <SelectContent>
                 {/* receive addresses as transfer-to targets — the two
                     everyday ones pinned first (Ian), then the rest, then
@@ -934,6 +939,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                 ))}
               </SelectContent>
             </Select>
+            </Field>
           </div>
           {fFrom && boxesAtFrom.length > 0 && (
             <div className="space-y-1">
@@ -998,14 +1004,28 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             </p>
           )}
           {fDest === '__custom__' && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              <Input placeholder="Name" value={custom.name} onChange={e => setCustom(c => ({ ...c, name: e.target.value }))} className="h-9 col-span-2 sm:col-span-1" />
-              <Input placeholder="Street" value={custom.street1} onChange={e => setCustom(c => ({ ...c, street1: e.target.value }))} className="h-9 col-span-2" />
-              <Input placeholder="Apt / unit" value={custom.street2} onChange={e => setCustom(c => ({ ...c, street2: e.target.value }))} className="h-9" />
-              <Input placeholder="City" value={custom.city} onChange={e => setCustom(c => ({ ...c, city: e.target.value }))} className="h-9" />
-              <Input placeholder="State" value={custom.state} onChange={e => setCustom(c => ({ ...c, state: e.target.value }))} className="h-9" />
-              <Input placeholder="Zip" value={custom.zip} onChange={e => setCustom(c => ({ ...c, zip: e.target.value }))} className="h-9" />
-              <Input placeholder="Phone (optional)" value={custom.phone} onChange={e => setCustom(c => ({ ...c, phone: e.target.value }))} className="h-9" />
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <Field label="Name" className="col-span-2 sm:col-span-1">
+                <Input value={custom.name} onChange={e => setCustom(c => ({ ...c, name: e.target.value }))} className="h-9 w-full" />
+              </Field>
+              <Field label="Street" className="col-span-2">
+                <Input value={custom.street1} onChange={e => setCustom(c => ({ ...c, street1: e.target.value }))} className="h-9 w-full" />
+              </Field>
+              <Field label="Apt / unit">
+                <Input value={custom.street2} onChange={e => setCustom(c => ({ ...c, street2: e.target.value }))} className="h-9 w-full" />
+              </Field>
+              <Field label="City">
+                <Input value={custom.city} onChange={e => setCustom(c => ({ ...c, city: e.target.value }))} className="h-9 w-full" />
+              </Field>
+              <Field label="State">
+                <Input value={custom.state} onChange={e => setCustom(c => ({ ...c, state: e.target.value }))} className="h-9 w-full" />
+              </Field>
+              <Field label="Zip">
+                <Input inputMode="numeric" value={custom.zip} onChange={e => setCustom(c => ({ ...c, zip: e.target.value }))} className="h-9 w-full" />
+              </Field>
+              <Field label="Phone · optional">
+                <Input inputMode="tel" value={custom.phone} onChange={e => setCustom(c => ({ ...c, phone: e.target.value }))} className="h-9 w-full" />
+              </Field>
             </div>
           )}
           <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
@@ -1013,33 +1033,50 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             <span>Label bought <span className="font-medium">outside the app</span> — enter the tracking number manually (no rate shopping, no Shippo purchase)</span>
           </label>
           {manualMode ? (
-            <div className="flex flex-wrap gap-2">
-              <Select value={mCarrier} onValueChange={setMCarrier}>
-                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="Carrier" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="usps">USPS</SelectItem>
-                  <SelectItem value="ups">UPS</SelectItem>
-                  <SelectItem value="fedex">FedEx</SelectItem>
-                  <SelectItem value="dhl_express">DHL Express</SelectItem>
-                  <SelectItem value="dhl_ecommerce">DHL eCommerce</SelectItem>
-                  <SelectItem value="canada_post">Canada Post</SelectItem>
-                  <SelectItem value="__other__">Other…</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+              <Field label="Carrier">
+                <Select value={mCarrier} onValueChange={setMCarrier}>
+                  <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="usps">USPS</SelectItem>
+                    <SelectItem value="ups">UPS</SelectItem>
+                    <SelectItem value="fedex">FedEx</SelectItem>
+                    <SelectItem value="dhl_express">DHL Express</SelectItem>
+                    <SelectItem value="dhl_ecommerce">DHL eCommerce</SelectItem>
+                    <SelectItem value="canada_post">Canada Post</SelectItem>
+                    <SelectItem value="__other__">Other…</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
               {mCarrier === '__other__' && (
-                <Input placeholder="Carrier token" value={mCarrierOther} onChange={e => setMCarrierOther(e.target.value)} className="h-9 w-36" />
+                <Field label="Carrier token">
+                  <Input value={mCarrierOther} onChange={e => setMCarrierOther(e.target.value)} className="h-9 w-full" />
+                </Field>
               )}
-              <Input placeholder="Tracking number" value={mTracking} onChange={e => setMTracking(e.target.value)} className="h-9 flex-1 min-w-52 font-mono" />
-              <Input placeholder="Cost $ (optional)" value={mCost} onChange={e => setMCost(e.target.value)} className="h-9 w-32" />
+              <Field label="Tracking number" className="col-span-2">
+                <Input value={mTracking} onChange={e => setMTracking(e.target.value)} className="h-9 w-full font-mono" />
+              </Field>
+              <Field label="Cost $ · optional">
+                <Input inputMode="decimal" value={mCost} onChange={e => setMCost(e.target.value)} className="h-9 w-full" />
+              </Field>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <Input placeholder="Length (in)" value={dims.length} onChange={e => setDims(d => ({ ...d, length: e.target.value }))} className="h-9" />
-              <Input placeholder="Width (in)" value={dims.width} onChange={e => setDims(d => ({ ...d, width: e.target.value }))} className="h-9" />
-              <Input placeholder="Height (in)" value={dims.height} onChange={e => setDims(d => ({ ...d, height: e.target.value }))} className="h-9" />
-              <Input placeholder="Weight (lb)" value={dims.weight} onChange={e => setDims(d => ({ ...d, weight: e.target.value }))} className="h-9" />
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Field label="Length · in">
+                <Input inputMode="decimal" value={dims.length} onChange={e => setDims(d => ({ ...d, length: e.target.value }))} className="h-9 w-full" />
+              </Field>
+              <Field label="Width · in">
+                <Input inputMode="decimal" value={dims.width} onChange={e => setDims(d => ({ ...d, width: e.target.value }))} className="h-9 w-full" />
+              </Field>
+              <Field label="Height · in">
+                <Input inputMode="decimal" value={dims.height} onChange={e => setDims(d => ({ ...d, height: e.target.value }))} className="h-9 w-full" />
+              </Field>
+              <Field label="Weight · lb">
+                <Input inputMode="decimal" value={dims.weight} onChange={e => setDims(d => ({ ...d, weight: e.target.value }))} className="h-9 w-full" />
+              </Field>
             </div>
           )}
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Contents</p>
           {fLines.map((l, i) => {
             const oh = l.product ? onHand(Number(l.product)) : null;
             const over = l.product && Number(l.qty) > (oh ?? 0);
@@ -1061,12 +1098,14 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
               </div>
             );
           })}
-          <div className="flex flex-wrap gap-2 items-center">
-            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setFLines(ls => [...ls, { product: '', qty: '' }])}>+ Add product</Button>
-            <Input placeholder="Note (optional)" value={fNote} onChange={e => setFNote(e.target.value)} className="h-8 flex-1 min-w-40" />
+          <div className="flex flex-wrap gap-2 items-end">
+            <Button size="sm" variant="outline" className="h-9 text-xs" onClick={() => setFLines(ls => [...ls, { product: '', qty: '' }])}>+ Add product</Button>
+            <Field label="Note · optional" className="flex-1 min-w-40">
+              <Input value={fNote} onChange={e => setFNote(e.target.value)} className="h-9 w-full" />
+            </Field>
             {manualMode
-              ? <Button size="sm" className="h-8" onClick={recordManual} disabled={manualBusy}>{manualBusy ? 'Recording…' : 'Record transfer'}</Button>
-              : <Button size="sm" className="h-8" onClick={fetchRates} disabled={ratesLoading}>{ratesLoading ? 'Fetching rates…' : 'Get rates (UPS / USPS)'}</Button>}
+              ? <Button size="sm" className="h-9" onClick={recordManual} disabled={manualBusy}>{manualBusy ? 'Recording…' : 'Record transfer'}</Button>
+              : <Button size="sm" className="h-9" onClick={fetchRates} disabled={ratesLoading}>{ratesLoading ? 'Fetching rates…' : 'Get rates (UPS / USPS)'}</Button>}
           </div>
           {fMsg && <p className="text-xs text-rose-400">{fMsg}</p>}
 

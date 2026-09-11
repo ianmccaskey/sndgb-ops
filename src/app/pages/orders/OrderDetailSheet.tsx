@@ -60,6 +60,7 @@ import { Separator } from '@/components/ui/separator';
 import { StatusPill } from '@/components/StatusPill';
 import { Led } from '@/components/Led';
 import { TxHash } from '@/components/TxHash';
+import { Field } from '@/components/Field';
 
 type OrderRow = {
   id: number; order_number: string; external_id: string | null; status: string; group_buy_id: number;
@@ -1605,17 +1606,22 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       </span>
                     </div>
                     {qtyEditId === it.id && (
-                      <div className="flex flex-wrap gap-2 mt-1 items-center">
-                        <Input placeholder={`Qty (ordering app: ${Number(it.qty)})`} value={qtyEditVal} onChange={e => setQtyEditVal(e.target.value)} className="h-7 w-40 text-xs" />
-                        <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveItemQty(it)}>Save</Button>
-                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setQtyEditId(null); setCompMsg(''); }}>Cancel</Button>
-                        <span className="text-[11px] text-muted-foreground">Blank = follow the ordering app. Billing and demand shift by the difference.</span>
-                      </div>
+                      <Field label={`New qty · app has ${Number(it.qty)}`} hint="blank = follow the ordering app; billing and demand shift by the difference" className="mt-1">
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <Input inputMode="numeric" value={qtyEditVal} onChange={e => setQtyEditVal(e.target.value)} className="h-7 w-28 text-xs" />
+                          <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveItemQty(it)}>Save</Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setQtyEditId(null); setCompMsg(''); }}>Cancel</Button>
+                        </div>
+                      </Field>
                     )}
                     {compingId === it.id && (
-                      <div className="flex flex-wrap gap-2 mt-1 items-center">
-                        <Input placeholder={`Free units (max ${effQty(it)})`} value={compQty} onChange={e => setCompQty(e.target.value)} className="h-7 w-32 text-xs" />
-                        <Input placeholder="Why is this free? (audited)" value={compReason} onChange={e => setCompReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
+                      <div className="flex flex-wrap gap-2 mt-1 items-end">
+                        <Field label={`Free units · max ${effQty(it)}`}>
+                          <Input inputMode="numeric" value={compQty} onChange={e => setCompQty(e.target.value)} className="h-7 w-28 text-xs" />
+                        </Field>
+                        <Field label="Why free? · audited" className="flex-1 min-w-40">
+                          <Input value={compReason} onChange={e => setCompReason(e.target.value)} className="h-7 text-xs" />
+                        </Field>
                         <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveComp(it, compQty || '0', compReason)}>Save</Button>
                         {Number(it.comp_qty) > 0 && (
                           <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400" disabled={saving} onClick={() => saveComp(it, '0', '')}>Remove comp</Button>
@@ -1742,36 +1748,54 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     )}
                   </div>
                   {addingCredit && (
-                    <div className="flex flex-wrap gap-2 mt-1 items-center">
-                      <Input placeholder="Credit $" value={creditAmt} onChange={e => setCreditAmt(e.target.value)} className="h-7 w-24 text-xs" />
-                      <Input placeholder="Why is this credited? (audited)" value={creditReason} onChange={e => setCreditReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
+                    <div className="flex flex-wrap gap-2 mt-1 items-end">
+                      <Field label="Credit $">
+                        <Input inputMode="decimal" value={creditAmt} onChange={e => setCreditAmt(e.target.value)} className="h-7 w-24 text-xs" />
+                      </Field>
+                      <Field label="Why credited? · audited" className="flex-1 min-w-40">
+                        <Input value={creditReason} onChange={e => setCreditReason(e.target.value)} className="h-7 text-xs" />
+                      </Field>
                       <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={submitCredit}>Save</Button>
                       <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setAddingCredit(false); setCrMsg(''); }}>Cancel</Button>
                     </div>
                   )}
                   {addingRefund && (
-                    <div className="flex flex-wrap gap-2 mt-1 items-center">
-                      <Input placeholder="Refund $" value={refundAmt} onChange={e => setRefundAmt(e.target.value)} className="h-7 w-24 text-xs" />
-                      <Select value={refundMethod} onValueChange={v => { setRefundMethod(v); setRefundWallet(''); }}>
-                        <SelectTrigger className="h-7 w-20 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {/* the refund rail must match the order's rail (server-enforced) */}
-                          {(['eth', 'sol', 'base'].includes(o.payment_rail || '') ? [o.payment_rail as string] : ['zelle', 'venmo', 'paypal', 'other'])
-                            .map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                      <Select value={refundWallet} onValueChange={setRefundWallet}>
-                        <SelectTrigger className="h-7 w-36 text-xs"><SelectValue placeholder="From wallet (opt.)" /></SelectTrigger>
-                        <SelectContent>
-                          {sheetWallets
-                            .filter(w => w.active && (['eth', 'sol', 'base'].includes(refundMethod) ? w.chain === refundMethod : w.chain === 'fiat'))
-                            .map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                      <Input placeholder="Tx ref (optional)" value={refundTxRef} onChange={e => setRefundTxRef(e.target.value)} className="h-7 flex-1 min-w-32 text-xs" />
-                      <Input placeholder="Why refunded? (audited)" value={refundReason} onChange={e => setRefundReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
-                      <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={submitRefund}>Save</Button>
-                      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setAddingRefund(false); setCrMsg(''); }}>Cancel</Button>
+                    <div className="mt-1 space-y-1.5">
+                      <div className="grid gap-1.5 grid-cols-[6rem_5.5rem_1fr] items-end">
+                        <Field label="Refund $">
+                          <Input inputMode="decimal" value={refundAmt} onChange={e => setRefundAmt(e.target.value)} className="h-7 text-xs" />
+                        </Field>
+                        <Field label="Method">
+                          <Select value={refundMethod} onValueChange={v => { setRefundMethod(v); setRefundWallet(''); }}>
+                            <SelectTrigger className="h-7 w-full text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {/* the refund rail must match the order's rail (server-enforced) */}
+                              {(['eth', 'sol', 'base'].includes(o.payment_rail || '') ? [o.payment_rail as string] : ['zelle', 'venmo', 'paypal', 'other'])
+                                .map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                        <Field label="Wallet · optional">
+                          <Select value={refundWallet} onValueChange={setRefundWallet}>
+                            <SelectTrigger className="h-7 w-full text-xs"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                            <SelectContent>
+                              {sheetWallets
+                                .filter(w => w.active && (['eth', 'sol', 'base'].includes(refundMethod) ? w.chain === refundMethod : w.chain === 'fiat'))
+                                .map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 items-end">
+                        <Field label="Tx ref · optional" className="flex-1 min-w-32">
+                          <Input value={refundTxRef} onChange={e => setRefundTxRef(e.target.value)} className="h-7 text-xs" />
+                        </Field>
+                        <Field label="Why refunded? · audited" className="flex-1 min-w-40">
+                          <Input value={refundReason} onChange={e => setRefundReason(e.target.value)} className="h-7 text-xs" />
+                        </Field>
+                        <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={submitRefund}>Save</Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setAddingRefund(false); setCrMsg(''); }}>Cancel</Button>
+                      </div>
                     </div>
                   )}
                   {crMsg && <p className="text-xs text-rose-400 mt-0.5">{crMsg}</p>}
@@ -1790,9 +1814,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                           <span className="text-[10px]">forgiven value stays tracked in finances</span>
                         </div>
                       ) : (
-                        <div className="flex flex-wrap gap-2 items-center">
-                          <Input placeholder="Amount $" value={woAmt} onChange={e => setWoAmt(e.target.value)} className="h-7 w-24 text-xs" />
-                          <Input placeholder="Why write this off? (audited)" value={woReason} onChange={e => setWoReason(e.target.value)} className="h-7 flex-1 min-w-40 text-xs" />
+                        <div className="flex flex-wrap gap-2 items-end">
+                          <Field label="Write off $">
+                            <Input inputMode="decimal" value={woAmt} onChange={e => setWoAmt(e.target.value)} className="h-7 w-24 text-xs" />
+                          </Field>
+                          <Field label="Why write off? · audited" className="flex-1 min-w-40">
+                            <Input value={woReason} onChange={e => setWoReason(e.target.value)} className="h-7 text-xs" />
+                          </Field>
                           <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveWriteoff(woAmt, woReason)}>Save</Button>
                           {Number(o.writeoff_usd) > 0 && (
                             <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400" disabled={saving} onClick={() => saveWriteoff('0', '')}>Remove</Button>
@@ -1999,15 +2027,21 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   {o.payment_rail === 'cash' && (
                     <p className="text-xs font-medium text-emerald-300 mb-1.5">Cash order — record the payment here:</p>
                   )}
-                  <div className="flex flex-wrap gap-2">
-                    <Input placeholder="Amount $" value={cashAmt} onChange={e => setCashAmt(e.target.value)} className="h-8 w-28 text-xs" />
-                    <Select value={cashMethod} onValueChange={setCashMethod}>
-                      <SelectTrigger className="h-8 w-24 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {['zelle', 'venmo', 'paypal', 'cash', 'other'].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                    <Input placeholder="Receipt # (optional)" value={cashRef} onChange={e => setCashRef(e.target.value)} className="h-8 flex-1 min-w-32 text-xs" />
+                  <div className="flex flex-wrap gap-2 items-end">
+                    <Field label="Amount $">
+                      <Input inputMode="decimal" value={cashAmt} onChange={e => setCashAmt(e.target.value)} className="h-8 w-28 text-xs" />
+                    </Field>
+                    <Field label="Method">
+                      <Select value={cashMethod} onValueChange={setCashMethod}>
+                        <SelectTrigger className="h-8 w-24 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {['zelle', 'venmo', 'paypal', 'cash', 'other'].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="Receipt # · optional" className="flex-1 min-w-32">
+                      <Input value={cashRef} onChange={e => setCashRef(e.target.value)} className="h-8 text-xs" />
+                    </Field>
                     <Button size="sm" className="h-8 text-xs" disabled={saving} onClick={recordCashPayment}>Record payment</Button>
                   </div>
                   {cashMsg && <p className="text-xs mt-1 text-muted-foreground">{cashMsg}</p>}
@@ -2054,7 +2088,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     <Label htmlFor="hold" className="text-sm">Hold shipping</Label>
                   </div>
                 </div>
-                <Textarea placeholder="Admin note" value={adminNote} onChange={e => setAdminNote(e.target.value)} rows={2} />
+                <Field label="Admin note · optional">
+                  <Textarea value={adminNote} onChange={e => setAdminNote(e.target.value)} rows={2} />
+                </Field>
                 <Button size="sm" onClick={save} disabled={saving}>Save</Button>
               </div>
 
@@ -2063,9 +2099,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 <p className="text-xs text-muted-foreground">
                   Forces the effective received amount for this order. Reason is required and the change is logged.
                 </p>
-                <div className="flex gap-2">
-                  <Input placeholder="Amount USD" value={overrideAmt} onChange={e => setOverrideAmt(e.target.value)} className="h-8 w-32" />
-                  <Input placeholder="Reason (required)" value={overrideReason} onChange={e => setOverrideReason(e.target.value)} className="h-8 flex-1" />
+                <div className="flex gap-2 items-end">
+                  <Field label="Amount USD">
+                    <Input inputMode="decimal" value={overrideAmt} onChange={e => setOverrideAmt(e.target.value)} className="h-8 w-32" />
+                  </Field>
+                  <Field label="Reason · audited" className="flex-1">
+                    <Input value={overrideReason} onChange={e => setOverrideReason(e.target.value)} className="h-8" />
+                  </Field>
                   <Button size="sm" variant="outline" onClick={saveOverride} disabled={saving}>Apply</Button>
                 </div>
               </div>

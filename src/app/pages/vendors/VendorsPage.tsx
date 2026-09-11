@@ -19,6 +19,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { StatusPill } from '@/components/StatusPill';
 import { Switch } from '@/components/ui/switch';
 import { Store, AlertTriangle } from 'lucide-react';
+import { Field } from '@/components/Field';
 
 type Vendor = { id: number; code: string; name: string; active: boolean };
 type Balance = {
@@ -424,16 +425,22 @@ export function VendorsPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-base">Record vendor payment</CardTitle></CardHeader>
-          <CardContent className="space-y-2">
-            <div className="flex flex-wrap gap-2">
-              <Select value={pVendor} disabled={pSaving} onValueChange={v => { setPVendor(v); setPLines([{ product: '', kits: '', value: '', valueDirty: false }]); }}>
-                <SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Vendor" /></SelectTrigger>
-                <SelectContent>
-                  {vendors.filter(v => v.active).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Input type="date" value={pDate} disabled={pSaving} onChange={e => setPDate(e.target.value)} className="h-9 w-40" />
+          <CardContent className="space-y-3">
+            {/* persistent labels (form-UX sweep 2026-09-12) */}
+            <div className="grid gap-3 grid-cols-2">
+              <Field label="Vendor">
+                <Select value={pVendor} disabled={pSaving} onValueChange={v => { setPVendor(v); setPLines([{ product: '', kits: '', value: '', valueDirty: false }]); }}>
+                  <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                  <SelectContent>
+                    {vendors.filter(v => v.active).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Payment date">
+                <Input type="date" value={pDate} disabled={pSaving} onChange={e => setPDate(e.target.value)} className="h-9 w-full" />
+              </Field>
             </div>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Product lines · kits paid for</p>
             {pLines.map((l, i) => (
               <div key={i} className="flex flex-wrap gap-2 items-center">
                 <Select value={l.product} disabled={pSaving} onValueChange={v => setLine(i, { product: v })}>
@@ -446,8 +453,8 @@ export function VendorsPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Input placeholder="Kits" value={l.kits} disabled={pSaving} onChange={e => setLine(i, { kits: e.target.value })} className="h-9 w-20" />
-                <Input placeholder="Value $" value={l.value} disabled={pSaving} onChange={e => setLine(i, { value: e.target.value, valueDirty: e.target.value.trim() !== '' })} className="h-9 w-28" />
+                <Input placeholder="Kits" inputMode="decimal" value={l.kits} disabled={pSaving} onChange={e => setLine(i, { kits: e.target.value })} className="h-9 w-20" />
+                <Input placeholder="Value $" inputMode="decimal" value={l.value} disabled={pSaving} onChange={e => setLine(i, { value: e.target.value, valueDirty: e.target.value.trim() !== '' })} className="h-9 w-28" />
                 {pLines.length > 1 && (
                   <Button size="sm" variant="ghost" className="h-9 px-2 text-rose-400" disabled={pSaving} onClick={() => setPLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
                 )}
@@ -458,20 +465,28 @@ export function VendorsPage() {
                 onClick={() => setPLines(ls => [...ls, { product: '', kits: '', value: '', valueDirty: false }])}>
                 + Add product line
               </Button>
-              <Input placeholder="Freight $ (optional)" value={pFreight} disabled={pSaving} onChange={e => setPFreight(e.target.value)} className="h-8 w-40" />
+              <Field label="Freight $ · optional" className="w-40">
+                <Input inputMode="decimal" value={pFreight} disabled={pSaving} onChange={e => setPFreight(e.target.value)} className="h-9 w-full" />
+              </Field>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Select value={pWallet} disabled={pSaving} onValueChange={setPWallet}>
-                <SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Paid from wallet" /></SelectTrigger>
-                <SelectContent>
-                  {wallets.map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Input placeholder="Method" value={pMethod} disabled={pSaving} onChange={e => setPMethod(e.target.value)} className="h-9 w-24" />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Input placeholder="Receipt / tx ref (optional)" value={pRef} disabled={pSaving} onChange={e => setPRef(e.target.value)} className="h-9 flex-1" />
-              <Input placeholder="Note" value={pNote} disabled={pSaving} onChange={e => setPNote(e.target.value)} className="h-9 flex-1" />
+            <div className="grid gap-3 grid-cols-2">
+              <Field label="Paid from wallet">
+                <Select value={pWallet} disabled={pSaving} onValueChange={setPWallet}>
+                  <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                  <SelectContent>
+                    {wallets.map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Method" hint="e.g. USDC, wire">
+                <Input value={pMethod} disabled={pSaving} onChange={e => setPMethod(e.target.value)} className="h-9 w-full" />
+              </Field>
+              <Field label="Receipt / tx ref · optional">
+                <Input value={pRef} disabled={pSaving} onChange={e => setPRef(e.target.value)} className="h-9 w-full" />
+              </Field>
+              <Field label="Note · optional">
+                <Input value={pNote} disabled={pSaving} onChange={e => setPNote(e.target.value)} className="h-9 w-full" />
+              </Field>
             </div>
             {pError && <p className="text-sm text-rose-400">{pError}</p>}
             <div className="flex items-center justify-between">
@@ -485,8 +500,10 @@ export function VendorsPage() {
           <CardHeader className="pb-2"><CardTitle className="text-base">Add vendor</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             <div className="flex flex-wrap gap-2">
-              <Input placeholder="Vendor code (e.g. MEDUSA)" value={nvCode} onChange={e => setNvCode(e.target.value)} className="h-9 flex-1" />
-              <Button size="sm" onClick={addNewVendor}>Add</Button>
+              <Field label="Vendor code" className="flex-1">
+                <Input placeholder="e.g. MEDUSA" value={nvCode} onChange={e => setNvCode(e.target.value)} className="h-9 w-full" />
+              </Field>
+              <Button size="sm" className="h-9 self-end" onClick={addNewVendor}>Add</Button>
             </div>
             {nvError && <p className="text-sm text-rose-400">{nvError}</p>}
             <p className="text-xs text-muted-foreground">Existing: {vendors.map(v => v.code).join(', ')}</p>

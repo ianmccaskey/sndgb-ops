@@ -28,6 +28,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Package, CheckCircle2, Pencil } from 'lucide-react';
+import { Field } from '@/components/Field';
 
 type Product = { id: number; external_id: string | null; sku_code: string; name: string; mass_label: string | null; unit_weight_oz: string | null; digital: boolean; active: boolean };
 type Vendor = { id: number; code: string; active: boolean };
@@ -589,37 +590,47 @@ export function ProductsPage() {
           <Card className="max-w-3xl">
             <CardHeader className="pb-2"><CardTitle className="text-base">Add admin adjustment (organizer units on top of demand)</CardTitle></CardHeader>
             <CardContent className="space-y-2">
-              <div className="flex flex-wrap gap-2">
-                <Select value={aProduct} onValueChange={setAProduct}>
-                  <SelectTrigger className="h-9 w-48"><SelectValue placeholder="Campaign product" /></SelectTrigger>
-                  <SelectContent>
-                    {campaign.map(c => <SelectItem key={c.group_buy_product_id} value={String(c.group_buy_product_id)}>{c.sku_code}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Input placeholder="Qty (+/-)" value={aQty} onChange={e => setAQty(e.target.value)} className="h-9 w-24" />
-                <Select value={aPricing} onValueChange={v => {
-                  setAPricing(v);
-                  // "group stock" only exists for plain at-cost rows —
-                  // don't leave the For select on a vanished option
-                  if (v !== 'cost' && aFor === 'both_stock') setAFor('both');
-                }}>
-                  <SelectTrigger className="h-9 w-56"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="gb">At GB price</SelectItem>
-                    <SelectItem value="cost">At vendor cost + freight</SelectItem>
-                    <SelectItem value="cost_pre">At cost + freight — already ordered</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={aFor} onValueChange={setAFor}>
-                  <SelectTrigger className="h-9 w-44"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="both">{aIsCost ? 'Outside customer' : 'Both'}</SelectItem>
-                    {aPricing === 'cost' && <SelectItem value="both_stock">Both (group stock)</SelectItem>}
-                    {splitParties.map(p => <SelectItem key={p.party} value={p.party}>{aIsCost ? `${p.party} (personal)` : p.party}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Input placeholder={aIsCost ? 'Reason / customer (audited)' : "Reason (e.g. 'P&P personal x100')"} value={aReason} onChange={e => setAReason(e.target.value)} className="h-9 flex-1 min-w-48" />
-                <Button size="sm" onClick={addAdj}>Add</Button>
+              <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
+                <Field label="Campaign product">
+                  <Select value={aProduct} onValueChange={setAProduct}>
+                    <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                    <SelectContent>
+                      {campaign.map(c => <SelectItem key={c.group_buy_product_id} value={String(c.group_buy_product_id)}>{c.sku_code}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Qty" hint="+ adds, − removes">
+                  <Input inputMode="numeric" value={aQty} onChange={e => setAQty(e.target.value)} className="h-9" />
+                </Field>
+                <Field label="Pricing">
+                  <Select value={aPricing} onValueChange={v => {
+                    setAPricing(v);
+                    // "group stock" only exists for plain at-cost rows —
+                    // don't leave the For select on a vanished option
+                    if (v !== 'cost' && aFor === 'both_stock') setAFor('both');
+                  }}>
+                    <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="gb">At GB price</SelectItem>
+                      <SelectItem value="cost">At vendor cost + freight</SelectItem>
+                      <SelectItem value="cost_pre">At cost + freight — already ordered</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="For" hint="whose profit pays">
+                  <Select value={aFor} onValueChange={setAFor}>
+                    <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="both">{aIsCost ? 'Outside customer' : 'Both'}</SelectItem>
+                      {aPricing === 'cost' && <SelectItem value="both_stock">Both (group stock)</SelectItem>}
+                      {splitParties.map(p => <SelectItem key={p.party} value={p.party}>{aIsCost ? `${p.party} (personal)` : p.party}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label={aIsCost ? 'Reason / customer · audited' : 'Reason · audited'} className="col-span-2 sm:col-span-3">
+                  <Input placeholder={aIsCost ? '' : "e.g. 'P&P personal x100'"} value={aReason} onChange={e => setAReason(e.target.value)} className="h-9" />
+                </Field>
+                <Button size="sm" className="h-9 self-end justify-self-start" onClick={addAdj}>Add</Button>
               </div>
               {aError && <p className="text-sm text-rose-400">{aError}</p>}
               {aPricing === 'gb' ? (
@@ -814,12 +825,20 @@ export function ProductsPage() {
           <Card className="max-w-2xl">
             <CardHeader className="pb-2"><CardTitle className="text-base">Add product</CardTitle></CardHeader>
             <CardContent className="space-y-2">
-              <div className="flex gap-2">
-                <Input placeholder="SKU (matches import 'Items')" value={npSku} onChange={e => setNpSku(e.target.value)} className="h-9 w-48" />
-                <Input placeholder="Name" value={npName} onChange={e => setNpName(e.target.value)} className="h-9 flex-1" />
-                <Input placeholder="Mass (60mg)" value={npMass} onChange={e => setNpMass(e.target.value)} className="h-9 w-28" />
-                <Input placeholder="Weight oz" value={npWeight} onChange={e => setNpWeight(e.target.value)} className="h-9 w-24" title="Per-unit shipping weight in ounces — feeds the shipping modal's box-weight prefill" />
-                <Button size="sm" onClick={addProduct}>Add</Button>
+              <div className="grid gap-2 grid-cols-2 sm:grid-cols-[12rem_1fr_7rem_6rem_auto] sm:items-end">
+                <Field label="SKU">
+                  <Input placeholder="matches import 'Items'" value={npSku} onChange={e => setNpSku(e.target.value)} className="h-9" />
+                </Field>
+                <Field label="Name" className="col-span-2 sm:col-span-1">
+                  <Input value={npName} onChange={e => setNpName(e.target.value)} className="h-9" />
+                </Field>
+                <Field label="Mass">
+                  <Input placeholder="e.g. 60mg" value={npMass} onChange={e => setNpMass(e.target.value)} className="h-9" />
+                </Field>
+                <Field label="Weight oz">
+                  <Input inputMode="decimal" placeholder="per unit" value={npWeight} onChange={e => setNpWeight(e.target.value)} className="h-9" />
+                </Field>
+                <Button size="sm" className="h-9 self-end" onClick={addProduct}>Add</Button>
               </div>
               {npError && <p className="text-sm text-rose-400">{npError}</p>}
               <p className="text-xs text-muted-foreground">The SKU must match exactly how the ordering app writes it in the Items column. A missing weight (amber "— none" in the table) counts as 0 in shipping-weight prefills.</p>
@@ -847,18 +866,24 @@ export function ProductsPage() {
                 <p className="text-xs text-muted-foreground">
                   Records a {fmtNum(removing.qty)}-kit vendor payment of {fmtUSD(removing.expected_usd)} against {removing.sku_code}, so they count toward what the campaign still needs from the vendor — and removes the receivable in the same step.
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  <Input type="date" value={rDate} disabled={rSaving} onChange={e => setRDate(e.target.value)} className="h-9 w-40" />
-                  <Select value={rWallet} onValueChange={setRWallet}>
-                    <SelectTrigger className="h-9 flex-1 min-w-36"><SelectValue placeholder="Paid from wallet" /></SelectTrigger>
-                    <SelectContent>
-                      {walletsList.filter(w => w.active).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Input placeholder="Method" value={rMethod} disabled={rSaving} onChange={e => setRMethod(e.target.value)} className="h-9 w-28" />
-                  <Input placeholder="Receipt / tx ref (optional)" value={rRef} disabled={rSaving} onChange={e => setRRef(e.target.value)} className="h-9 flex-1 min-w-40" />
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Field label="Payment date">
+                    <Input type="date" value={rDate} disabled={rSaving} onChange={e => setRDate(e.target.value)} className="h-9 w-full" />
+                  </Field>
+                  <Field label="Paid from wallet">
+                    <Select value={rWallet} onValueChange={setRWallet}>
+                      <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                      <SelectContent>
+                        {walletsList.filter(w => w.active).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Method" hint="e.g. USDC, wire">
+                    <Input value={rMethod} disabled={rSaving} onChange={e => setRMethod(e.target.value)} className="h-9" />
+                  </Field>
+                  <Field label="Receipt / tx ref · optional">
+                    <Input value={rRef} disabled={rSaving} onChange={e => setRRef(e.target.value)} className="h-9" />
+                  </Field>
                 </div>
                 <Button size="sm" disabled={rSaving} onClick={reallocateToGb}>{rSaving ? 'Recording…' : `Allocate ${fmtNum(removing.qty)} kits to group buy`}</Button>
               </div>

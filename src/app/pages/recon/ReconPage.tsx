@@ -19,6 +19,7 @@ import { StatusPill } from '@/components/StatusPill';
 import { TxHash } from '@/components/TxHash';
 import { OrderDetailSheet } from '@/app/pages/orders/OrderDetailSheet';
 import { Scale, Zap } from 'lucide-react';
+import { Field } from '@/components/Field';
 
 type ReconRow = {
   order_id: number; order_number: string; customer_name: string; payment_rail: string | null;
@@ -411,18 +412,26 @@ export function ReconPage() {
           <Card className="max-w-lg">
             <CardHeader className="pb-2"><CardTitle className="text-base">Record a Zelle / Venmo / PayPal / cash payment</CardTitle></CardHeader>
             <CardContent className="space-y-2">
-              <div className="flex gap-2">
-                <Input placeholder="Order # (e.g. 2026-042)" value={mOrder} onChange={e => setMOrder(e.target.value)} className="h-9 flex-1" />
-                <Select value={mMethod} onValueChange={setMMethod}>
-                  <SelectTrigger className="h-9 w-28"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {['zelle', 'venmo', 'paypal', 'cash', 'other'].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+              <div className="grid gap-2 grid-cols-[1fr_7rem]">
+                <Field label="Order #" hint="e.g. 2026-042">
+                  <Input value={mOrder} onChange={e => setMOrder(e.target.value)} className="h-9" />
+                </Field>
+                <Field label="Method">
+                  <Select value={mMethod} onValueChange={setMMethod}>
+                    <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {['zelle', 'venmo', 'paypal', 'cash', 'other'].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
               </div>
-              <div className="flex gap-2">
-                <Input placeholder="Amount USD" value={mAmount} onChange={e => setMAmount(e.target.value)} className="h-9 w-36" />
-                <Input placeholder="Receipt / confirmation # (optional)" value={mRef} onChange={e => setMRef(e.target.value)} className="h-9 flex-1" />
+              <div className="grid gap-2 grid-cols-[7rem_1fr]">
+                <Field label="Amount USD">
+                  <Input inputMode="decimal" value={mAmount} onChange={e => setMAmount(e.target.value)} className="h-9" />
+                </Field>
+                <Field label="Receipt / confirmation # · optional">
+                  <Input value={mRef} onChange={e => setMRef(e.target.value)} className="h-9" />
+                </Field>
               </div>
               {mError && <p className="text-sm text-rose-400">{mError}</p>}
               <Button size="sm" onClick={addManual} disabled={mSaving}>Record payment</Button>

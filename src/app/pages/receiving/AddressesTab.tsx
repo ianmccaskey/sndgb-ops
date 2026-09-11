@@ -6,6 +6,7 @@ import setDefaultShipFrom from '@/actions/receiving/setDefaultShipFrom';
 import setTransferOrigin from '@/actions/receiving/setTransferOrigin';
 import setDestinationActive from '@/actions/receiving/setDestinationActive';
 import saveDestination from '@/actions/receiving/saveDestination';
+import { Field } from '@/components/Field';
 import { useApp } from '@/app/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -26,16 +27,35 @@ function AddressForm({ title, hint, onSave, msg }: {
     <Card>
       <CardHeader className="pb-2"><CardTitle className="text-base">{title}</CardTitle></CardHeader>
       <CardContent className="space-y-2">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          <Input placeholder="Label (short name)" value={d.label} onChange={set('label')} className="h-9" />
-          <Input placeholder="Recipient name" value={d.name} onChange={set('name')} className="h-9 col-span-1 sm:col-span-2" />
-          <Input placeholder="Street" value={d.street1} onChange={set('street1')} className="h-9 col-span-2" />
-          <Input placeholder="Apt / unit" value={d.street2} onChange={set('street2')} className="h-9" />
-          <Input placeholder="City" value={d.city} onChange={set('city')} className="h-9" />
-          <Input placeholder="State" value={d.state} onChange={set('state')} className="h-9" />
-          <Input placeholder="Zip" value={d.zip} onChange={set('zip')} className="h-9" />
-          <Input placeholder="Phone (optional)" value={d.phone} onChange={set('phone')} className="h-9" />
-          <Input placeholder="Email (optional)" value={d.email} onChange={set('email')} className="h-9 col-span-1 sm:col-span-2" />
+        {/* persistent labels (form-UX sweep 2026-09-12) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <Field label="Label · short name">
+            <Input value={d.label} onChange={set('label')} className="h-9 w-full" />
+          </Field>
+          <Field label="Recipient name" className="col-span-1 sm:col-span-2">
+            <Input value={d.name} onChange={set('name')} className="h-9 w-full" />
+          </Field>
+          <Field label="Street" className="col-span-2">
+            <Input value={d.street1} onChange={set('street1')} className="h-9 w-full" />
+          </Field>
+          <Field label="Apt / unit">
+            <Input value={d.street2} onChange={set('street2')} className="h-9 w-full" />
+          </Field>
+          <Field label="City">
+            <Input value={d.city} onChange={set('city')} className="h-9 w-full" />
+          </Field>
+          <Field label="State">
+            <Input value={d.state} onChange={set('state')} className="h-9 w-full" />
+          </Field>
+          <Field label="Zip">
+            <Input inputMode="numeric" value={d.zip} onChange={set('zip')} className="h-9 w-full" />
+          </Field>
+          <Field label="Phone · optional">
+            <Input inputMode="tel" value={d.phone} onChange={set('phone')} className="h-9 w-full" />
+          </Field>
+          <Field label="Email · optional" className="col-span-1 sm:col-span-2">
+            <Input inputMode="email" value={d.email} onChange={set('email')} className="h-9 w-full" />
+          </Field>
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" onClick={async () => { if (await onSave(d)) setD(EMPTY); }}>Save</Button>
