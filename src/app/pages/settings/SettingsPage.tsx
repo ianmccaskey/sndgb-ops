@@ -4,6 +4,7 @@ import saveSetting from '@/actions/settings/saveSetting';
 import updateGroupBuy from '@/actions/groupBuys/updateGroupBuy';
 import createGroupBuy from '@/actions/groupBuys/createGroupBuy';
 import saveProfitSplit from '@/actions/financials/saveProfitSplit';
+import deleteProfitSplit from '@/actions/financials/deleteProfitSplit';
 import getPnl from '@/actions/financials/getPnl';
 import listWallets from '@/actions/financials/listWallets';
 import updateWallet from '@/actions/financials/updateWallet';
@@ -19,7 +20,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Settings as SettingsIcon } from 'lucide-react';
 
 type WalletRow = { id: number; name: string; chain: string; address: string | null; active: boolean };
-type PnlRow = { splits: { party: string; pct: string }[] | null };
+type PnlRow = {
+  splits: { party: string; pct: string }[] | null;
+  adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
+};
 
 function Field({ label, value, onChange, type = 'text', placeholder }: {
   label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string;
@@ -38,6 +42,7 @@ export function SettingsPage() {
   const [doUpdateGb] = useMutateAction(updateGroupBuy);
   const [doCreateGb] = useMutateAction(createGroupBuy);
   const [doSaveSplit] = useMutateAction(saveProfitSplit);
+  const [doDeleteSplit] = useMutateAction(deleteProfitSplit);
   const [doUpdateWallet] = useMutateAction(updateWallet);
 
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
@@ -81,6 +86,7 @@ export function SettingsPage() {
   const [splitEdits, setSplitEdits] = useState<Record<string, string>>({});
   const [splitMsg, setSplitMsg] = useState('');
   const [splitSaving, setSplitSaving] = useState(false);
+  const [removingParty, setRemovingParty] = useState<string | null>(null);
   const [newParty, setNewParty] = useState('');
 
   // in-progress edits belong to the campaign they were typed on — switching
@@ -90,6 +96,38 @@ export function SettingsPage() {
   const splitParties = Array.from(new Set([...splits.map(s => s.party), ...Object.keys(splitEdits)]));
   const splitVal = (p: string) => splitEdits[p] ?? String(Number(splits.find(s => s.party === p)?.pct ?? 0));
   const splitTotal = splitParties.reduce((t, p) => t + Number(splitVal(p) || 0), 0);
+  const splitAdjustments = firstRow<PnlRow>(rawPnl)?.adjustments || [];
+
+  const removeParty = async (party: string) => {
+    setSplitMsg('');
+    if (!splits.some(s => s.party === party)) {
+      // never saved — purely local
+      setSplitEdits(m => { const n = { ...m }; delete n[party]; return n; });
+      return;
+    }
+    const adj = splitAdjustments.find(a => a.beneficiary === party);
+    if (adj && Number(adj.count) > 0) {
+      setSplitMsg(`${party} has ${adj.count} adjustment${Number(adj.count) === 1 ? '' : 's'} attributed to them in this campaign — remove those on Products → Admin adjustments first, or set them to 0% instead (0% always works).`);
+      return;
+    }
+    const pct = Number(splitVal(party)) || 0;
+    if (!window.confirm(`Remove ${party} (currently ${pct}%) from this campaign's profit split? Only this campaign is affected${pct > 0 ? `; the split will total ${+(splitTotal - pct).toFixed(2)}% until you re-save` : ''}.`)) return;
+    setRemovingParty(party);
+    try {
+      const res = await doDeleteSplit({ group_buy_id: groupBuyId, party }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+        setSplitMsg(`${party} was not removed — the row is already gone, or adjustments were just attributed to them. Reloading to show the current state.`);
+      } else {
+        setSplitMsg(`Removed ${party}.`);
+      }
+      setSplitEdits(m => { const n = { ...m }; delete n[party]; return n; });
+      reloadPnl();
+    } catch (e: unknown) {
+      setSplitMsg(e instanceof Error ? e.message : `Failed to remove ${party}`);
+    } finally {
+      setRemovingParty(null);
+    }
+  };
 
   // wallet addresses
   const [walletEdits, setWalletEdits] = useState<Record<number, string>>({});
@@ -308,8 +346,9 @@ export function SettingsPage() {
             <div className="flex flex-wrap gap-3 items-end">
               {splitParties.map(party => {
                 const unsaved = !splits.some(s => s.party === party);
+                const removeLabel = unsaved ? `Remove ${party} (not saved yet)` : `Remove ${party} from this campaign's split`;
                 return (
-                  <div key={party} className="space-y-1">
+                  <div key={party} className={`space-y-1 ${removingParty === party ? 'opacity-50' : ''}`}>
                     <Label className="text-xs">{party} %{unsaved && <span className="text-amber-300"> · unsaved</span>}</Label>
                     <div className="flex items-center gap-1">
                       <Input
@@ -318,10 +357,9 @@ export function SettingsPage() {
                         onChange={e => setSplitEdits(m => ({ ...m, [party]: e.target.value }))}
                         className="h-9 w-24"
                       />
-                      {unsaved && (
-                        <button className="p-2 -m-1 opacity-60 hover:opacity-100 text-xs" title={`Remove ${party} (not saved yet)`}
-                          onClick={() => setSplitEdits(m => { const n = { ...m }; delete n[party]; return n; })}>✕</button>
-                      )}
+                      <button className="h-9 w-9 -m-1 flex items-center justify-center shrink-0 text-xs opacity-60 hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-none rounded disabled:opacity-30"
+                        title={removeLabel} aria-label={removeLabel} disabled={removingParty !== null}
+                        onClick={() => removeParty(party)}>✕</button>
                     </div>
                   </div>
                 );
@@ -340,9 +378,9 @@ export function SettingsPage() {
             </div>
             <Button size="sm" variant="outline" className="h-9" disabled={!newParty.trim()} onClick={addParty}>Add</Button>
           </div>
-          {splitMsg && <p className={`text-sm ${splitMsg === 'Saved.' ? 'text-muted-foreground' : 'text-amber-300'}`}>{splitMsg}</p>}
+          {splitMsg && <p className={`text-sm ${splitMsg === 'Saved.' || splitMsg.startsWith('Removed ') ? 'text-muted-foreground' : 'text-amber-300'}`}>{splitMsg}</p>}
           <Button size="sm" disabled={splitSaving} onClick={saveSplits}>{splitSaving ? 'Saving…' : 'Save splits'}</Button>
-          <p className="text-xs text-muted-foreground">Percentages must total 100. Set a person to 0% to take them out of the split. Added people aren't saved until you press Save splits.</p>
+          <p className="text-xs text-muted-foreground">Percentages must total 100. ✕ removes a person from this campaign; anyone with adjustments attributed to them must be 0% instead. New people save on Save splits.</p>
         </CardContent>
       </Card>
 
