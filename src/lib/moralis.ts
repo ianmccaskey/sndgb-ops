@@ -106,11 +106,11 @@ export async function getEvmTxTransfers(apiKey: string, chain: EvmChain, txHash:
 
 export type WalletBalances = { usdc: number; usdt: number; pyusd: number; native: number };
 
-/** Current stablecoin + native balances of an EVM wallet. */
-export async function getEvmBalances(apiKey: string, chain: EvmChain, address: string): Promise<WalletBalances> {
-  const nat = await get(apiKey, `${EVM_BASE}/${address}/balance?chain=${chain}`) as { balance?: string };
-  const tokens = await get(apiKey, `${EVM_BASE}/${address}/erc20?chain=${chain}`) as
-    Array<{ token_address?: string; balance?: string; decimals?: number }>;
+function parseBalances(
+  chain: EvmChain,
+  nat: { balance?: string },
+  tokens: Array<{ token_address?: string; balance?: string; decimals?: number }>,
+): WalletBalances {
   const out: WalletBalances = { usdc: 0, usdt: 0, pyusd: 0, native: Number(nat.balance || 0) / 1e18 };
   for (const t of Array.isArray(tokens) ? tokens : []) {
     const meta = STABLES[chain][String(t.token_address || '').toLowerCase()];
@@ -121,4 +121,32 @@ export async function getEvmBalances(apiKey: string, chain: EvmChain, address: s
     if (meta.symbol === 'PYUSD') out.pyusd += amt;
   }
   return out;
+}
+
+/** Current stablecoin + native balances of an EVM wallet. */
+export async function getEvmBalances(apiKey: string, chain: EvmChain, address: string): Promise<WalletBalances> {
+  const nat = await get(apiKey, `${EVM_BASE}/${address}/balance?chain=${chain}`) as { balance?: string };
+  const tokens = await get(apiKey, `${EVM_BASE}/${address}/erc20?chain=${chain}`) as
+    Array<{ token_address?: string; balance?: string; decimals?: number }>;
+  return parseBalances(chain, nat, tokens);
+}
+
+/**
+ * Balances AS OF a historical moment (the chain remembers even where our
+ * snapshots don't): Moralis resolves the date to a block, then both
+ * balance endpoints accept to_block. Used for a campaign's opening
+ * balance — anchored to its first order's placed_at, so no payment for
+ * that buy can already be inside the number.
+ */
+export async function getEvmBalancesAt(
+  apiKey: string, chain: EvmChain, address: string, isoDate: string,
+): Promise<WalletBalances & { block: number; blockTime: string | null }> {
+  const d = await get(apiKey, `${EVM_BASE}/dateToBlock?chain=${chain}&date=${encodeURIComponent(isoDate)}`) as
+    { block?: number; block_timestamp?: string };
+  const block = Number(d.block || 0);
+  if (!(block > 0)) throw new Error('Moralis could not resolve a block for that date.');
+  const nat = await get(apiKey, `${EVM_BASE}/${address}/balance?chain=${chain}&to_block=${block}`) as { balance?: string };
+  const tokens = await get(apiKey, `${EVM_BASE}/${address}/erc20?chain=${chain}&to_block=${block}`) as
+    Array<{ token_address?: string; balance?: string; decimals?: number }>;
+  return { ...parseBalances(chain, nat, tokens), block, blockTime: d.block_timestamp || null };
 }

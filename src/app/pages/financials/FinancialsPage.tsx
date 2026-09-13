@@ -12,7 +12,8 @@ import listFreightByVendor from '@/actions/financials/listFreightByVendor';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
-import { getEvmBalances } from '@/lib/moralis';
+import { getEvmBalances, getEvmBalancesAt, type WalletBalances } from '@/lib/moralis';
+import getCampaignFirstOrder from '@/actions/financials/getCampaignFirstOrder';
 import { getSolBalances } from '@/lib/helius';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,6 +33,35 @@ type Wallet = {
 };
 type OwedRow = { vendor_code: string; demand_usd: string; paid_usd: string; owed_usd: string };
 type CovBalance = { name: string; chain: string; usd: number };
+
+// one renderer for every per-token composition line (current snapshot AND
+// opening balance) so the two can never drift in format. PYUSD omitted on
+// Base (not issued there); zeros dimmed so "none held" ≠ "not checked";
+// dust below display precision prints "<0.0001", never a bright "0"
+function TokenBreakdownRow({ bd, chain, className = '' }: {
+  bd: { usdc: number; usdt: number; pyusd: number; native: number }; chain: string; className?: string;
+}) {
+  return (
+    <div className={`flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] font-mono ${className}`}>
+      {([
+        ['USDC', bd.usdc, 2],
+        ['USDT', bd.usdt, 2],
+        ...(chain !== 'base' ? [['PYUSD', bd.pyusd, 2] as const] : []),
+        [chain === 'sol' ? 'SOL' : 'ETH', bd.native, 4],
+      ] as const).map(([sym, val, dp]) => {
+        const n = Number(val);
+        const text = !Number.isFinite(n) ? '—'
+          : n > 0 && n < 1 / 10 ** dp ? `<${(1 / 10 ** dp).toFixed(dp)}`
+          : n.toLocaleString('en-US', { maximumFractionDigits: dp });
+        return (
+          <span key={sym} className={`whitespace-nowrap ${n > 0 ? 'text-foreground/80' : 'text-muted-foreground/60'}`}>
+            {sym} {text}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 // jsonb usually arrives as an object, but the UI Bakery transport has
 // re-typed values before — normalize a serialized-string arrival instead
@@ -80,6 +110,31 @@ export function FinancialsPage() {
 
   const [refreshing, setRefreshing] = useState<Record<number, string>>({});
   const [manualBalance, setManualBalance] = useState<Record<number, string>>({});
+
+  // opening balance = chain state at the campaign's FIRST ORDER (placed_at
+  // survives import, so this works no matter when the local campaign row
+  // was scaffolded — Ian's snapshots don't reach back, the chain does)
+  const [rawFirstOrder] = useLoadAction(getCampaignFirstOrder, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const firstOrderAt = firstRow<{ first_order_at: string | null; order_count: string }>(rawFirstOrder)?.first_order_at || null;
+  type OpeningResult = { bd: WalletBalances; block: number; blockTime: string | null };
+  // keyed by campaign AND wallet: a campaign switch must never relabel the
+  // old campaign's block/balances with the new campaign's anchor (switching
+  // back also restores the earlier result for free)
+  const [opening, setOpening] = useState<Record<string, string | OpeningResult>>({});
+  const oKey = (w: Wallet) => `${groupBuyId}:${w.id}`;
+  const fetchOpening = async (w: Wallet) => {
+    if (!firstOrderAt || !w.address) return;
+    const k = oKey(w); // captured before the await — a mid-flight campaign switch lands on the old key
+    setOpening(m => ({ ...m, [k]: 'fetching…' }));
+    try {
+      const key = settings.moralis_api_key;
+      if (!key) throw new Error('Moralis key missing (Settings).');
+      const b = await getEvmBalancesAt(key, w.chain as 'eth' | 'base', w.address, firstOrderAt);
+      setOpening(m => ({ ...m, [k]: { bd: b, block: b.block, blockTime: b.blockTime } }));
+    } catch (e: unknown) {
+      setOpening(m => ({ ...m, [k]: e instanceof Error ? e.message : 'Failed to fetch opening balance' }));
+    }
+  };
 
   // wallet-coverage check: live ETH+SOL stablecoin holdings vs non-COA vendor
   // owed. Both sides are fetched in the SAME run and rendered only together,
@@ -318,35 +373,51 @@ export function FinancialsPage() {
                   </div>
                   {/* per-token detail from the same snapshot — composition
                       here, roll-up + provenance above (the summary drops its
-                      "+ native" fragment when this row names the asset).
-                      PYUSD is omitted on Base (not issued there); zeros stay
-                      visible but dimmed so "none held" ≠ "not checked" */}
+                      "+ native" fragment when this row names the asset) */}
                   {(() => {
                     const bd = walletBreakdown(w);
                     if (!bd || !['eth', 'sol', 'base'].includes(w.chain)) return null;
-                    return (
-                      <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] font-mono mt-0.5">
-                        {([
-                          ['USDC', bd.usdc, 2],
-                          ['USDT', bd.usdt, 2],
-                          ...(w.chain !== 'base' ? [['PYUSD', bd.pyusd, 2] as const] : []),
-                          [w.chain === 'sol' ? 'SOL' : 'ETH', bd.native, 4],
-                        ] as const).map(([sym, val, dp]) => {
-                          const n = Number(val);
-                          // dust below the display precision must not print a
-                          // BRIGHT "0" — that inverts the dim-zero semantics
-                          const text = !Number.isFinite(n) ? '—'
-                            : n > 0 && n < 1 / 10 ** dp ? `<${(1 / 10 ** dp).toFixed(dp)}`
-                            : n.toLocaleString('en-US', { maximumFractionDigits: dp });
-                          return (
-                            <span key={sym} className={`whitespace-nowrap ${n > 0 ? 'text-foreground/80' : 'text-muted-foreground/60'}`}>
-                              {sym} {text}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    );
+                    return <TokenBreakdownRow bd={bd} chain={w.chain} className="mt-0.5" />;
                   })()}
+                  {/* opening balance: chain state at the campaign's first
+                      order — EVM only (Moralis balance-at-block); Solana has
+                      no at-date API, so the SOL row hands over the anchor
+                      timestamp for a manual Solscan read instead */}
+                  {(w.chain === 'eth' || w.chain === 'base') && w.address && firstOrderAt && (
+                    opening[oKey(w)] == null ? (
+                      <button className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground mt-0.5 py-2.5 -my-2 text-left"
+                        onClick={() => fetchOpening(w)}>
+                        Show balance at buy start ({fmtDateTime(firstOrderAt)})
+                      </button>
+                    ) : opening[oKey(w)] === 'fetching…' ? (
+                      <div className="text-[11px] mt-0.5 text-muted-foreground">Reading chain state at buy start…</div>
+                    ) : typeof opening[oKey(w)] === 'string' ? (
+                      <div className="text-[11px] mt-0.5 text-rose-400">
+                        {String(opening[oKey(w)])}{' '}
+                        <button className="underline underline-offset-2 text-muted-foreground hover:text-foreground py-2.5 -my-2"
+                          onClick={() => fetchOpening(w)}>Retry</button>
+                      </div>
+                    ) : (
+                      <div className="mt-0.5">
+                        {/* block time shown alongside the anchor so a
+                            timezone drift in the date→block resolution
+                            would be visible instead of silent */}
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          At buy start · {fmtDateTime(firstOrderAt)} · block {(opening[oKey(w)] as OpeningResult).block}
+                          {(opening[oKey(w)] as OpeningResult).blockTime && <> ({fmtDateTime((opening[oKey(w)] as OpeningResult).blockTime!)})</>}
+                        </div>
+                        <TokenBreakdownRow bd={(opening[oKey(w)] as OpeningResult).bd} chain={w.chain} />
+                      </div>
+                    )
+                  )}
+                  {w.chain === 'sol' && firstOrderAt && (
+                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                      Buy started {fmtDateTime(firstOrderAt)} — Solana has no balance-at-date API; read that moment off{' '}
+                      {w.address
+                        ? <a className="underline underline-offset-2 hover:text-foreground" href={`https://solscan.io/account/${w.address}`} target="_blank" rel="noreferrer">Solscan's balance history</a>
+                        : "Solscan's balance history"}.
+                    </div>
+                  )}
                   {refreshing[w.id] && refreshing[w.id] !== 'fetching…' && <div className="text-xs text-rose-400">{refreshing[w.id]}</div>}
                 </div>
                 {w.chain === 'fiat' ? (
