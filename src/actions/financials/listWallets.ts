@@ -6,10 +6,11 @@ function listWallets() {
     query: `
       SELECT w.id, w.name, w.chain, w.address, w.active,
              s.balance_usd AS latest_balance_usd, s.native_balance AS latest_native_balance,
-             s.taken_at AS latest_snapshot_at, s.source AS latest_source
+             s.taken_at AS latest_snapshot_at, s.source AS latest_source,
+             s.breakdown AS latest_breakdown
       FROM wallets w
       LEFT JOIN LATERAL (
-        SELECT balance_usd, native_balance, taken_at, source
+        SELECT balance_usd, native_balance, taken_at, source, breakdown
         FROM wallet_snapshots ws WHERE ws.wallet_id = w.id
         ORDER BY taken_at DESC LIMIT 1
       ) s ON true

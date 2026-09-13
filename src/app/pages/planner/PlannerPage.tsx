@@ -334,11 +334,13 @@ export function PlannerPage() {
         if (w.chain === 'sol') {
           if (!settings.helius_api_key) throw new Error('Helius key missing (Settings).');
           const b = await getSolBalances(settings.helius_api_key, w.address);
-          await doSnapshot({ wallet_id: w.id, balance_usd: b.usdc + b.usdt + b.pyusd, native_balance: String(b.sol), source: 'auto' });
+          await doSnapshot({ wallet_id: w.id, balance_usd: b.usdc + b.usdt + b.pyusd, native_balance: String(b.sol), source: 'auto',
+            breakdown: JSON.stringify({ usdc: b.usdc, usdt: b.usdt, pyusd: b.pyusd, native: b.sol }) });
         } else {
           if (!settings.moralis_api_key) throw new Error('Moralis key missing (Settings).');
           const b = await getEvmBalances(settings.moralis_api_key, 'eth', w.address);
-          await doSnapshot({ wallet_id: w.id, balance_usd: b.usdc + b.usdt + b.pyusd, native_balance: String(b.native), source: 'auto' });
+          await doSnapshot({ wallet_id: w.id, balance_usd: b.usdc + b.usdt + b.pyusd, native_balance: String(b.native), source: 'auto',
+            breakdown: JSON.stringify({ usdc: b.usdc, usdt: b.usdt, pyusd: b.pyusd, native: b.native }) });
         }
       }
       reloadWallets();

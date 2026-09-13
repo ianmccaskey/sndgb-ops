@@ -28,9 +28,22 @@ type Wallet = {
   id: number; name: string; chain: string; address: string | null; active: boolean;
   latest_balance_usd: string | null; latest_native_balance: string | null;
   latest_snapshot_at: string | null; latest_source: string | null;
+  latest_breakdown: { usdc: number; usdt: number; pyusd: number; native: number } | string | null;
 };
 type OwedRow = { vendor_code: string; demand_usd: string; paid_usd: string; owed_usd: string };
 type CovBalance = { name: string; chain: string; usd: number };
+
+// jsonb usually arrives as an object, but the UI Bakery transport has
+// re-typed values before — normalize a serialized-string arrival instead
+// of rendering four NaNs
+function walletBreakdown(w: Wallet): { usdc: number; usdt: number; pyusd: number; native: number } | null {
+  const b = w.latest_breakdown;
+  if (b == null) return null;
+  if (typeof b === 'string') {
+    try { return JSON.parse(b); } catch { return null; }
+  }
+  return b;
+}
 
 export function FinancialsPage() {
   const { groupBuyId, settings } = useApp();
@@ -133,20 +146,23 @@ export function FinancialsPage() {
     try {
       if (!w.address) throw new Error('No address configured (Settings).');
       let usd = 0; let native = 0;
+      let bd: { usdc: number; usdt: number; pyusd: number; native: number };
       if (w.chain === 'sol') {
         const key = settings.helius_api_key;
         if (!key) throw new Error('Helius key missing (Settings).');
         const b = await getSolBalances(key, w.address);
         usd = b.usdc + b.usdt + b.pyusd; native = b.sol;
+        bd = { usdc: b.usdc, usdt: b.usdt, pyusd: b.pyusd, native: b.sol };
       } else if (w.chain === 'eth' || w.chain === 'base') {
         const key = settings.moralis_api_key;
         if (!key) throw new Error('Moralis key missing (Settings).');
         const b = await getEvmBalances(key, w.chain as 'eth' | 'base', w.address);
         usd = b.usdc + b.usdt + b.pyusd; native = b.native;
+        bd = { usdc: b.usdc, usdt: b.usdt, pyusd: b.pyusd, native: b.native };
       } else {
         throw new Error('Fiat wallets are manual — type a balance instead.');
       }
-      await doSnapshot({ wallet_id: w.id, balance_usd: usd, native_balance: String(native), source: 'auto' });
+      await doSnapshot({ wallet_id: w.id, balance_usd: usd, native_balance: String(native), source: 'auto', breakdown: JSON.stringify(bd) });
       setRefreshing(r => ({ ...r, [w.id]: '' }));
       reloadWallets();
     } catch (e: unknown) {
@@ -157,7 +173,7 @@ export function FinancialsPage() {
   const saveManualBalance = async (w: Wallet) => {
     const v = Number(manualBalance[w.id]);
     if (!(v >= 0)) return;
-    await doSnapshot({ wallet_id: w.id, balance_usd: v, native_balance: '', source: 'manual' });
+    await doSnapshot({ wallet_id: w.id, balance_usd: v, native_balance: '', source: 'manual', breakdown: '' });
     setManualBalance(m => ({ ...m, [w.id]: '' }));
     reloadWallets();
   };
@@ -297,9 +313,40 @@ export function FinancialsPage() {
                   <div className="font-medium text-sm">{w.name} <span className="text-xs text-muted-foreground uppercase">({w.chain})</span></div>
                   <div className="text-xs text-muted-foreground">
                     {w.latest_snapshot_at
-                      ? <>{fmtUSD(w.latest_balance_usd)} stable{w.latest_native_balance ? ` + ${Number(w.latest_native_balance).toFixed(4)} native` : ''} · {fmtDateTime(w.latest_snapshot_at)} ({w.latest_source})</>
+                      ? <>{fmtUSD(w.latest_balance_usd)} stable{Number(w.latest_native_balance) > 0 && !walletBreakdown(w) ? ` + ${Number(w.latest_native_balance).toFixed(4)} native` : ''} · {fmtDateTime(w.latest_snapshot_at)} ({w.latest_source})</>
                       : 'No snapshot yet'}
                   </div>
+                  {/* per-token detail from the same snapshot — composition
+                      here, roll-up + provenance above (the summary drops its
+                      "+ native" fragment when this row names the asset).
+                      PYUSD is omitted on Base (not issued there); zeros stay
+                      visible but dimmed so "none held" ≠ "not checked" */}
+                  {(() => {
+                    const bd = walletBreakdown(w);
+                    if (!bd || !['eth', 'sol', 'base'].includes(w.chain)) return null;
+                    return (
+                      <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] font-mono mt-0.5">
+                        {([
+                          ['USDC', bd.usdc, 2],
+                          ['USDT', bd.usdt, 2],
+                          ...(w.chain !== 'base' ? [['PYUSD', bd.pyusd, 2] as const] : []),
+                          [w.chain === 'sol' ? 'SOL' : 'ETH', bd.native, 4],
+                        ] as const).map(([sym, val, dp]) => {
+                          const n = Number(val);
+                          // dust below the display precision must not print a
+                          // BRIGHT "0" — that inverts the dim-zero semantics
+                          const text = !Number.isFinite(n) ? '—'
+                            : n > 0 && n < 1 / 10 ** dp ? `<${(1 / 10 ** dp).toFixed(dp)}`
+                            : n.toLocaleString('en-US', { maximumFractionDigits: dp });
+                          return (
+                            <span key={sym} className={`whitespace-nowrap ${n > 0 ? 'text-foreground/80' : 'text-muted-foreground/60'}`}>
+                              {sym} {text}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                   {refreshing[w.id] && refreshing[w.id] !== 'fetching…' && <div className="text-xs text-rose-400">{refreshing[w.id]}</div>}
                 </div>
                 {w.chain === 'fiat' ? (
