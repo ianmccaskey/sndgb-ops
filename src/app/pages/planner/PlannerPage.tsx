@@ -31,9 +31,11 @@ import { Field } from '@/components/Field';
  * Stock Planner (waterfall model, per Ian's mock):
  * - GB Wallet splits into per-chain balances that cover Vendor GB (owed)
  *   FIRST; the wallet's excess above the owed threshold is "Crypto Profit"
- * - Next the wallets cover the SHIPPING & INSURANCE RESERVE (collected
- *   shipping/insurance fees not yet spent on labels, all campaigns) —
- *   fee money is spoken for and never becomes stock budget (per Ian)
+ * - Next the wallets cover the SHIPPING & INSURANCE RESERVE (this
+ *   campaign's billed shipping/insurance fees not yet spent on labels) —
+ *   fee money is spoken for and never becomes stock budget. THIS campaign
+ *   only, per Ian: each buy plans as if the wallet starts at zero, and
+ *   earlier buys' shipping is settled from cash outside the wallets
  * - Floating cost payments (at-cost receivables) BACKFILL any owed the
  *   wallets can't cover — the rest sits above the threshold and joins the
  *   profit side; drawn dashed because the money hasn't arrived yet
@@ -87,9 +89,10 @@ type SLink = { source: number; target: number; value: number; kind: string };
 /**
  * Waterfall Sankey (pure):
  *   GB Wallet -> per-chain balances -> Vendor GB first;
- *   then the shipping & insurance reserve (collected shipping/insurance
- *   fees not yet spent on labels — that money is spoken for, never stock
- *   budget);
+ *   then the shipping & insurance reserve (THIS campaign's billed
+ *   shipping/insurance fees not yet spent on labels — that money is
+ *   spoken for, never stock budget; earlier buys' shipping settles from
+ *   cash outside the wallets);
  *   wallet excess above BOTH thresholds -> Crypto Profit -> Vendor STOCK;
  *   floating payments backfill remaining owed, their excess -> Vendor STOCK;
  *   outside crypto + cash figure -> Vendor STOCK -> allocations + unallocated.
@@ -168,7 +171,7 @@ function buildSankey(args: {
     ? idx({ name: 'Vendor GB', kind: 'owed', usd: usd(owedC), hint: uncoveredOwedC > 0 ? `${fmtUSD(usd(uncoveredOwedC))} not covered even with expected float payments` : floatToOwedC > 0 ? `${fmtUSD(usd(floatToOwedC))} of this coverage depends on float payments arriving` : undefined })
     : -1;
   const reserveIdx = reserveC > 0
-    ? idx({ name: 'Shipping & ins. reserve', kind: 'reserve', usd: usd(reserveC), hint: uncoveredReserveC > 0 ? `${fmtUSD(usd(uncoveredReserveC))} of the reserve is not covered by wallet money` : 'billed shipping + insurance fees not yet spent on labels — reserved, never stock budget' })
+    ? idx({ name: 'Shipping & ins. reserve', kind: 'reserve', usd: usd(reserveC), hint: uncoveredReserveC > 0 ? `${fmtUSD(usd(uncoveredReserveC))} of the reserve is not covered by wallet money` : "this campaign's billed shipping + insurance fees not yet spent on labels — reserved, never stock budget" })
     : -1;
   const poolIdx = idx({ name: 'Vendor STOCK', kind: 'pool', usd: usd(poolC) });
   const profitIdx = walletProfitC > 0 ? idx({ name: 'Crypto Profit', kind: 'profit', usd: usd(walletProfitC), hint: 'wallet money above vendor owed and the shipping reserve' }) : -1;
@@ -277,7 +280,7 @@ export function PlannerPage() {
   const [rawPlan, , , reloadPlan] = useLoadAction(getStockPlan, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
   const [rawOwed] = useLoadAction(listNonCoaVendorOwed, [], {});
-  const [rawReserve] = useLoadAction(getShippingReserve, [], {});
+  const [rawReserve] = useLoadAction(getShippingReserve, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawRecv] = useLoadAction(listAtCostReceivables, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
@@ -570,13 +573,14 @@ export function PlannerPage() {
           <span>
             {sankey.uncoveredOwed > 0
               ? <>The wallets don't reach the shipping & insurance reserve at all — its full <span className="font-semibold">{fmtUSD(sankey.uncoveredReserve)}</span> is uncovered. Label purchases would have to dip into vendor or outside money.</>
-              : <>The wallets can't cover the shipping & insurance reserve — short <span className="font-semibold">{fmtUSD(sankey.uncoveredReserve)}</span> after vendor owed. Label purchases would have to dip into vendor or outside money.</>}
+              : <>The wallets can't cover the shipping & insurance reserve — short <span className="font-semibold">{fmtUSD(sankey.uncoveredReserve)}</span> after vendor owed. Label purchases would have to dip into vendor or outside money (assumes earlier buys' shipping is cash-settled).</>}
           </span>
         </div>
       )}
       {shippingReserve > 0 && (
         <p className="text-sm text-muted-foreground">
-          <span className="font-medium text-foreground/90">{fmtUSD(shippingReserve)}</span> shipping & insurance reserve held back before the stock budget · all campaigns.
+          <span className="font-medium text-foreground/90">{fmtUSD(shippingReserve)}</span> shipping & insurance reserve held back before the stock budget.
+          This campaign only — earlier buys' shipping settles from cash.
           {' '}{fmtUSD(Number(reserveRow?.shipping_fees_usd || 0))} shipping + {fmtUSD(Number(reserveRow?.insurance_usd || 0))} insurance billed
           (counted even where the buyer hasn't paid yet) − {fmtUSD(Number(reserveRow?.label_costs_usd || 0))} labels − {fmtUSD(Number(reserveRow?.shipping_expenses_usd || 0))} shipping/reship spend.
         </p>
@@ -641,11 +645,11 @@ export function PlannerPage() {
                 <span className="shrink-0 whitespace-nowrap">{fmtUSD(walletTotal)}</span>
               </div>
               <div className="flex justify-between gap-2 border-t pt-1">
-                <span className="text-muted-foreground min-w-0">Owed to vendors (non-COA, all campaigns)</span>
+                <span className="text-muted-foreground min-w-0" title="Every campaign's vendor debts draw on the same wallet pool">Owed to vendors (non-COA, all campaigns)</span>
                 <span className="text-rose-400 shrink-0 whitespace-nowrap">−{fmtUSD(owedTotal)}</span>
               </div>
               <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground min-w-0">Shipping & insurance reserve (all campaigns)</span>
+                <span className="text-muted-foreground min-w-0" title="Earlier buys' shipping settles from cash outside the wallets, so only this campaign's fees are held back">Shipping & insurance reserve (this campaign only)</span>
                 <span className="text-cyan-400 shrink-0 whitespace-nowrap">−{fmtUSD(shippingReserve)}</span>
               </div>
               {committedUnorderedValue > 0 && (
