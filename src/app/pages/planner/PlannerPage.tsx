@@ -10,6 +10,7 @@ import listAtCostReceivables from '@/actions/planner/listAtCostReceivables';
 import listWallets from '@/actions/financials/listWallets';
 import listVendorProductProgress from '@/actions/vendors/listVendorProductProgress';
 import listNonCoaVendorOwed from '@/actions/vendors/listNonCoaVendorOwed';
+import getShippingReserve from '@/actions/financials/getShippingReserve';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import addWalletSnapshot from '@/actions/financials/addWalletSnapshot';
 import { getEvmBalances } from '@/lib/moralis';
@@ -30,6 +31,9 @@ import { Field } from '@/components/Field';
  * Stock Planner (waterfall model, per Ian's mock):
  * - GB Wallet splits into per-chain balances that cover Vendor GB (owed)
  *   FIRST; the wallet's excess above the owed threshold is "Crypto Profit"
+ * - Next the wallets cover the SHIPPING & INSURANCE RESERVE (collected
+ *   shipping/insurance fees not yet spent on labels, all campaigns) —
+ *   fee money is spoken for and never becomes stock budget (per Ian)
  * - Floating cost payments (at-cost receivables) BACKFILL any owed the
  *   wallets can't cover — the rest sits above the threshold and joins the
  *   profit side; drawn dashed because the money hasn't arrived yet
@@ -48,6 +52,7 @@ const KIND_COLORS: Record<string, string> = {
   outside: 'rgb(13 148 136)',    // teal-600 — attributable outside crypto
   cash: 'rgb(202 138 4)',        // yellow-600 — hypothetical (entered figure)
   owed: 'rgb(37 99 235)',        // blue-600 — Vendor GB (group-buy obligations)
+  reserve: 'rgb(8 145 178)',     // cyan-600 — shipping & insurance reserve (fee money, spoken for)
   pool: 'rgb(147 51 234)',       // purple-600 — Vendor STOCK budget
   alloc: 'rgb(124 58 237)',      // violet-600 — planned allocation
   ordered: 'rgb(76 29 149)',     // violet-900 — committed (vendor paid)
@@ -82,16 +87,19 @@ type SLink = { source: number; target: number; value: number; kind: string };
 /**
  * Waterfall Sankey (pure):
  *   GB Wallet -> per-chain balances -> Vendor GB first;
- *   wallet excess above the owed threshold -> Crypto Profit -> Vendor STOCK;
+ *   then the shipping & insurance reserve (collected shipping/insurance
+ *   fees not yet spent on labels — that money is spoken for, never stock
+ *   budget);
+ *   wallet excess above BOTH thresholds -> Crypto Profit -> Vendor STOCK;
  *   floating payments backfill remaining owed, their excess -> Vendor STOCK;
  *   outside crypto + cash figure -> Vendor STOCK -> allocations + unallocated.
  */
 function buildSankey(args: {
   walletRows: { name: string; usd: number }[];
-  owedTotal: number; outsideMax: number; outsideTotal: number;
+  owedTotal: number; shippingReserve: number; outsideMax: number; outsideTotal: number;
   receivables: number; cash: number;
   items: { label: string; usd: number; ordered: boolean }[];
-}): { nodes: SNode[]; links: SLink[]; uncoveredOwed: number; overAllocated: number; pool: number; floatToOwed: number } {
+}): { nodes: SNode[]; links: SLink[]; uncoveredOwed: number; uncoveredReserve: number; overAllocated: number; pool: number; floatToOwed: number } {
   const nodes: SNode[] = [];
   const links: SLink[] = [];
   const idx = (n: SNode) => { nodes.push(n); return nodes.length - 1; };
@@ -104,14 +112,19 @@ function buildSankey(args: {
   const walletsC = args.walletRows.map(w => ({ name: w.name, c: c(w.usd) })).filter(w => w.c > 0);
   const walletTotalC = walletsC.reduce((s, w) => s + w.c, 0);
   const owedC = c(args.owedTotal);
+  const reserveC = c(args.shippingReserve);
   const receivablesC = c(args.receivables);
   const outsideC = c(args.outsideMax);
   const cashC = c(args.cash);
 
   // WATERFALL: wallets cover owed first…
   const walletToOwedC = Math.min(owedC, walletTotalC);
-  const walletProfitC = walletTotalC - walletToOwedC; // "Crypto Profit" above the threshold
-  // …then the expected float payments backfill what's left…
+  // …then the shipping & insurance reserve (floats never backfill it —
+  // float payments are product money, and the reserve is fee money)…
+  const walletToReserveC = Math.min(reserveC, walletTotalC - walletToOwedC);
+  const uncoveredReserveC = reserveC - walletToReserveC;
+  const walletProfitC = walletTotalC - walletToOwedC - walletToReserveC; // "Crypto Profit" above both thresholds
+  // …then the expected float payments backfill remaining owed…
   const owedAfterWalletsC = owedC - walletToOwedC;
   const floatToOwedC = Math.min(receivablesC, owedAfterWalletsC);
   const floatProfitC = receivablesC - floatToOwedC;
@@ -135,14 +148,30 @@ function buildSankey(args: {
     sharesC.push(share);
     sharesSoFar += share;
   });
+  // second pass: each wallet's remainder covers the shipping reserve
+  // pro-rata, same last-wallet-absorbs-residual rule
+  const remC = walletsC.map((w, i) => w.c - sharesC[i]);
+  const remTotalC = remC.reduce((s, v) => s + v, 0);
+  const rSharesC: number[] = [];
+  let rSoFar = 0;
+  walletsC.forEach((w, i) => {
+    const share = i === walletsC.length - 1
+      ? walletToReserveC - rSoFar
+      : (remTotalC > 0 ? Math.floor(walletToReserveC * (remC[i] / remTotalC)) : 0);
+    rSharesC.push(share);
+    rSoFar += share;
+  });
 
   // GB Wallet root -> per-chain balances
   const rootIdx = walletTotalC > 0 ? idx({ name: 'GB Wallet', kind: 'root', usd: usd(walletTotalC) }) : -1;
   const owedIdx = owedC > 0
     ? idx({ name: 'Vendor GB', kind: 'owed', usd: usd(owedC), hint: uncoveredOwedC > 0 ? `${fmtUSD(usd(uncoveredOwedC))} not covered even with expected float payments` : floatToOwedC > 0 ? `${fmtUSD(usd(floatToOwedC))} of this coverage depends on float payments arriving` : undefined })
     : -1;
+  const reserveIdx = reserveC > 0
+    ? idx({ name: 'Shipping & ins. reserve', kind: 'reserve', usd: usd(reserveC), hint: uncoveredReserveC > 0 ? `${fmtUSD(usd(uncoveredReserveC))} of the reserve is not covered by wallet money` : 'billed shipping + insurance fees not yet spent on labels — reserved, never stock budget' })
+    : -1;
   const poolIdx = idx({ name: 'Vendor STOCK', kind: 'pool', usd: usd(poolC) });
-  const profitIdx = walletProfitC > 0 ? idx({ name: 'Crypto Profit', kind: 'profit', usd: usd(walletProfitC), hint: 'wallet money above what vendors are owed' }) : -1;
+  const profitIdx = walletProfitC > 0 ? idx({ name: 'Crypto Profit', kind: 'profit', usd: usd(walletProfitC), hint: 'wallet money above vendor owed and the shipping reserve' }) : -1;
 
   walletsC.forEach((w, i) => {
     if (rootIdx < 0) return;
@@ -150,7 +179,9 @@ function buildSankey(args: {
     links.push({ source: rootIdx, target: wi, value: usd(w.c), kind: 'wallet' });
     const shareC = sharesC[i];
     if (shareC > 0 && owedIdx >= 0) links.push({ source: wi, target: owedIdx, value: usd(shareC), kind: 'wallet' });
-    const restC = w.c - shareC;
+    const rShareC = rSharesC[i];
+    if (rShareC > 0 && reserveIdx >= 0) links.push({ source: wi, target: reserveIdx, value: usd(rShareC), kind: 'reserve' });
+    const restC = w.c - shareC - rShareC;
     if (restC > 0 && profitIdx >= 0) links.push({ source: wi, target: profitIdx, value: usd(restC), kind: 'profit' });
   });
   if (profitIdx >= 0) links.push({ source: profitIdx, target: poolIdx, value: usd(walletProfitC), kind: 'profit' });
@@ -179,6 +210,7 @@ function buildSankey(args: {
   return {
     nodes, links,
     uncoveredOwed: usd(uncoveredOwedC),
+    uncoveredReserve: usd(uncoveredReserveC),
     overAllocated: usd(overAllocatedC),
     pool: usd(poolC),
     floatToOwed: usd(floatToOwedC),
@@ -201,6 +233,32 @@ function PlannerNode(props: { x?: number; y?: number; width?: number; height?: n
   );
 }
 
+// custom tooltip so node HINTS actually render (the default formatter
+// showed only the $ value, leaving every hint dead data) — and recharts
+// tooltips fire on tap, so this works on phones where hover doesn't exist
+function PlannerTooltip(props: { active?: boolean; payload?: Array<{ value?: unknown; payload?: unknown }> }) {
+  const { active, payload } = props;
+  if (!active || !payload || payload.length === 0) return null;
+  // node entries carry our SNode somewhere in the (version-dependent)
+  // payload nesting; link entries have a kind but no name — walk down
+  // until something node-shaped appears
+  const findNode = (o: unknown, depth = 0): SNode | null => {
+    if (depth > 3 || o == null || typeof o !== 'object') return null;
+    const r = o as Record<string, unknown>;
+    if (typeof r.name === 'string' && typeof r.kind === 'string') return r as unknown as SNode;
+    return findNode(r.payload, depth + 1);
+  };
+  const node = findNode(payload[0].payload);
+  const value = Number(payload[0].value);
+  return (
+    <div className="rounded border bg-card px-2.5 py-1.5 text-xs shadow-md max-w-64">
+      {node && <p className="font-medium">{node.name}</p>}
+      <p className="text-muted-foreground">{fmtUSD(Number.isFinite(value) ? value : node?.usd || 0)}</p>
+      {node?.hint && <p className="text-muted-foreground mt-0.5 leading-snug">{node.hint}</p>}
+    </div>
+  );
+}
+
 function PlannerLink(props: { sourceX?: number; targetX?: number; sourceY?: number; targetY?: number; sourceControlX?: number; targetControlX?: number; linkWidth?: number; payload?: { kind?: string } }) {
   const { sourceX = 0, targetX = 0, sourceY = 0, targetY = 0, sourceControlX = 0, targetControlX = 0, linkWidth = 0, payload } = props;
   const color = KIND_COLORS[payload?.kind || 'alloc'] || KIND_COLORS.alloc;
@@ -219,6 +277,7 @@ export function PlannerPage() {
   const [rawPlan, , , reloadPlan] = useLoadAction(getStockPlan, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
   const [rawOwed] = useLoadAction(listNonCoaVendorOwed, [], {});
+  const [rawReserve] = useLoadAction(getShippingReserve, [], {});
   const [rawRecv] = useLoadAction(listAtCostReceivables, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
@@ -226,6 +285,8 @@ export function PlannerPage() {
   const plan = firstRow<Plan>(rawPlan);
   const wallets = rows<Wallet>(rawWallets);
   const owedRows = rows<OwedRow>(rawOwed);
+  const reserveRow = firstRow<{ shipping_fees_usd: string; insurance_usd: string; label_costs_usd: string; shipping_expenses_usd: string; reserve_usd: string }>(rawReserve);
+  const shippingReserve = Number(reserveRow?.reserve_usd || 0);
   const receivables = rows<Receivable>(rawRecv);
   const products = rows<CampaignProduct>(rawProducts);
   const progress = rows<Progress>(rawProgress);
@@ -304,16 +365,19 @@ export function PlannerPage() {
     const walletC = c(walletTotal);
     const owedC = c(owedTotal);
     const recvC = c(receivableTotal);
-    const walletProfitC = Math.max(walletC - owedC, 0);
+    // same waterfall as buildSankey: owed first, then the shipping &
+    // insurance reserve, and only the excess is stock budget
+    const walletProfitC = Math.max(walletC - owedC - c(shippingReserve), 0);
     const floatProfitC = recvC - Math.min(recvC, Math.max(owedC - walletC, 0));
     const outsideC = Math.min(c(num(srcOutsideMax)), c(num(srcOutsideTotal)));
     const poolC = walletProfitC + floatProfitC + outsideC + c(num(srcCash));
     return (c(allocTotal) - poolC) / 100;
-  }, [walletTotal, owedTotal, receivableTotal, srcOutsideMax, srcOutsideTotal, srcCash, allocTotal]);
+  }, [walletTotal, owedTotal, shippingReserve, receivableTotal, srcOutsideMax, srcOutsideTotal, srcCash, allocTotal]);
 
   const sankey = useMemo(() => buildSankey({
     walletRows: cryptoWallets.map(w => ({ name: w.name, usd: Number(w.latest_balance_usd || 0) })),
     owedTotal,
+    shippingReserve,
     outsideMax: Number(plan?.outside_max_usd || 0),
     outsideTotal: Number(plan?.outside_total_usd || 0),
     receivables: receivableTotal,
@@ -323,7 +387,7 @@ export function PlannerPage() {
       usd: Number(i.ordered_at ? (i.ordered_value_usd ?? i.planned_value_usd) : i.planned_value_usd),
       ordered: i.ordered_at != null,
     })),
-  }), [cryptoWallets, owedTotal, plan, receivableTotal, items]);
+  }), [cryptoWallets, owedTotal, shippingReserve, plan, receivableTotal, items]);
 
   const refreshBalances = async () => {
     setRefreshing(true); setRefreshMsg('');
@@ -488,17 +552,34 @@ export function PlannerPage() {
           <span>Vendor GB is short <span className="font-semibold">{fmtUSD(sankey.uncoveredOwed)}</span> even counting the expected float payments — cover the gap before allocating stock.</span>
         </div>
       )}
+      {sankey.overAllocated > 0 && (
+        <div className="rounded border border-rose-400/40 bg-rose-400/10 p-3 text-sm text-rose-300 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4" />
+          <span>Over-allocated by <span className="font-semibold">{fmtUSD(sankey.overAllocated)}</span> — planned purchases exceed the Vendor STOCK budget ({fmtUSD(sankey.pool)}).</span>
+        </div>
+      )}
       {sankey.uncoveredOwed <= 0 && sankey.floatToOwed > 0 && (
         <div className="rounded border border-amber-400/40 bg-amber-400/5 p-3 text-sm text-amber-200 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           <span><span className="font-semibold">{fmtUSD(sankey.floatToOwed)}</span> of the Vendor GB coverage depends on float payments that haven't arrived yet (dashed flow).</span>
         </div>
       )}
-      {sankey.overAllocated > 0 && (
-        <div className="rounded border border-rose-400/40 bg-rose-400/10 p-3 text-sm text-rose-300 flex items-center gap-2">
+      {sankey.uncoveredReserve > 0 && (
+        <div className="rounded border border-amber-400/40 bg-amber-400/5 p-3 text-sm text-amber-200 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
-          <span>Over-allocated by <span className="font-semibold">{fmtUSD(sankey.overAllocated)}</span> — planned purchases exceed the Vendor STOCK budget ({fmtUSD(sankey.pool)}).</span>
+          <span>
+            {sankey.uncoveredOwed > 0
+              ? <>The wallets don't reach the shipping & insurance reserve at all — its full <span className="font-semibold">{fmtUSD(sankey.uncoveredReserve)}</span> is uncovered. Label purchases would have to dip into vendor or outside money.</>
+              : <>The wallets can't cover the shipping & insurance reserve — short <span className="font-semibold">{fmtUSD(sankey.uncoveredReserve)}</span> after vendor owed. Label purchases would have to dip into vendor or outside money.</>}
+          </span>
         </div>
+      )}
+      {shippingReserve > 0 && (
+        <p className="text-sm text-muted-foreground">
+          <span className="font-medium text-foreground/90">{fmtUSD(shippingReserve)}</span> shipping & insurance reserve held back before the stock budget · all campaigns.
+          {' '}{fmtUSD(Number(reserveRow?.shipping_fees_usd || 0))} shipping + {fmtUSD(Number(reserveRow?.insurance_usd || 0))} insurance billed
+          (counted even where the buyer hasn't paid yet) − {fmtUSD(Number(reserveRow?.label_costs_usd || 0))} labels − {fmtUSD(Number(reserveRow?.shipping_expenses_usd || 0))} shipping/reship spend.
+        </p>
       )}
 
       <Card>
@@ -529,14 +610,14 @@ export function PlannerPage() {
                     node={<PlannerNode />}
                     link={<PlannerLink />}
                   >
-                    <Tooltip formatter={(v: number) => fmtUSD(v)} />
+                    <Tooltip content={<PlannerTooltip />} />
                   </Sankey>
                 </ResponsiveContainer>
               </div>
             </div>
           )}
           <p className="text-[11px] text-muted-foreground mt-2">
-            Waterfall: the wallets cover Vendor GB first; float payments backfill the rest of owed, and everything above that threshold flows to Vendor STOCK. Dashed flows are money not in the wallets yet. The stock budget mixes sources — no specific dollar funds a specific kit.
+            Waterfall: the wallets cover Vendor GB first, then the shipping & insurance reserve; float payments backfill the rest of owed only, and everything above both thresholds flows to Vendor STOCK. Dashed flows are money not in the wallets yet. The stock budget mixes sources — no specific dollar funds a specific kit.
           </p>
         </CardContent>
       </Card>
@@ -562,6 +643,10 @@ export function PlannerPage() {
               <div className="flex justify-between gap-2 border-t pt-1">
                 <span className="text-muted-foreground min-w-0">Owed to vendors (non-COA, all campaigns)</span>
                 <span className="text-rose-400 shrink-0 whitespace-nowrap">−{fmtUSD(owedTotal)}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground min-w-0">Shipping & insurance reserve (all campaigns)</span>
+                <span className="text-cyan-400 shrink-0 whitespace-nowrap">−{fmtUSD(shippingReserve)}</span>
               </div>
               {committedUnorderedValue > 0 && (
                 <div className="flex justify-between gap-2">
