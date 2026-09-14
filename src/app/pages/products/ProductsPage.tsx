@@ -94,7 +94,34 @@ export function ProductsPage() {
   const [doReallocate] = useMutateAction(reallocateAtCostAdjustment);
   const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets] = useLoadAction(listWallets, [], {});
-  const progress = rows<{ group_buy_product_id: number; kits_demand: string; kits_paid: string }>(rawProgress);
+  const progress = rows<{ group_buy_product_id: number; sku_code: string; kits_demand: string; kits_paid: string }>(rawProgress);
+
+  // kit demand vs vendor money, per product: demand is live (late upstream
+  // edits move it) while kits_paid is history — a gap between them AFTER
+  // the vendor order is placed is the signal that something changed since.
+  // GATED so mid-buy installment payments never fire it (an always-amber
+  // banner through every buy phase would train both admins to skim past
+  // the real drift): the product counts as "ordering done" when it's
+  // marked placed OR payments reach 90% of demand — the fallback matters
+  // because in practice vendor orders get paid without the "Mark placed"
+  // button ever being pressed (every MB5 product: paid in full, placed
+  // never stamped). Whole-kit basis (kits_demand = ordered_kits).
+  const paidDriftFor = (gbpId: number, placedAt: string | null) => {
+    const p = progress.find(x => Number(x.group_buy_product_id) === Number(gbpId));
+    if (!p || !(Number(p.kits_paid) > 0)) return null;
+    const demand = Number(p.kits_demand);
+    const paid = Number(p.kits_paid);
+    if (!placedAt && paid < 0.9 * demand) return null; // still buying
+    const delta = Math.round((demand - paid) * 100) / 100;
+    return Math.abs(delta) >= 0.01 ? { demand, paid, delta } : null;
+  };
+  const paidDrifts = campaign
+    .map(c => {
+      const d = paidDriftFor(c.group_buy_product_id, c.ordered_from_vendor_at);
+      return d && d.delta > 0 ? { gbpId: c.group_buy_product_id, sku: c.sku_code, ...d } : null;
+    })
+    .filter((d): d is NonNullable<typeof d> => d != null)
+    .sort((a, b) => b.delta - a.delta);
   const walletsList = rows<{ id: number; name: string; active: boolean }>(rawWallets);
 
   // add-to-campaign form
@@ -404,6 +431,26 @@ export function ProductsPage() {
         </TabsList>
 
         <TabsContent value="campaign" className="mt-4 space-y-4">
+          {/* late-upstream-edit tripwire (the MB5-276 lesson): a customer can
+              add items to an order AFTER vendor payments were recorded, and
+              the change hides until the next pull. Whenever a product with
+              vendor money on it has demand PAST what's paid, say so loudly —
+              never let the gap wait to be discovered at packing time. */}
+          {paidDrifts.length > 0 && (
+            <div role="status" className="rounded border border-amber-400/40 bg-amber-400/5 p-3 text-sm text-amber-200">
+              <p className="font-medium">Demand moved after the vendor order was placed:</p>
+              <ul className="mt-0.5 space-y-0.5">
+                {paidDrifts.map(d => (
+                  <li key={d.gbpId}>
+                    <span className="font-semibold">{d.sku}</span> +{fmtNum(d.delta)} kit{d.delta === 1 ? '' : 's'} ({fmtNum(d.demand)} demand vs {fmtNum(d.paid)} paid)
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-xs text-amber-200/80">
+                Late upstream edits can add kits after you've paid the vendor — check whether the orders behind the growth are actually PAID (Orders page → search the SKU) before topping up.
+              </p>
+            </div>
+          )}
           <div className="border rounded-lg overflow-x-auto">
             <Table className="min-w-[1100px]">
               <TableHeader>
@@ -444,6 +491,19 @@ export function ProductsPage() {
                           {Number(c.adjustment_qty) > 0 ? '+' : ''}{fmtNum(c.adjustment_qty)} adj
                         </span>
                       )}
+                      {(() => {
+                        const d = paidDriftFor(c.group_buy_product_id, c.ordered_from_vendor_at);
+                        if (d == null) return null;
+                        return d.delta > 0 ? (
+                          <span className="block text-[10px] text-amber-300 font-semibold" title="Kit demand grew past the vendor payments after the order was placed — a late upstream edit may have added items after you paid">
+                            +{fmtNum(d.delta)} since paid
+                          </span>
+                        ) : (
+                          <span className="block text-[10px] text-muted-foreground font-normal" title="Vendor payments exceed current demand — usually a cancellation or removed line after payment; the extra kits become surplus stock">
+                            paid {fmtNum(d.paid)} / need {fmtNum(d.demand)}
+                          </span>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell className="text-right">{fmtUSD(c.owed_to_vendor_usd, { cents: false })}</TableCell>
                     <TableCell className="text-right text-emerald-300">{fmtUSD(c.total_product_profit_usd, { cents: false })}</TableCell>
