@@ -14,6 +14,13 @@ import { action } from '@uibakery/data';
  *   exists: the update can change total_usd, which feeds the write-off cap
  *   (due = billed - comps - write-off) — total changes must serialize with
  *   cap reads. New orders have nothing to protect (no write-off can exist).
+ * - Upstream line REMOVALS sync too (the MB5-181→276 swap lesson): an
+ *   import-sourced, locally-untouched line absent from the incoming list is
+ *   pruned (audited) so demand and packing stop counting a line upstream no
+ *   longer bills — but ONLY when every incoming sku resolved to a campaign
+ *   product (else absence may just be a rename) and NEVER when a shipment
+ *   references the line (packing evidence survives; those are audit-flagged
+ *   every pull until a human resolves them).
  */
 function importUpsertOrder() {
   return action('importUpsertOrder', 'SQL', {
@@ -226,6 +233,75 @@ function importUpsertOrder() {
                                   'group_buy_product_id', retire_removed.group_buy_product_id,
                                   'qty', retire_removed.qty, 'unit_price_usd', retire_removed.unit_price_usd)
         FROM retire_removed
+        RETURNING row_pk
+      ), items_fully_resolved AS (
+        -- the vanish logic below may only judge ABSENCE when every incoming
+        -- sku resolved to a campaign product: an unresolvable sku (renamed
+        -- upstream, missing catalog row) means our view of the order is
+        -- incomplete, and "absent" could really be "unrecognized" — judging
+        -- then would delete a line whose product merely changed names
+        SELECT NOT EXISTS (
+          SELECT 1 FROM jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)
+          WHERE NOT EXISTS (
+            SELECT 1 FROM products pr
+            JOIN group_buy_products gr ON gr.product_id = pr.id
+              AND gr.group_buy_id = {{params.group_buy_id}}::bigint
+            WHERE pr.sku_code = x.sku)
+        ) AND jsonb_array_length({{params.items}}::jsonb) > 0 AS ok
+      ), prune_vanished AS (
+        -- upstream DROPPED a line this app never touched (the MB5-181→276
+        -- swap: items moved to another order upstream; the pull updated the
+        -- header total but the stale local row kept double-counting demand
+        -- and sat in packing queues). An import-sourced, un-removed row
+        -- absent from the incoming list deletes outright — money is
+        -- untouched because un-overridden import rows carry no billed
+        -- delta; the upstream total already excludes them. Rows a shipment
+        -- ALREADY references are never deleted (packing evidence must
+        -- survive) — they are flagged loudly below instead.
+        DELETE FROM order_items oi
+        USING up
+        WHERE oi.order_id = up.id
+          AND oi.item_source = 'import'
+          AND oi.removed_at IS NULL
+          AND oi.qty_override IS NULL
+          AND (SELECT ok FROM items_fully_resolved)
+          AND NOT EXISTS (
+            SELECT 1 FROM jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)
+            JOIN products p4 ON p4.sku_code = x.sku
+            JOIN group_buy_products gbp4 ON gbp4.product_id = p4.id
+              AND gbp4.group_buy_id = {{params.group_buy_id}}::bigint
+            WHERE gbp4.id = oi.group_buy_product_id)
+          AND NOT EXISTS (SELECT 1 FROM shipment_items si WHERE si.order_item_id = oi.id)
+        RETURNING oi.id, oi.group_buy_product_id, oi.qty, oi.unit_price_usd
+      ), prune_vanished_audit AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', prune_vanished.id::text, 'import_line_vanished_pruned', 'import',
+               jsonb_build_object('order_id', (SELECT id FROM up),
+                                  'group_buy_product_id', prune_vanished.group_buy_product_id,
+                                  'qty', prune_vanished.qty, 'unit_price_usd', prune_vanished.unit_price_usd)
+        FROM prune_vanished
+        RETURNING row_pk
+      ), vanished_but_shipped_audit AS (
+        -- same vanish condition but a shipment references the line: we
+        -- packed/shipped something upstream now says isn't on the order.
+        -- No automatic action can be right — flag it every pull until a
+        -- human resolves which order the goods really belong to
+        INSERT INTO audit_log (table_name, row_pk, action, actor, new_data)
+        SELECT 'order_items', oi.id::text, 'import_line_vanished_but_has_shipments', 'import',
+               jsonb_build_object('order_id', (SELECT id FROM up),
+                                  'group_buy_product_id', oi.group_buy_product_id, 'qty', oi.qty)
+        FROM up, order_items oi
+        WHERE oi.order_id = up.id
+          AND oi.item_source = 'import'
+          AND oi.removed_at IS NULL
+          AND (SELECT ok FROM items_fully_resolved)
+          AND NOT EXISTS (
+            SELECT 1 FROM jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)
+            JOIN products p5 ON p5.sku_code = x.sku
+            JOIN group_buy_products gbp5 ON gbp5.product_id = p5.id
+              AND gbp5.group_buy_id = {{params.group_buy_id}}::bigint
+            WHERE gbp5.id = oi.group_buy_product_id)
+          AND EXISTS (SELECT 1 FROM shipment_items si WHERE si.order_item_id = oi.id)
         RETURNING row_pk
       ), wo_clear AS (
         -- a CHANGED billed total invalidates a standing write-off (the
