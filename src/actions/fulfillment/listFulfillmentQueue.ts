@@ -15,6 +15,13 @@ import { action } from '@uibakery/data';
  * 'ready' = money-gated orders with remaining packable work — a partially
  * shipped order stays here (badged) until its last box is drafted.
  *
+ * PERFORMANCE: the per-order item aggregate lives in a MATERIALIZED CTE,
+ * scoped to the campaign (order_items only ever reference their own
+ * campaign's group_buy_products — importUpsertOrder refuses cross-campaign
+ * adoption). Inlined, the planner misestimated the recon filter to 1 row
+ * and nested-loop re-ran the whole aggregate once PER ORDER: 4.9s on 618
+ * orders (2.3M buffer hits). Materialized it runs once: ~45ms.
+ *
  * Product filters: product_ids is a CSV of product ids ('' = off);
  * filter_mode 'contains' = order has REMAINING packable work on at least
  * one product in the set (other items allowed); 'only' = additionally no
@@ -22,6 +29,9 @@ import { action } from '@uibakery/data';
  * line existence): the filters exist to batch PACKING work, so a line
  * already fully shipped/reserved neither qualifies an order nor
  * disqualifies it. Vendor-direct lines never count — not in your box.
+ * Both modes read packable_json (exactly the remaining>0, non-direct,
+ * non-digital, non-removed lines) instead of re-summing shipments per
+ * order — same semantics, none of the correlated work.
  */
 function listFulfillmentQueue() {
   return action('listFulfillmentQueue', 'SQL', {
@@ -29,45 +39,7 @@ function listFulfillmentQueue() {
     query: `
       WITH sel AS (
         SELECT unnest(string_to_array(NULLIF({{params.product_ids}}::text, ''), ','))::bigint AS pid
-      )
-      SELECT o.id, o.order_number, o.external_id, c.display_name AS customer_name,
-             o.contact_name, o.contact_email::text AS contact_email, o.contact_phone,
-             o.address_line1, o.address_line2, o.city, o.state_code, o.postal_code,
-             o.hold_shipping, o.customer_note, o.admin_note,
-             o.shipping_insurance_usd, o.shipping_insurance_override_usd,
-             r.recon_status,
-             -- items WE pack; vendor-direct lines live in direct_items_summary
-             COALESCE(it.items_summary, '') AS items_summary,
-             COALESCE(it.item_count, 0) AS item_count,
-             COALESCE(it.remaining_summary, '') AS remaining_summary,
-             COALESCE(it.remaining_packable_qty, 0) AS remaining_packable_qty,
-             COALESCE(it.shipped_packable_qty, 0) AS shipped_packable_qty,
-             COALESCE(it.packable_json, '[]'::jsonb) AS packable_json,
-             COALESCE(it.shipped_json, '[]'::jsonb) AS shipped_json,
-             COALESCE(it.upstream_check_json, '[]'::jsonb) AS upstream_check_json,
-             COALESCE(it.direct_items_summary, '') AS direct_items_summary,
-             COALESCE(it.direct_outstanding_summary, '') AS direct_outstanding_summary,
-             COALESCE(it.direct_outstanding_ids, '') AS direct_outstanding_ids,
-             COALESCE(it.all_direct, false) AS all_direct,
-             COALESCE(it.direct_outstanding, false) AS direct_outstanding,
-             -- derived order-level shipment state (NULL = nothing active)
-             CASE
-               WHEN COALESCE(s.ship_count, 0) = 0 THEN NULL
-               WHEN COALESCE(it.shipped_packable_qty, 0) > 0
-                    AND COALESCE(it.remaining_packable_qty, 0) > 0 THEN 'partial'
-               ELSE CASE s.max_rank WHEN 5 THEN 'delivered' WHEN 4 THEN 'reshipped'
-                                    WHEN 3 THEN 'shipped' WHEN 2 THEN 'packed' ELSE 'pending' END
-             END AS shipment_state,
-             COALESCE(s.ship_count, 0) AS shipment_count,
-             COALESCE(s.has_draft, false) AS has_draft,
-             COALESCE(s.draft_needs_recovery, false) AS draft_needs_recovery,
-             COALESCE(s.push_outstanding, false) AS push_outstanding,
-             COALESCE(s.tracking_numbers, '') AS tracking_numbers,
-             COALESCE(s.label_cost_total, 0) AS label_cost_total
-      FROM orders o
-      JOIN customers c ON c.id = o.customer_id
-      LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
-      LEFT JOIN (
+      ), it AS MATERIALIZED (
         -- all packing math uses the EFFECTIVE quantity; locally-removed
         -- lines vanish from fulfillment entirely, and DIGITAL products
         -- (COA certificates) never enter packing math at all — they are
@@ -134,8 +106,47 @@ function listFulfillmentQueue() {
           WHERE si.order_item_id = oi.id
             AND COALESCE(sh.refund_status, '') <> 'SUCCESS'
         ) att ON true
+        WHERE gbp.group_buy_id = {{params.group_buy_id}}::bigint
         GROUP BY oi.order_id
-      ) it ON it.order_id = o.id
+      )
+      SELECT o.id, o.order_number, o.external_id, c.display_name AS customer_name,
+             o.contact_name, o.contact_email::text AS contact_email, o.contact_phone,
+             o.address_line1, o.address_line2, o.city, o.state_code, o.postal_code,
+             o.hold_shipping, o.customer_note, o.admin_note,
+             o.shipping_insurance_usd, o.shipping_insurance_override_usd,
+             r.recon_status,
+             -- items WE pack; vendor-direct lines live in direct_items_summary
+             COALESCE(it.items_summary, '') AS items_summary,
+             COALESCE(it.item_count, 0) AS item_count,
+             COALESCE(it.remaining_summary, '') AS remaining_summary,
+             COALESCE(it.remaining_packable_qty, 0) AS remaining_packable_qty,
+             COALESCE(it.shipped_packable_qty, 0) AS shipped_packable_qty,
+             COALESCE(it.packable_json, '[]'::jsonb) AS packable_json,
+             COALESCE(it.shipped_json, '[]'::jsonb) AS shipped_json,
+             COALESCE(it.upstream_check_json, '[]'::jsonb) AS upstream_check_json,
+             COALESCE(it.direct_items_summary, '') AS direct_items_summary,
+             COALESCE(it.direct_outstanding_summary, '') AS direct_outstanding_summary,
+             COALESCE(it.direct_outstanding_ids, '') AS direct_outstanding_ids,
+             COALESCE(it.all_direct, false) AS all_direct,
+             COALESCE(it.direct_outstanding, false) AS direct_outstanding,
+             -- derived order-level shipment state (NULL = nothing active)
+             CASE
+               WHEN COALESCE(s.ship_count, 0) = 0 THEN NULL
+               WHEN COALESCE(it.shipped_packable_qty, 0) > 0
+                    AND COALESCE(it.remaining_packable_qty, 0) > 0 THEN 'partial'
+               ELSE CASE s.max_rank WHEN 5 THEN 'delivered' WHEN 4 THEN 'reshipped'
+                                    WHEN 3 THEN 'shipped' WHEN 2 THEN 'packed' ELSE 'pending' END
+             END AS shipment_state,
+             COALESCE(s.ship_count, 0) AS shipment_count,
+             COALESCE(s.has_draft, false) AS has_draft,
+             COALESCE(s.draft_needs_recovery, false) AS draft_needs_recovery,
+             COALESCE(s.push_outstanding, false) AS push_outstanding,
+             COALESCE(s.tracking_numbers, '') AS tracking_numbers,
+             COALESCE(s.label_cost_total, 0) AS label_cost_total
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
+      LEFT JOIN it ON it.order_id = o.id
       LEFT JOIN LATERAL (
         SELECT count(*) AS ship_count,
                bool_or(sh.finalized_at IS NULL) AS has_draft,
@@ -156,36 +167,17 @@ function listFulfillmentQueue() {
       ) s ON true
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND o.status NOT IN ('cancelled','refunded')
-        -- product filters: a line counts only while it has REMAINING
-        -- packable work (effective - attributed over non-voided shipments,
-        -- drafts included) — a fully shipped/reserved line neither
-        -- qualifies (contains) nor disqualifies (only) an order
+        -- product filters read the CTE's packable_json: exactly the lines
+        -- with REMAINING packable work (drafts included in attributed) —
+        -- identical semantics to the old per-order shipment re-sums
         AND (COALESCE({{params.product_ids}}::text, '') = ''
           OR (EXISTS (
-                SELECT 1 FROM order_items foi
-                JOIN group_buy_products fg ON fg.id = foi.group_buy_product_id
-                JOIN products fp ON fp.id = fg.product_id
-                WHERE foi.order_id = o.id AND foi.removed_at IS NULL AND NOT foi.direct_ship
-                  AND NOT fp.digital
-                  AND fg.product_id IN (SELECT pid FROM sel)
-                  AND COALESCE(foi.qty_override, foi.qty) - COALESCE((
-                        SELECT sum(si.qty) FROM shipment_items si
-                        JOIN shipments fsh ON fsh.id = si.shipment_id
-                        WHERE si.order_item_id = foi.id
-                          AND COALESCE(fsh.refund_status, '') <> 'SUCCESS'), 0) > 0)
+                SELECT 1 FROM jsonb_array_elements(COALESCE(it.packable_json, '[]'::jsonb)) e
+                WHERE (e->>'product_id')::bigint IN (SELECT pid FROM sel))
               AND ({{params.filter_mode}}::text <> 'only'
                 OR NOT EXISTS (
-                    SELECT 1 FROM order_items foi2
-                    JOIN group_buy_products fg2 ON fg2.id = foi2.group_buy_product_id
-                    JOIN products fp2 ON fp2.id = fg2.product_id
-                    WHERE foi2.order_id = o.id AND foi2.removed_at IS NULL AND NOT foi2.direct_ship
-                      AND NOT fp2.digital
-                      AND fg2.product_id NOT IN (SELECT pid FROM sel)
-                      AND COALESCE(foi2.qty_override, foi2.qty) - COALESCE((
-                            SELECT sum(si2.qty) FROM shipment_items si2
-                            JOIN shipments fsh2 ON fsh2.id = si2.shipment_id
-                            WHERE si2.order_item_id = foi2.id
-                              AND COALESCE(fsh2.refund_status, '') <> 'SUCCESS'), 0) > 0))))
+                    SELECT 1 FROM jsonb_array_elements(COALESCE(it.packable_json, '[]'::jsonb)) e2
+                    WHERE (e2->>'product_id')::bigint NOT IN (SELECT pid FROM sel)))))
         AND ({{params.stage}}::text = 'all'
           -- ready requires fully collected (matched — or OVER: an overpaid
           -- order is fully collected and shippable) AND no unresolved
