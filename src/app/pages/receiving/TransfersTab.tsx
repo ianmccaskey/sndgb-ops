@@ -86,6 +86,15 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // them all); the transfer itself stays product+qty based. The FIRST
   // selection is recorded as source_package_id; the rest ride in the note.
   const [selectedBoxIds, setSelectedBoxIds] = useState<number[]>([]);
+  // a campaign switch swaps the box list and product catalog: a transfer
+  // built from stale MB5 boxes would classify (correctly) to MB5 and then
+  // vanish from the Flash Buy list the operator is looking at — clear the
+  // working selection instead of letting it submit disoriented
+  React.useEffect(() => {
+    setSelectedBoxIds([]);
+    setFLines([{ product: '', qty: '' }]);
+     
+  }, [groupBuyId]);
   // boxes beyond the first can't ride source_package_id (one column) —
   // a multi-box part-out records the rest in the transfer note
   const selectedBoxes = selectedBoxIds
@@ -1291,7 +1300,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                   </TableCell></TableRow>
                 )}
                 {!transfersLoading && finalized.length === 0 && (
-                  <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6 text-sm">No transfers yet.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6 text-sm">No transfers in this campaign yet.</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>

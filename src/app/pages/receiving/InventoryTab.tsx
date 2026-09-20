@@ -70,7 +70,7 @@ export function InventoryTab({ inventory, addresses, loading }: { inventory: Inv
       {!loading && byAddress.length === 0 && (
         <Card className="lg:col-span-2">
           <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            Nothing received yet — inventory appears when a package is delivered (or marked received).
+            Nothing received in this campaign yet — inventory appears when a package is delivered (or marked received).
           </CardContent>
         </Card>
       )}

@@ -6,7 +6,7 @@ import listAddressInventory from '@/actions/receiving/listAddressInventory';
 import listTransfers from '@/actions/receiving/listTransfers';
 import listShipmentDrains from '@/actions/receiving/listShipmentDrains';
 import listDestinations from '@/actions/receiving/listDestinations';
-import listProducts from '@/actions/products/listProducts';
+import listCampaignCatalogProducts from '@/actions/receiving/listCampaignCatalogProducts';
 import listShippingVendors from '@/actions/receiving/listShippingVendors';
 import updatePackageTracking from '@/actions/receiving/updatePackageTracking';
 import { trackPackage, isTestKey } from '@/lib/shippo';
@@ -40,13 +40,18 @@ export function ReceivingPage() {
   const shippoHttp = useShippoHttp();
 
   const [rawAddresses, , , reloadAddresses] = useLoadAction(listReceiveAddresses, [], {});
-  const [rawPackages, packagesLoading, , reloadPackages] = useLoadAction(listInboundPackages, [], {});
-  const [rawInventory, inventoryLoading, , reloadInventory] = useLoadAction(listAddressInventory, [], {});
-  const [rawTransfers, transfersLoading, , reloadTransfers] = useLoadAction(listTransfers, [], {});
+  // packages / inventory / transfers / product pickers are all scoped to
+  // the SELECTED CAMPAIGN (Ian: the Flash Buy's boxes were mixing into
+  // MB5's receiving view). Drains stay physical/all-campaign — a drained
+  // product from another campaign simply never matches a listed box.
+  const enabled = groupBuyId != null;
+  const [rawPackages, packagesLoading, , reloadPackages] = useLoadAction(listInboundPackages, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawInventory, inventoryLoading, , reloadInventory] = useLoadAction(listAddressInventory, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawTransfers, transfersLoading, , reloadTransfers] = useLoadAction(listTransfers, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   // fulfillment packing depletion for the box display (FIFO in boxConsumption)
   const [rawDrains] = useLoadAction(listShipmentDrains, [], {});
   const [rawDestinations, , , reloadDestinations] = useLoadAction(listDestinations, [], {});
-  const [rawProducts] = useLoadAction(listProducts, [], {});
+  const [rawProducts] = useLoadAction(listCampaignCatalogProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   // only vendors that actually ship product IN THE SELECTED CAMPAIGN (no
   // COA vendors, no niche/unused vendor rows) — see listShippingVendors.
   // Gated like every other campaign-scoped load: groupBuyId is null until
@@ -64,11 +69,16 @@ export function ReceivingPage() {
   // fail-closed mangle flag stays as dead defense for values past
   // Number.MAX_SAFE_INTEGER (refresh/correction refuse with an honest
   // message instead of acting on a rounded number).
-  const packages = useMemo(() => rows<Pkg>(rawPackages).map(p => {
-    const rawTracking = p.tracking_number as unknown;
-    const mangled = typeof rawTracking === 'number' && !Number.isSafeInteger(rawTracking);
-    return { ...p, carrier: String(p.carrier ?? ''), tracking_number: dbText(rawTracking), tracking_mangled: mangled };
-  }), [rawPackages]);
+  const packages = useMemo(() => rows<Pkg>(rawPackages)
+    // belt against a stale-render window on campaign switch: if the load
+    // hook ever serves the PREVIOUS campaign's rows while refetching, the
+    // stamp filter here keeps them off the new campaign's screen
+    .filter(p => groupBuyId == null || Number((p as { group_buy_id?: number | string }).group_buy_id) === Number(groupBuyId))
+    .map(p => {
+      const rawTracking = p.tracking_number as unknown;
+      const mangled = typeof rawTracking === 'number' && !Number.isSafeInteger(rawTracking);
+      return { ...p, carrier: String(p.carrier ?? ''), tracking_number: dbText(rawTracking), tracking_mangled: mangled };
+    }), [rawPackages, groupBuyId]);
   const inventory = rows<InvRow>(rawInventory);
   const transfers = useMemo(() => rows<TransferRow>(rawTransfers).map(t => ({
     ...t, tracking_number: t.tracking_number == null ? null : dbText(t.tracking_number),

@@ -9,6 +9,10 @@ import { action } from '@uibakery/data';
  * on the ORIGIN's id + label; ungrouped addresses are themselves.
  * Negatives stay visible. v_address_inventory itself remains the
  * per-address truth (the transfer fns aggregate it the same way).
+ * CAMPAIGN-SCOPED by product set: only the selected campaign's products
+ * appear. Campaign product sets are disjoint in practice, so this splits
+ * inventory per buy; a future campaign REUSING a product would show that
+ * product's physical pool in both — which is the truth (one shelf).
  */
 function listAddressInventory() {
   return action('listAddressInventory', 'SQL', {
@@ -24,6 +28,9 @@ function listAddressInventory() {
       JOIN receive_addresses ra ON ra.id = inv.receive_address_id
       JOIN receive_addresses org ON org.id = COALESCE(ra.transfer_origin_id, ra.id)
       JOIN products pr ON pr.id = inv.product_id
+      WHERE inv.product_id IN (
+        SELECT product_id FROM group_buy_products
+        WHERE group_buy_id = {{params.group_buy_id}}::bigint)
       GROUP BY org.id, org.label, inv.product_id, pr.sku_code, pr.name
       ORDER BY org.label, pr.sku_code
     `,

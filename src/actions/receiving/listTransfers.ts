@@ -1,6 +1,13 @@
 import { action } from '@uibakery/data';
 
-/** Transfer log (drafts first, then newest finalized) with items jsonb. */
+/**
+ * Transfer log (drafts first, then newest finalized) with items jsonb.
+ * CAMPAIGN-SCOPED: a transfer belongs to the selected campaign when its
+ * source package is stamped with it, or (no source package) when any of
+ * its items is a campaign product, or (direct-ship) when its linked order
+ * is in the campaign. An item-less non-direct draft has no campaign
+ * evidence — it shows everywhere rather than hiding from both admins.
+ */
 function listTransfers() {
   return action('listTransfers', 'SQL', {
     datasourceName: 'SND GB DB',
@@ -33,6 +40,20 @@ function listTransfers() {
         JOIN products pr ON pr.id = i.product_id
         WHERE i.transfer_id = t.id
       ) items ON true
+      WHERE EXISTS (SELECT 1 FROM inbound_packages sp
+                    WHERE sp.id = t.source_package_id
+                      AND sp.group_buy_id = {{params.group_buy_id}}::bigint)
+         OR (t.source_package_id IS NULL AND (
+              EXISTS (SELECT 1 FROM transfer_items ti
+                      JOIN group_buy_products g ON g.product_id = ti.product_id
+                        AND g.group_buy_id = {{params.group_buy_id}}::bigint
+                      WHERE ti.transfer_id = t.id)
+              OR EXISTS (SELECT 1 FROM order_items oi
+                         JOIN orders o ON o.id = oi.order_id
+                         WHERE oi.id = t.direct_order_item_id
+                           AND o.group_buy_id = {{params.group_buy_id}}::bigint)
+              OR (t.direct_order_item_id IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM transfer_items ti2 WHERE ti2.transfer_id = t.id))))
       ORDER BY t.finalized_at NULLS FIRST, t.created_at DESC
     `,
   });

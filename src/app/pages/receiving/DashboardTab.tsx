@@ -49,7 +49,7 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
   // jump to Transfers with this box preselected (part-out / send-out flow)
   onPartOut: (p: Pkg) => void;
 }) {
-  const { userName, groupBuyId } = useApp();
+  const { userName, groupBuyId, groupBuy } = useApp();
   const [doCreate] = useMutateAction(createInboundPackage);
   const [doAddItem] = useMutateAction(addPackageItem);
   const [doDelItem] = useMutateAction(deletePackageItem);
@@ -77,6 +77,10 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
   // (operator preference; narrowing is one click away)
   const [statusFilter, setStatusFilter] = useState('all');
   const [vendorFilter, setVendorFilter] = useState('all');
+
+  // "empty because filtered" and "empty because this campaign has nothing
+  // yet" must read differently — a near-empty new campaign is normal
+  const filtersActive = productFilter.size > 0 || addrFilter !== 'all' || statusFilter !== 'all' || vendorFilter !== 'all';
 
   // ---- correction dialog ----
   const [correcting, setCorrecting] = useState<Pkg | null>(null);
@@ -122,6 +126,19 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
   React.useEffect(() => {
     if (vendorsReady && vendorFilter !== 'all' && !vendors.some(v => v.code === vendorFilter)) setVendorFilter('all');
   }, [vendorsReady, vendors, vendorFilter]);
+  // a campaign switch swaps the WHOLE product catalog (sets are disjoint):
+  // a stale product filter would hide the new campaign's boxes behind a
+  // chip that no longer even renders, and stale form/scan/row lines would
+  // stamp another campaign's products into this campaign's box — the
+  // split-brain this scoping exists to prevent. Same class as the vendor
+  // invalidation above, applied to every product-keyed piece of state.
+  React.useEffect(() => {
+    setProductFilter(new Set());
+    setFLines([{ product: '', qty: '' }]);
+    setSmLines([{ product: '', qty: '' }]);
+    setRowItem({});
+     
+  }, [groupBuyId]);
 
   const createPackage = async () => {
     setFMsg('');
@@ -647,7 +664,9 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
 
       {/* log an inbound package */}
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base">Log inbound package</CardTitle></CardHeader>
+        <CardHeader className="pb-2"><CardTitle className="text-base">
+          Log inbound package{groupBuy?.name && <span className="text-muted-foreground font-normal"> — {groupBuy.name}</span>}
+        </CardTitle></CardHeader>
         <CardContent className="space-y-3">
           {/* persistent labels (form-UX sweep 2026-09-12): placeholder-as-
               label made every filled form a memory test */}
@@ -855,7 +874,7 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
             {scanStep === 'create' && scanModal && (
               <div className="space-y-3 text-sm">
                 <p className="text-xs text-muted-foreground">
-                  No logged package matches this label. Log it here — the scanned tracking is kept (correct it if it read wrong), then it is committed and received in one go.
+                  No logged package matches this label. Log it here — the scanned tracking is kept (correct it if it read wrong), then it is committed and received in one go{groupBuy?.name && <> under <span className="font-medium text-foreground/80">{groupBuy.name}</span></>}.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="Receive address">
@@ -1054,7 +1073,7 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
                     {rowMsg[p.id] && <p className="text-[11px] text-rose-400">{rowMsg[p.id]}</p>}
                   </div>
                 ))}
-                {pkgs.length === 0 && <p className="text-xs text-muted-foreground">No packages match the filters.</p>}
+                {pkgs.length === 0 && <p className="text-xs text-muted-foreground">{filtersActive ? 'No packages match the filters.' : 'No packages in this campaign at this address yet.'}</p>}
               </CardContent>
             </Card>
           );
@@ -1064,7 +1083,9 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
             <CardContent className="py-8 text-center text-sm text-muted-foreground">
               {addresses.length === 0
                 ? 'No receive addresses yet — create one on the Addresses tab.'
-                : 'No packages match the current filters.'}
+                : filtersActive
+                  ? 'No packages match the current filters.'
+                  : 'No packages logged for this campaign yet — log the first box above.'}
             </CardContent>
           </Card>
         )}

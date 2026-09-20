@@ -27,12 +27,22 @@ function createInboundPackage() {
         FROM jsonb_array_elements({{params.items}}::jsonb) x
       ),
       ok AS (
+        -- every line must be a product of the STAMPED campaign: a stale
+        -- form surviving a campaign switch must not create a box whose
+        -- package list says one campaign while its contents belong to
+        -- another (split-brain: listed under the stamp, inventoried under
+        -- the products' campaign)
         SELECT count(*) AS n,
-               bool_and(qty_text ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND qty_text::numeric > 0) AS all_valid
+               bool_and(qty_text ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND qty_text::numeric > 0
+                        AND EXISTS (SELECT 1 FROM group_buy_products g
+                                    WHERE g.product_id = input_items.product_id
+                                      AND g.group_buy_id = NULLIF({{params.group_buy_id}}::text, '')::bigint)) AS all_valid
         FROM input_items
       ),
       ins AS (
-        INSERT INTO inbound_packages (receive_address_id, vendor_id, carrier, tracking_number, note, created_by)
+        -- group_buy_id stamps the box to the SELECTED campaign — receiving
+        -- is scoped per buy (a physical vendor box belongs to exactly one)
+        INSERT INTO inbound_packages (receive_address_id, vendor_id, carrier, tracking_number, note, created_by, group_buy_id)
         SELECT {{params.receive_address_id}}::bigint,
                NULLIF({{params.vendor_id}}::text, '')::bigint,
                LOWER(TRIM({{params.carrier}}::text)),
@@ -41,8 +51,10 @@ function createInboundPackage() {
                -- as the same parcel
                UPPER(TRIM({{params.tracking_number}}::text)),
                NULLIF(TRIM({{params.note}}::text), ''),
-               {{params.actor}}::text
+               {{params.actor}}::text,
+               NULLIF({{params.group_buy_id}}::text, '')::bigint
         WHERE TRIM({{params.carrier}}::text) <> '' AND TRIM({{params.tracking_number}}::text) <> ''
+          AND NULLIF({{params.group_buy_id}}::text, '') IS NOT NULL
           -- expected_label ('' = no expectation, manual flow) is the
           -- identity-CAS for CSV imports: the reviewed (id, label) pair
           -- must still hold AT WRITE TIME, so a rename between preview
