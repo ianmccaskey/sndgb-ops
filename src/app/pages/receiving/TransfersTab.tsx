@@ -370,8 +370,10 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       // ("address_from.phone must not be empty") — refuse BEFORE the
       // draft exists, same guard as the fulfillment Ship dialog, so the
       // fix is one field instead of a delete-and-requote loop
-      if (!String(fromRow.phone ?? '').trim()) {
-        setPurchaseMsg(`"${fromRow.label}" has no phone — Shippo refuses label purchases without a ship-from phone. Add one on the Addresses tab, then re-fetch rates.`);
+      const missingFrom = [!String(fromRow.phone ?? '').trim() && 'phone', !String(fromRow.email ?? '').trim() && 'email'].filter(Boolean) as string[];
+      if (missingFrom.length > 0) {
+        const list = missingFrom.join(' or ');
+        setPurchaseMsg(`"${fromRow.label}" has no ${list} — Shippo refuses label purchases without a ship-from ${list}. Add ${missingFrom.length > 1 ? 'them' : 'it'} on the Addresses tab, then re-fetch rates.`);
         return;
       }
       // UPS prints the sender phone on the label's return address, and
@@ -727,7 +729,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       setDraftMsg(m => ({
         ...m,
         [t.id]: msg + (e instanceof ShippoPurchaseRefusedError && /address_from/i.test(msg)
-          ? ' This draft\'s rate is frozen with the ship-from as it was quoted — fixing the address does NOT fix the rate. Delete this draft (Delete verifies no label first) and re-quote.'
+          ? ' This draft\'s rate is frozen with the ship-from as it was quoted — fixing the address does NOT fix the rate. Add the missing field on the Addresses tab first, then delete this draft (Delete verifies no label first) and re-quote.'
           : ''),
       }));
     } finally {
@@ -920,6 +922,21 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
               </SelectContent>
             </Select>
             </Field>
+            {/* warn-at-selection tier (mirrors the Ship modal): Shippo
+                refuses purchases from an address missing phone/email, and
+                the refusal only fires AFTER a rate is picked — say so here */}
+            {(() => {
+              const fr = addresses.find(a => String(a.id) === fFrom);
+              if (!fr) return null;
+              const missing = [!String(fr.phone ?? '').trim() && 'phone', !String(fr.email ?? '').trim() && 'email'].filter(Boolean) as string[];
+              if (missing.length === 0) return null;
+              const pron = missing.length > 1 ? 'them' : 'it';
+              return (
+                <p className="text-[11px] text-amber-300 sm:col-span-2 -mt-1">
+                  No {missing.join(' or ')} on "{fr.label}" — Shippo refuses purchases without {pron}; add {pron} on the Addresses tab BEFORE fetching rates.
+                </p>
+              );
+            })()}
             <Field label="Destination">
             <Select value={fDest} onValueChange={setFDest}>
               <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>

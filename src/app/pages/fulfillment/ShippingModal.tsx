@@ -712,13 +712,18 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     try {
       const rate = ratesResult?.rates.find(r => r.object_id === pickedRate);
       if (!rate || !shipTo || !fromRow) { setPurchaseMsg('Pick a rate first.'); return; }
-      // Shippo refuses purchases whose address_from has no phone
-      // ("address_from.phone must not be empty") — refuse HERE, before a
-      // draft is created, so the fix is one field instead of a
-      // draft-recovery loop
-      if (!s(fromRow.phone).trim()) {
-        setPurchaseMsg(`"${fromRow.label}" has no phone — Shippo refuses label purchases without a ship-from phone. Add one on Receiving > Addresses (UPS purchases are re-quoted without it so it never prints on the label), then re-fetch rates.`);
-        return;
+      // Shippo refuses purchases whose address_from has no phone or no
+      // email ("address_from.phone/email must not be empty") — refuse
+      // HERE, before a draft is created, so the fix is one field instead
+      // of a draft-recovery loop
+      {
+        const missing = [!s(fromRow.phone).trim() && 'phone', !s(fromRow.email).trim() && 'email'].filter(Boolean) as string[];
+        if (missing.length > 0) {
+          const list = missing.join(' or ');
+          const pron = missing.length > 1 ? 'them' : 'it';
+          setPurchaseMsg(`"${fromRow.label}" has no ${list} — Shippo refuses label purchases without a ship-from ${list}. Add ${pron} on Receiving > Addresses${missing.includes('phone') ? ' (UPS purchases are re-quoted without the phone so it never prints on the label)' : ''}, then re-fetch rates.`);
+          return;
+        }
       }
       // belt for races the invalidation effect can't win
       if (ratesResult!.sig !== quoteSig) {
@@ -820,7 +825,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         // succeed, so say so instead of inviting a retry loop
         setPurchaseMsg((e instanceof Error ? e.message : 'Purchase failed')
           + (e instanceof ShippoPurchaseRefusedError && /address_from/i.test(e.message)
-            ? ' — this rate was quoted with the ship-from as it was then; fixing the address does NOT fix the rate. Delete the draft below (it verifies no label first) and re-fetch rates.'
+            ? ' — this rate was quoted with the ship-from as it was then; fixing the address does NOT fix the rate. Add the missing field on Receiving > Addresses first, then delete the draft below (it verifies no label first) and re-fetch rates.'
             : ' — the draft is saved below; retry or delete it there.'));
         reloadShipments();
         return;
@@ -1287,9 +1292,16 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 </div>
               )}
             </div>
-            {!manualMode && fromRow && !s(fromRow.phone).trim() && (
-              <p className="text-[11px] text-amber-300">No phone on "{fromRow.label}" — Shippo refuses purchases without one; add it on Receiving &gt; Addresses (UPS purchases are re-quoted without the phone so it never prints on the label).</p>
-            )}
+            {!manualMode && fromRow && (() => {
+              const missing = [!s(fromRow.phone).trim() && 'phone', !s(fromRow.email).trim() && 'email'].filter(Boolean) as string[];
+              if (missing.length === 0) return null;
+              const pron = missing.length > 1 ? 'them' : 'it';
+              return (
+                <p className="text-[11px] text-amber-300">
+                  No {missing.join(' or ')} on "{fromRow.label}" — Shippo refuses purchases without {pron}; add {pron} on Receiving &gt; Addresses BEFORE fetching rates (rates quoted against the incomplete address can't be purchased — fix it, then fetch again).{missing.includes('phone') && ' UPS purchases are re-quoted without the phone so it never prints on the label.'}
+                </p>
+              );
+            })()}
 
             {!manualMode && (
               <div className="grid gap-3 sm:grid-cols-2">
