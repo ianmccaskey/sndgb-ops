@@ -11,7 +11,10 @@ function saveDestination() {
                NULLIF(TRIM({{params.street2}}::text), ''),
                TRIM({{params.city}}::text), TRIM({{params.state}}::text), TRIM({{params.zip}}::text),
                COALESCE(NULLIF(TRIM({{params.country}}::text), ''), 'US'),
-               NULLIF(TRIM({{params.phone}}::text), ''), NULLIF(TRIM({{params.email}}::text), ''),
+               -- digits-only like receive_addresses.phone: a stored "+1…"
+               -- is destroyed by the JS transport (re-typed as a number)
+               -- and can never round-trip a content-CAS
+               NULLIF(regexp_replace({{params.phone}}::text, '[^0-9]', '', 'g'), ''), NULLIF(TRIM({{params.email}}::text), ''),
                {{params.actor}}::text
         WHERE TRIM({{params.label}}::text) <> '' AND TRIM({{params.name}}::text) <> '' AND TRIM({{params.street1}}::text) <> ''
           AND TRIM({{params.city}}::text) <> '' AND TRIM({{params.state}}::text) <> '' AND TRIM({{params.zip}}::text) <> ''

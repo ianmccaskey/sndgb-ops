@@ -9,6 +9,13 @@ import { action } from '@uibakery/data';
  * label stayed unusable — restore it first (Addresses tab). Enforced
  * here, not just in previews, so a concurrent archive between preview
  * and import cannot slip through. Audited.
+ *
+ * PHONE IS STORED DIGITS-ONLY: the JS transport re-types "+1864..." as
+ * a NUMBER (leading + parses as numeric), destroying the + — so a
+ * stored "+1..." phone can NEVER round-trip, and the ship-from CAS in
+ * create_shipment_draft refuses every purchase from that address (the
+ * order 2026-136 incident). Normalizing at the save boundary makes the
+ * column transport-safe by construction.
  */
 function saveReceiveAddress() {
   return action('saveReceiveAddress', 'SQL', {
@@ -20,7 +27,7 @@ function saveReceiveAddress() {
                NULLIF(TRIM({{params.street2}}::text), ''),
                TRIM({{params.city}}::text), TRIM({{params.state}}::text), TRIM({{params.zip}}::text),
                COALESCE(NULLIF(TRIM({{params.country}}::text), ''), 'US'),
-               NULLIF(TRIM({{params.phone}}::text), ''), NULLIF(TRIM({{params.email}}::text), ''),
+               NULLIF(regexp_replace({{params.phone}}::text, '[^0-9]', '', 'g'), ''), NULLIF(TRIM({{params.email}}::text), ''),
                {{params.actor}}::text
         WHERE TRIM({{params.label}}::text) <> '' AND TRIM({{params.name}}::text) <> '' AND TRIM({{params.street1}}::text) <> ''
           AND TRIM({{params.city}}::text) <> '' AND TRIM({{params.state}}::text) <> '' AND TRIM({{params.zip}}::text) <> ''
