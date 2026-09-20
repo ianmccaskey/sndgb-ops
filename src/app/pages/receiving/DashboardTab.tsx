@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { RefreshCw, Truck, AlertTriangle, ScanLine, Printer } from 'lucide-react';
-import { decodeCarrierLabel, trackingCandidates, matchTracking, candidateCarrier, carrierCompatible } from '@/lib/labelScan';
+import { decodeCarrierLabel, trackingCandidates, matchTracking, candidateCarrier, carrierCompatible, refineScannedTracking } from '@/lib/labelScan';
 import { openPrinterPage, niimbotSupported } from '@/lib/niimbotPrint';
 import type { PackageLabelData } from '@/lib/niimbotPrint';
 import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday, boxConsumption } from './shared';
@@ -282,12 +282,16 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
 
   const seedCreateForm = (scanned: string) => {
     setSmAddr(''); setSmVendor('');
-    // structural carrier guess: 1Z = UPS, IMpb shape = USPS-like; FedEx
-    // and everything else stay unguessed for the operator to pick
-    const g = candidateCarrier(scanned);
-    setSmCarrier(g === 'ups' ? 'ups' : g === 'usps_like' ? 'usps' : '');
+    // the refinement lives HERE so every path into the create form gets
+    // it (the associate step's "log as new" included — a FedEx long form
+    // must never seed 34 raw digits); idempotent for already-clean values
+    const tracking = refineScannedTracking(scanned);
+    // structural carrier guess: 1Z = UPS, IMpb shape = USPS-like, bare
+    // 12/15 digits = FedEx; everything else stays unguessed
+    const g = candidateCarrier(tracking);
+    setSmCarrier(g === 'ups' ? 'ups' : g === 'usps_like' ? 'usps' : g === 'fedex_like' ? 'fedex' : '');
     setSmCarrierOther('');
-    setSmTracking(scanned);
+    setSmTracking(tracking);
     setSmLines([{ product: '', qty: '' }]);
   };
   const openScanModal = (kind: 'exact' | 'suffix' | 'none', pkg: Pkg | null, scanned: string) => {
@@ -381,7 +385,7 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
     const carrierTok = smCarrier === '__other__' ? smCarrierOther.trim().toLowerCase() : smCarrier;
     if (!smAddr) { setSmMsg('Pick the receive address this package arrived at.'); return; }
     if (smVendor && !vendors.some(v => v.shippable && String(v.id) === smVendor)) { setSmMsg('The selected vendor is not available in this campaign.'); return; }
-    if (!carrierTok) { setSmMsg('Pick the carrier (FedEx labels are not auto-guessed).'); return; }
+    if (!carrierTok) { setSmMsg('Pick the carrier — it could not be guessed from this number’s shape.'); return; }
     if (!smTracking.trim()) { setSmMsg('Tracking number required — correct the scanned value if it read wrong.'); return; }
     if (lines.length === 0) { setSmMsg('Add at least one product line — the contents feed inventory.'); return; }
     for (const l of lines) {
@@ -541,6 +545,7 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
       } else {
         // nothing logged matches → the modal's create step: log it right
         // here, keeping (and if needed correcting) the scanned tracking
+        // (seedCreateForm collapses FedEx long forms to the public number)
         openScanModal('none', null, candidates[0]);
       }
     } catch (e: unknown) {
@@ -817,6 +822,9 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
                   <p className="text-muted-foreground">{scanModal.pkg.vendor_code ? `Vendor ${scanModal.pkg.vendor_code} · ` : ''}{scanModal.pkg.address_label}</p>
                   <p className="text-muted-foreground">Contents: {(scanModal.pkg.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ') || 'none'}</p>
                   <p className="font-mono">Scanned: {scanModal.scanned}</p>
+                  {refineScannedTracking(scanModal.scanned) !== scanModal.scanned && (
+                    <p className="font-mono">Tracking part: {refineScannedTracking(scanModal.scanned)}</p>
+                  )}
                   <p className="font-mono">Logged:&nbsp; {String(scanModal.pkg.tracking_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '')}</p>
                 </div>
                 {smMsg && <p className="text-xs text-rose-400">{smMsg}</p>}

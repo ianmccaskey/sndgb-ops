@@ -141,7 +141,37 @@ export const trackingCandidates = (raw: string): string[] => {
       if (rest.length >= 8 && /^\d+$/.test(fp.slice(3, 3 + zipLen))) out.add(rest);
     }
   }
+  // FedEx: labels encode a LONG form (routing/form data) whose SUFFIX is
+  // the public tracking number printed as TRK# — 12 digits for Express,
+  // 15 for Ground's "96"-prefixed barcodes. A long all-digit payload
+  // that is not USPS-shaped contributes that suffix as a candidate —
+  // this is what lets a stored FedEx number match EXACTLY (auto-receive)
+  // instead of only as a suffix suggestion
+  if (fedexLongForm(fp)) out.add(fp.slice(-fedexSuffixLen(fp)));
   return [...out];
+};
+
+/**
+ * A long all-digit payload that isn't USPS/GS1-shaped — FedEx long form.
+ * 9[1-5] covers IMpb (92-95) plus the extinct-but-cheap-to-exclude
+ * legacy USPS 91 delivery-confirmation shape; 96 is FedEx Ground.
+ */
+const fedexLongForm = (fp: string): boolean =>
+  /^\d{20,}$/.test(fp) && !/^9[1-5]/.test(fp) && !fp.startsWith('420');
+
+/** Public-number length inside a FedEx long form: Ground 15, Express 12. */
+const fedexSuffixLen = (fp: string): number => (fp.startsWith('96') ? 15 : 12);
+
+/**
+ * The tracking number a HUMAN should see for an unmatched scan (seeds
+ * the create form): FedEx long forms collapse to their public suffix
+ * (Ian: "only the last 12 digits, which are the domestic FedEx tracking
+ * number"; Ground's is 15); everything else passes through untouched.
+ * Idempotent — a collapsed number is too short to re-match.
+ */
+export const refineScannedTracking = (raw: string): string => {
+  const fp = fingerprint(raw);
+  return fedexLongForm(fp) ? fp.slice(-fedexSuffixLen(fp)) : raw;
 };
 
 /**
@@ -165,13 +195,20 @@ export const matchTracking = (candidates: string[], stored: string): TrackingMat
  * Structural carrier inference from a candidate: UPS numbers start 1Z
  * (unmistakable); USPS-style IMpb numbers are 9[2-5] + 19-25 more
  * digits (DHL eCommerce final-mile uses the same GS1 shape, so both
- * carriers are compatible). null = shape proves nothing.
+ * carriers are compatible); a bare 12- or 15-digit number is
+ * FedEx-shaped (Express / Ground) among this app's carriers — but that
+ * is a WEAK signal (any carrier could use 12 digits), so fedex_like is
+ * a form-prefill hint only and deliberately never blocks a receive in
+ * carrierCompatible. null = shape proves nothing.
  */
-export const candidateCarrier = (c: string): 'ups' | 'usps_like' | null =>
-  c.startsWith('1Z') ? 'ups' : /^9[2-5]\d{19,25}$/.test(c) ? 'usps_like' : null;
+export const candidateCarrier = (c: string): 'ups' | 'usps_like' | 'fedex_like' | null =>
+  c.startsWith('1Z') ? 'ups'
+    : /^9[2-5]\d{19,25}$/.test(c) ? 'usps_like'
+    : /^\d{12}$/.test(c) || /^\d{15}$/.test(c) ? 'fedex_like'
+    : null;
 
 /** Is a stored package's carrier compatible with an inferred shape? */
-export const carrierCompatible = (inferred: 'ups' | 'usps_like' | null, storedCarrier: string): boolean =>
-  inferred == null ? true
+export const carrierCompatible = (inferred: 'ups' | 'usps_like' | 'fedex_like' | null, storedCarrier: string): boolean =>
+  inferred == null || inferred === 'fedex_like' ? true
     : inferred === 'ups' ? storedCarrier === 'ups'
     : storedCarrier === 'usps' || storedCarrier === 'dhl_ecommerce';
