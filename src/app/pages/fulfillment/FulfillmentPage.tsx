@@ -91,7 +91,7 @@ export function FulfillmentPage() {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterMode]);
-  const [rawAddresses] = useLoadAction(listReceiveAddresses, [], {});
+  const [rawAddresses, , , reloadAddresses] = useLoadAction(listReceiveAddresses, [], {});
   const addresses = rows<RxAddress>(rawAddresses);
   const [rawProducts] = useLoadAction(listProducts, [], {});
   // digital products (COA certificates) are never packed — they don't
@@ -180,6 +180,17 @@ export function FulfillmentPage() {
   };
 
   const [shipping, setShipping] = useState<QueueRow | null>(null);
+  // refresh the address list every time the Ship modal opens: the
+  // draft-create CAS compares the CLIENT's address snapshot against the
+  // DB row at write time, so an address edited in another tab (Ian: add
+  // the missing Shippo email, switch back, buy) would quote against the
+  // stale copy and fail at purchase with the catch-all refusal message —
+  // reload-on-open picks the edit up BEFORE the quote instead
+  const shippingOpen = shipping != null;
+  useEffect(() => {
+    if (shippingOpen) reloadAddresses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shippingOpen]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
