@@ -142,7 +142,14 @@ function listFulfillmentQueue() {
              COALESCE(s.draft_needs_recovery, false) AS draft_needs_recovery,
              COALESCE(s.push_outstanding, false) AS push_outstanding,
              COALESCE(s.tracking_numbers, '') AS tracking_numbers,
-             COALESCE(s.label_cost_total, 0) AS label_cost_total
+             COALESCE(s.label_cost_total, 0) AS label_cost_total,
+             -- carrier-said delivery progress (tracking snapshots refreshed
+             -- from Shippo on the Shipped tab) — separate truth from the
+             -- operator status machine above
+             COALESCE(s.finalized_count, 0) AS finalized_count,
+             COALESCE(s.delivered_count, 0) AS delivered_count,
+             COALESCE(s.returned_count, 0) AS returned_count,
+             s.last_delivered_at
       FROM orders o
       JOIN customers c ON c.id = o.customer_id
       LEFT JOIN v_order_reconciliation r ON r.order_id = o.id
@@ -160,6 +167,10 @@ function listFulfillmentQueue() {
                bool_or(sh.finalized_at IS NOT NULL AND sh.b44_pushed_at IS NULL
                        AND sh.status IN ('shipped','delivered','reshipped')) AS push_outstanding,
                COALESCE(sum(sh.label_cost_usd), 0) AS label_cost_total,
+               count(*) FILTER (WHERE sh.finalized_at IS NOT NULL) AS finalized_count,
+               count(*) FILTER (WHERE sh.finalized_at IS NOT NULL AND sh.tracking_status = 'DELIVERED') AS delivered_count,
+               count(*) FILTER (WHERE sh.finalized_at IS NOT NULL AND sh.tracking_status = 'RETURNED') AS returned_count,
+               max(sh.tracking_status_date) FILTER (WHERE sh.tracking_status = 'DELIVERED') AS last_delivered_at,
                max(CASE sh.status WHEN 'delivered' THEN 5 WHEN 'reshipped' THEN 4
                                   WHEN 'shipped' THEN 3 WHEN 'packed' THEN 2 ELSE 1 END) AS max_rank
         FROM shipments sh

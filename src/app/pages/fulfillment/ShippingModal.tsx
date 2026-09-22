@@ -64,6 +64,8 @@ type ShipmentRow = {
   note: string | null; from_label: string | null; label_url: string | null;
   shippo_rate_id: string | null; shippo_transaction_id: string | null;
   refund_status: string | null; refund_requested_at: string | null;
+  tracking_status: string | null; tracking_status_date: string | null; tracking_checked_at: string | null;
+  tracking_error: string | null;
   purchase_started_at: string | null; purchase_attempted_at: string | null;
   attempt_verified_no_label_at: string | null;
   finalized_at: string | null; shipped_at: string | null; b44_pushed_at: string | null;
@@ -1523,6 +1525,26 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 <div key={s.id} className={`rounded border p-2 text-xs space-y-1 ${s.refund_status === 'SUCCESS' ? 'opacity-60' : ''}`}>
                   <p className="flex flex-wrap items-center gap-1.5">
                     <StatusPill value={s.refund_status === 'SUCCESS' ? 'refunded' : s.status} />
+                    {s.refund_status !== 'SUCCESS' && s.tracking_status === 'DELIVERED' && (
+                      <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                        title={s.tracking_checked_at ? `Carrier says delivered — last checked ${fmtDateTime(s.tracking_checked_at)}` : 'Carrier says delivered'}>
+                        carrier: delivered {s.tracking_status_date ? fmtDateTime(s.tracking_status_date) : ''}
+                      </span>
+                    )}
+                    {s.refund_status !== 'SUCCESS' && s.tracking_status === 'RETURNED' && (
+                      <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                        title="The carrier returned this box to sender — it needs re-shipping or follow-up">
+                        carrier: returned
+                      </span>
+                    )}
+                    {s.refund_status !== 'SUCCESS' && s.tracking_error && (
+                      // the visible reason behind "N lookups failed" in the
+                      // Shipped tab's Check-deliveries summary
+                      <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                        title={s.tracking_error}>
+                        lookup failed
+                      </span>
+                    )}
                     <span className="font-mono">{(s.carrier || '').toUpperCase()} {s.tracking_number}</span>
                     <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}</span>
                     <span className="text-muted-foreground">{fmtUSD(s.label_cost_usd)}</span>

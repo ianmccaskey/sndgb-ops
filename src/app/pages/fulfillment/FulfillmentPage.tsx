@@ -10,10 +10,12 @@ import { pushShipmentUpstream } from '@/lib/pushShipment';
 import type { PushPackableLine } from '@/lib/pushShipment';
 import adoptUpstreamShipment from '@/actions/fulfillment/adoptUpstreamShipment';
 import listReceiveAddresses from '@/actions/receiving/listReceiveAddresses';
+import listUndeliveredShipmentTracks from '@/actions/fulfillment/listUndeliveredShipmentTracks';
+import updateShipmentTracking from '@/actions/fulfillment/updateShipmentTracking';
 import listProducts from '@/actions/products/listProducts';
 import { useApp } from '@/app/AppContext';
 import { useShippoHttp } from '@/lib/useShippoHttp';
-import { isTestKey } from '@/lib/shippo';
+import { isTestKey, trackPackage } from '@/lib/shippo';
 import { B44_DEFAULT_APP_ID, getB44Order, listB44Orders } from '@/lib/base44';
 import { rows, dbText } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
@@ -25,7 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
-import { fmtNum } from '@/lib/fmt';
+import { fmtNum, fmtDate } from '@/lib/fmt';
 import { StatusPill } from '@/components/StatusPill';
 import { Led } from '@/components/Led';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -49,6 +51,7 @@ type QueueRow = QueueOrder & {
   shipment_state: string | null; shipment_count: string;
   has_draft: boolean; draft_needs_recovery: boolean; push_outstanding: boolean;
   tracking_numbers: string; label_cost_total: string;
+  finalized_count: string; delivered_count: string; returned_count: string; last_delivered_at: string | null;
 };
 type CatalogProduct = { id: number; sku_code: string; digital: boolean; active: boolean };
 
@@ -177,6 +180,107 @@ export function FulfillmentPage() {
       pushAllInFlight.current = false;
       setPushAllBusy(false);
     }
+  };
+
+  // ---- Check deliveries (Shipped tab): poll Shippo tracking for every
+  // finalized box the carrier hasn't yet called DELIVERED/RETURNED (the
+  // delivered ones are never re-polled, so after the first full pass a
+  // run only touches what's still moving). Sequential on purpose —
+  // Shippo rate-limits bursts. Writes tracking snapshots only;
+  // shipments.status (the operator state machine) is untouched. ----
+  const [fetchUndelivered] = useMutateAction(listUndeliveredShipmentTracks);
+  const [doUpdateShipTrack] = useMutateAction(updateShipmentTracking);
+  const [deliveryBusy, setDeliveryBusy] = useState(false);
+  const [deliveryMsg, setDeliveryMsg] = useState('');
+  const [deliveryFailed, setDeliveryFailed] = useState(false);
+  const deliveryInFlight = useRef(false);
+  const deliveryCancel = useRef(false);
+  const testCaveat = testMode ? ' (test mode — statuses simulated)' : '';
+  const refreshDeliveries = async () => {
+    if (deliveryInFlight.current) return;
+    if (!shippoKey) { setDeliveryMsg('Add the Shippo API key in Settings first.'); setDeliveryFailed(true); return; }
+    deliveryInFlight.current = true;
+    deliveryCancel.current = false;
+    setDeliveryBusy(true); setDeliveryMsg(''); setDeliveryFailed(false);
+    let done = 0, total = 0, delivered = 0, failed = 0, skipped = 0;
+    try {
+      const res = await fetchUndelivered({ group_buy_id: groupBuyId }) as unknown[] | null;
+      const boxes = (Array.isArray(res) ? res : []).map(r => {
+        const x = r as Record<string, unknown>;
+        return { id: Number(x.id), carrier: String(x.carrier ?? ''), tracking: dbText(x.tracking_number) };
+      });
+      total = boxes.length;
+      if (total === 0) {
+        setDeliveryMsg('No boxes need checking — everything finalized is already delivered or returned (or nothing has shipped yet).');
+        return;
+      }
+      for (const b of boxes) {
+        if (deliveryCancel.current) {
+          setDeliveryMsg(`Stopped at box ${done} of ${total} — progress so far is saved; run it again to continue.${testCaveat}`);
+          return;
+        }
+        setDeliveryMsg(`Checking box ${done + 1} of ${total}…`);
+        const t = await trackPackage(shippoHttp, shippoKey, b.carrier, b.tracking);
+        // the CAS refuses (zero rows) when the shipment's carrier/number
+        // changed since the worklist — count it honestly, never as a
+        // delivery the reload won't show
+        const wr = await doUpdateShipTrack({
+          shipment_id: b.id, carrier: b.carrier, tracking_number: b.tracking,
+          status: t.status || '', substatus: t.substatus || '', status_date: t.statusDate || '', error: t.error || '',
+        }).catch(() => null) as unknown[] | null;
+        const stored = Array.isArray(wr) ? wr.length > 0 : !!wr;
+        if (t.error) failed += 1;
+        else if (!stored) skipped += 1;
+        else if (t.status === 'DELIVERED') delivered += 1;
+        done += 1;
+        // gentle pacing on top of the fetch backoff — Shippo rate-limits
+        // bursts, and a manufactured 429 would read as a failed lookup
+        await new Promise(r => setTimeout(r, 250));
+      }
+      setDeliveryFailed(failed > 0);
+      setDeliveryMsg(
+        `Checked ${total} box${total === 1 ? '' : 'es'} — ${delivered} newly delivered`
+        + (failed > 0 ? `, ${failed} lookup${failed === 1 ? '' : 's'} failed (open the order's Ship modal for the reason)` : '')
+        + (skipped > 0 ? `, ${skipped} skipped (changed in another session)` : '')
+        + (total >= 200 ? '. 200 boxes per run — run it again for the rest.' : '.')
+        + testCaveat);
+      reload();
+    } catch (e: unknown) {
+      setDeliveryFailed(true);
+      setDeliveryMsg(`Delivery check stopped at box ${done} of ${total || '?'} — ${e instanceof Error ? e.message : 'unexpected error'}. Progress so far is saved; run it again to continue.`);
+    } finally {
+      deliveryInFlight.current = false;
+      setDeliveryBusy(false);
+    }
+  };
+  // carrier-said delivery badge for a queue row (both layouts). The
+  // "carrier:" prefix IS the two-truths legibility on touch (the operator
+  // StatusPill beside it can honestly still say shipped — tooltips don't
+  // exist on phones). RETURNED outranks everything: it's the one carrier
+  // outcome demanding operator action, and silence would hide it forever
+  // since returned boxes leave the re-check worklist.
+  const deliveredBadge = (r: QueueRow) => {
+    const fin = Number(r.finalized_count || 0), del = Number(r.delivered_count || 0), ret = Number(r.returned_count || 0);
+    if (ret > 0) {
+      return (
+        <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+          title="The carrier returned this box to sender — it needs re-shipping or follow-up">
+          {fin > 1 ? `${ret} returned` : 'returned'}
+        </span>
+      );
+    }
+    if (del <= 0) return null;
+    return del >= fin ? (
+      <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+        title={`Carrier reports every box delivered — last on ${fmtDate(r.last_delivered_at)}. Refreshed via "Check deliveries" on the Shipped tab.${testCaveat}`}>
+        carrier: delivered {fmtDate(r.last_delivered_at)}
+      </span>
+    ) : (
+      <span className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+        title={`Some boxes are delivered, others still in transit per the carrier. Refreshed via "Check deliveries" on the Shipped tab.${testCaveat}`}>
+        carrier: {del}/{fin} delivered
+      </span>
+    );
   };
 
   const [shipping, setShipping] = useState<QueueRow | null>(null);
@@ -795,6 +899,21 @@ export function FulfillmentPage() {
             {pushAllBusy ? 'Pushing…' : `Push all (${pushAllCandidates.length})`}
           </Button>
         )}
+        {stage === 'shipped' && (
+          deliveryBusy ? (
+            <Button size="sm" variant="outline" className="h-8"
+              title="Stop after the current box — everything checked so far stays saved"
+              onClick={() => { deliveryCancel.current = true; }}>
+              Stop
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" className="h-8"
+              title="Ask Shippo for the tracking status of every finalized box the carrier hasn't called delivered yet — already-delivered boxes are never re-checked"
+              onClick={refreshDeliveries}>
+              Check deliveries
+            </Button>
+          )
+        )}
         <Button size="sm" variant="outline" className="h-8 ml-auto" disabled={!canCheck || checking}
           title={canCheck
             ? 'Pull every order\'s status from the ordering app and flag orders marked shipped there with no shipment recorded here'
@@ -807,6 +926,12 @@ export function FulfillmentPage() {
         </Button>
       </div>
       {pushAllMsg && stage === 'shipped' && <p className="text-xs text-amber-200">{pushAllMsg}</p>}
+      {/* while a run is live the progress line follows the operator to any
+          tab (the loop keeps going regardless); at rest it stays with the
+          Shipped tab it belongs to */}
+      {deliveryMsg && (stage === 'shipped' || deliveryBusy) && (
+        <p aria-live="polite" className={`text-xs ${deliveryFailed ? 'text-amber-200' : 'text-muted-foreground'}`}>{deliveryMsg}</p>
+      )}
 
       {/* per-product totals: the tab's whole workload (ready) or output
           (shipped) at a glance — scoped by the product filter, NOT by the
@@ -1044,6 +1169,7 @@ export function FulfillmentPage() {
             <div className="flex flex-wrap items-center gap-1.5">
               <StatusPill value={r.recon_status || 'awaiting'} />
               <StatusPill value={r.shipment_state || 'pending'} />
+              {deliveredBadge(r)}
               {rowBadges(r)}
             </div>
             {r.tracking_numbers && <p className="text-[11px] font-mono text-muted-foreground break-all">{r.tracking_numbers}</p>}
@@ -1108,7 +1234,10 @@ export function FulfillmentPage() {
                 </TableCell>
                 <TableCell><StatusPill value={r.recon_status || 'awaiting'} /></TableCell>
                 <TableCell>
-                  <StatusPill value={r.shipment_state || 'pending'} />
+                  <span className="flex flex-wrap items-center gap-1">
+                    <StatusPill value={r.shipment_state || 'pending'} />
+                    {deliveredBadge(r)}
+                  </span>
                   {Number(r.shipment_count) > 1 && <span className="block text-[10px] text-muted-foreground">{r.shipment_count} boxes</span>}
                 </TableCell>
                 <TableCell className="text-xs font-mono max-w-[180px] truncate" title={r.tracking_numbers || undefined}>{r.tracking_numbers || '—'}</TableCell>
