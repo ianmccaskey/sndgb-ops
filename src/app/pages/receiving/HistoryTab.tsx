@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
+import { TrackingLink } from '@/components/TrackingLink';
 import { productChipClass, boxConsumption } from './shared';
 import type { RxAddress, Pkg, TransferRow, DrainRow } from './shared';
 
@@ -89,7 +90,7 @@ export function HistoryTab({ packages, transfers, drains, addresses, loading }: 
                     <TableCell className="text-xs whitespace-nowrap">{p.address_label}</TableCell>
                     <TableCell className="text-xs">{p.vendor_code || '—'}</TableCell>
                     <TableCell className="text-xs font-mono break-all max-w-[220px]">
-                      {p.carrier.toUpperCase()} · {p.tracking_mangled ? <span className="text-amber-300">(unreadable here)</span> : p.tracking_number}
+                      {p.carrier.toUpperCase()} · {p.tracking_mangled ? <span className="text-amber-300">(unreadable here)</span> : <TrackingLink carrier={p.carrier} tracking={p.tracking_number} />}
                     </TableCell>
                     <TableCell>
                       <span className="inline-flex flex-wrap gap-1">

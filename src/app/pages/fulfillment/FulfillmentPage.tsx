@@ -37,6 +37,7 @@ import { ShippingModal } from './ShippingModal';
 import type { QueueOrder } from './ShippingModal';
 import { Truck, PauseCircle, Filter, Check, X, ChevronDown } from 'lucide-react';
 import { Field } from '@/components/Field';
+import { TrackingLink } from '@/components/TrackingLink';
 
 type QueueRow = QueueOrder & {
   hold_shipping: boolean; admin_note: string | null;
@@ -282,6 +283,22 @@ export function FulfillmentPage() {
       </span>
     );
   };
+
+  // tracking_numbers is the queue's pre-joined "carrier number, carrier
+  // number" string (string_agg with ', '); carrier tokens carry no
+  // spaces and numbers no commas, so the split is unambiguous — each
+  // pair becomes a carrier-site link
+  const trackingLinks = (joined: string) => joined.split(', ').map((pair, i) => {
+    const sp = pair.indexOf(' ');
+    const carrier = sp > 0 ? pair.slice(0, sp) : '';
+    const num = sp > 0 ? pair.slice(sp + 1) : pair;
+    return (
+      <React.Fragment key={i}>
+        {i > 0 && ', '}
+        <TrackingLink carrier={carrier} tracking={num}>{pair}</TrackingLink>
+      </React.Fragment>
+    );
+  });
 
   const [shipping, setShipping] = useState<QueueRow | null>(null);
   // refresh the address list every time the Ship modal opens: the
@@ -1172,7 +1189,7 @@ export function FulfillmentPage() {
               {deliveredBadge(r)}
               {rowBadges(r)}
             </div>
-            {r.tracking_numbers && <p className="text-[11px] font-mono text-muted-foreground break-all">{r.tracking_numbers}</p>}
+            {r.tracking_numbers && <p className="text-[11px] font-mono text-muted-foreground break-all">{trackingLinks(r.tracking_numbers)}</p>}
           </div>
         ))}
         {/* loading must never wear the empty state's clothes — "Nothing in
@@ -1240,7 +1257,10 @@ export function FulfillmentPage() {
                   </span>
                   {Number(r.shipment_count) > 1 && <span className="block text-[10px] text-muted-foreground">{r.shipment_count} boxes</span>}
                 </TableCell>
-                <TableCell className="text-xs font-mono max-w-[180px] truncate" title={r.tracking_numbers || undefined}>{r.tracking_numbers || '—'}</TableCell>
+                {/* wraps instead of truncating now that the content is
+                    interactive — a truncated second box's link would be
+                    invisible AND unclickable */}
+                <TableCell className="text-xs font-mono max-w-[180px] break-all">{r.tracking_numbers ? trackingLinks(r.tracking_numbers) : '—'}</TableCell>
                 <TableCell>
                   <span className="flex gap-1">
                     {stage === 'direct' ? (

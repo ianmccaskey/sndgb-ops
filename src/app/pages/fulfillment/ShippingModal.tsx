@@ -38,6 +38,7 @@ import { StatusPill } from '@/components/StatusPill';
 import { Led } from '@/components/Led';
 import type { RxAddress } from '@/app/pages/receiving/shared';
 import { Field } from '@/components/Field';
+import { TrackingLink } from '@/components/TrackingLink';
 
 /*
  * The shipping modal: quote + buy a Shippo label (or record a manual one)
@@ -1545,7 +1546,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         lookup failed
                       </span>
                     )}
-                    <span className="font-mono">{(s.carrier || '').toUpperCase()} {s.tracking_number}</span>
+                    <span className="font-mono">{(s.carrier || '').toUpperCase()} <TrackingLink carrier={s.carrier} tracking={s.tracking_number} /></span>
                     <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}</span>
                     <span className="text-muted-foreground">{fmtUSD(s.label_cost_usd)}</span>
                     {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}

@@ -61,6 +61,7 @@ import { StatusPill } from '@/components/StatusPill';
 import { Led } from '@/components/Led';
 import { TxHash } from '@/components/TxHash';
 import { Field } from '@/components/Field';
+import { TrackingLink } from '@/components/TrackingLink';
 
 type OrderRow = {
   id: number; order_number: string; external_id: string | null; status: string; group_buy_id: number;
@@ -1552,7 +1553,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         )}
                         {it.direct_tracking_number && (
                           <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap" title="Tracking from the transfer label bought for this line">
-                            {(it.direct_carrier || '').toUpperCase()} {it.direct_tracking_number}
+                            {(it.direct_carrier || '').toUpperCase()} <TrackingLink carrier={it.direct_carrier} tracking={it.direct_tracking_number} />
                           </span>
                         )}
                         {!it.direct_tracking_number && it.direct_vendor_tracking && (
@@ -1843,7 +1844,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     <div className="flex flex-wrap items-center gap-1.5">
                       <StatusPill value={s.refund_status === 'SUCCESS' ? 'refunded' : (s.finalized_at ? s.status : 'pending')} />
                       {!s.finalized_at && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Unfinished draft — continue or delete it from the Fulfillment page's Ship dialog">draft</span>}
-                      {s.tracking_number && <span className="font-mono">{(s.carrier || '').toUpperCase()} {s.tracking_number}</span>}
+                      {s.tracking_number && <span className="font-mono">{(s.carrier || '').toUpperCase()} <TrackingLink carrier={s.carrier} tracking={s.tracking_number} /></span>}
                       <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${Number(i.qty)}`).join(', ')}</span>
                       {Number(s.label_cost_usd) > 0 && <span className="text-muted-foreground">{fmtUSD(s.label_cost_usd)}</span>}
                       {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}

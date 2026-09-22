@@ -23,6 +23,7 @@ import { rows } from '@/lib/rows';
 import { productChipClass, boxConsumption } from './shared';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Field } from '@/components/Field';
+import { TrackingLink } from '@/components/TrackingLink';
 import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCandidate, DrainRow } from './shared';
 
 type ItemLine = { product: string; qty: string };
@@ -1292,7 +1293,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                       )}
                     </TableCell>
                     <TableCell className="text-right">{fmtUSD(t.rate_amount)}</TableCell>
-                    <TableCell className="text-xs font-mono break-all max-w-40">{t.tracking_number || '—'}</TableCell>
+                    <TableCell className="text-xs font-mono break-all max-w-40">
+                      {t.tracking_number ? <TrackingLink carrier={t.carrier} tracking={t.tracking_number} /> : '—'}
+                    </TableCell>
                     <TableCell>
                       {t.label_url && <a href={t.label_url} target="_blank" rel="noreferrer" className="text-xs underline whitespace-nowrap" title="Public unauthenticated link — don't share">Label PDF</a>}
                     </TableCell>

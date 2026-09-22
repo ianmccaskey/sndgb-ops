@@ -23,6 +23,7 @@ import { productChipClass, trackLabel, trackClass, isOutForDeliveryToday, boxCon
 import { Led } from '@/components/Led';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Field } from '@/components/Field';
+import { TrackingLink } from '@/components/TrackingLink';
 import type { RxAddress, Pkg, CatalogProduct, VendorRow, TransferRow, DrainRow } from './shared';
 
 const CARRIERS = [
@@ -1007,7 +1008,7 @@ export function DashboardTab({ addresses, packages, transfers, drains, loading, 
                     <div className="text-xs font-mono break-all text-muted-foreground" title={p.note || undefined}>
                       {p.carrier.toUpperCase()} · {p.tracking_mangled
                         ? <span className="text-amber-300">(tracking number unreadable here)</span>
-                        : p.tracking_number}
+                        : <TrackingLink carrier={p.carrier} tracking={p.tracking_number} />}
                     </div>
                     {p.tracking_mangled && (
                       <p className="text-[11px] rounded border border-amber-400/40 bg-amber-400/5 text-amber-200 p-1.5">
