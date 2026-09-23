@@ -176,14 +176,36 @@ function finalizeTransfer() {
       -- and physically receivable on arrival). Guarded against an
       -- existing ACTIVE package on the same (carrier, tracking).
       incoming AS (
-        INSERT INTO inbound_packages (receive_address_id, carrier, tracking_number, note, created_by, committed_at)
+        -- group_buy_id is NOT NULL since receiving went campaign-scoped
+        -- (migration 1789500000) — omitting it made EVERY finalize whose
+        -- destination is a receive address THROW on this insert, which
+        -- surfaced as an endless "saving failed / keep retrying" loop on a
+        -- label Shippo had already sold us. The incoming box inherits the
+        -- transfer's campaign: the source box's stamp, else its items'
+        -- campaign, else the linked direct order's.
+        INSERT INTO inbound_packages (receive_address_id, carrier, tracking_number, note, created_by, committed_at, group_buy_id)
         SELECT t2.dest_receive_address_id, LOWER(up.carrier),
                regexp_replace(UPPER(TRIM(up.tracking_number)), '\\s', '', 'g'),
-               'Incoming transfer from ' || COALESCE(t2.from_label, ''), {{params.actor}}::text, now()
+               'Incoming transfer from ' || COALESCE(t2.from_label, ''), {{params.actor}}::text, now(),
+               gb.gbid
         FROM up
         JOIN transfers t2 ON t2.id = up.id
+        CROSS JOIN LATERAL (
+          SELECT COALESCE(
+            (SELECT sp.group_buy_id FROM inbound_packages sp WHERE sp.id = t2.source_package_id),
+            (SELECT g.group_buy_id FROM transfer_items ti
+             JOIN group_buy_products g ON g.product_id = ti.product_id
+             WHERE ti.transfer_id = up.id ORDER BY g.group_buy_id LIMIT 1),
+            (SELECT o.group_buy_id FROM order_items oi
+             JOIN orders o ON o.id = oi.order_id WHERE oi.id = up.direct_order_item_id)
+          ) AS gbid
+        ) gb
         WHERE t2.dest_receive_address_id IS NOT NULL
           AND COALESCE(up.tracking_number, '') <> ''
+          -- fail-soft like the other guards: no derivable campaign means no
+          -- materialized box, never a thrown finalize (the label itself
+          -- still records)
+          AND gb.gbid IS NOT NULL
           AND EXISTS (SELECT 1 FROM receive_addresses ra WHERE ra.id = t2.dest_receive_address_id AND ra.active)
           AND NOT EXISTS (
             SELECT 1 FROM inbound_packages x
