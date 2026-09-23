@@ -53,6 +53,8 @@ type QueueRow = QueueOrder & {
   has_draft: boolean; draft_needs_recovery: boolean; push_outstanding: boolean;
   tracking_numbers: string; label_cost_total: string;
   finalized_count: string; delivered_count: string; returned_count: string; last_delivered_at: string | null;
+  attention_count: string; attention_substatus: string | null;
+  out_for_delivery_count: string; moving_count: string; next_eta: string | null;
 };
 type CatalogProduct = { id: number; sku_code: string; digital: boolean; active: boolean };
 
@@ -227,7 +229,7 @@ export function FulfillmentPage() {
         // delivery the reload won't show
         const wr = await doUpdateShipTrack({
           shipment_id: b.id, carrier: b.carrier, tracking_number: b.tracking,
-          status: t.status || '', substatus: t.substatus || '', status_date: t.statusDate || '', error: t.error || '',
+          status: t.status || '', substatus: t.substatus || '', status_date: t.statusDate || '', eta: t.eta || '', error: t.error || '',
         }).catch(() => null) as unknown[] | null;
         const stored = Array.isArray(wr) ? wr.length > 0 : !!wr;
         if (t.error) failed += 1;
@@ -262,6 +264,10 @@ export function FulfillmentPage() {
   // since returned boxes leave the re-check worklist.
   const deliveredBadge = (r: QueueRow) => {
     const fin = Number(r.finalized_count || 0), del = Number(r.delivered_count || 0), ret = Number(r.returned_count || 0);
+    const attn = Number(r.attention_count || 0), ofd = Number(r.out_for_delivery_count || 0);
+    const refreshedNote = `Refreshed via "Check deliveries" on the Shipped tab.${testCaveat}`;
+    // priority ladder — one badge, the most actionable state wins:
+    // returned > needs-attention > out-for-delivery > delivered > moving
     if (ret > 0) {
       return (
         <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
@@ -270,18 +276,56 @@ export function FulfillmentPage() {
         </span>
       );
     }
-    if (del <= 0) return null;
-    return del >= fin ? (
-      <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
-        title={`Carrier reports every box delivered — last on ${fmtDate(r.last_delivered_at)}. Refreshed via "Check deliveries" on the Shipped tab.${testCaveat}`}>
-        carrier: delivered {fmtDate(r.last_delivered_at)}
-      </span>
-    ) : (
-      <span className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
-        title={`Some boxes are delivered, others still in transit per the carrier. Refreshed via "Check deliveries" on the Shipped tab.${testCaveat}`}>
-        carrier: {del}/{fin} delivered
-      </span>
-    );
+    if (attn > 0) {
+      const label = (r.attention_substatus || 'needs attention').replace(/_/g, ' ');
+      return (
+        <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+          title={`The carrier flagged ${attn === 1 ? 'a box' : `${attn} boxes`}: ${label} — the customer may be about to ask about this. ${refreshedNote}`}>
+          carrier: {label}
+        </span>
+      );
+    }
+    if (ofd > 0) {
+      return (
+        <span className="rounded bg-cyan-400/15 text-cyan-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+          title={`On the truck as of the last check${del > 0 ? ` (${del}/${fin} already delivered)` : ''}. ${refreshedNote}`}>
+          carrier: out for delivery
+        </span>
+      );
+    }
+    if (del > 0 && del >= fin) {
+      return (
+        <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+          title={`Carrier reports every box delivered — last on ${fmtDate(r.last_delivered_at)}. ${refreshedNote}`}>
+          carrier: delivered {fmtDate(r.last_delivered_at)}
+        </span>
+      );
+    }
+    // an ETA is a PREDICTION: once the date passes it must say so, or old
+    // data reads as wrong data ("eta Sep 20" shown on Sep 23)
+    const etaPassed = r.next_eta != null && new Date(r.next_eta) < new Date(new Date().toDateString());
+    const eta = r.next_eta ? ` · eta ${etaPassed ? 'passed ' : ''}${fmtDate(r.next_eta)}` : '';
+    if (del > 0) {
+      return (
+        <span className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+          title={`Some boxes are delivered, the rest still moving per the carrier. ${refreshedNote}`}>
+          carrier: {del}/{fin} delivered{eta}
+        </span>
+      );
+    }
+    // nothing delivered yet — movement shows only when a poll has actually
+    // seen the box (tracking_status is poll-written only, so never-checked
+    // shipments stay honestly badge-less; a TRANSIT box with no carrier
+    // ETA still counts as moving)
+    if (Number(r.moving_count || 0) > 0 || r.next_eta) {
+      return (
+        <span className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+          title={`In transit per the carrier. ${refreshedNote}`}>
+          carrier: in transit{eta}
+        </span>
+      );
+    }
+    return null;
   };
 
   // tracking_numbers is the queue's pre-joined "carrier number, carrier

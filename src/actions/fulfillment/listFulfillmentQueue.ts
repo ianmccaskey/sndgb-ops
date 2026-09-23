@@ -149,6 +149,11 @@ function listFulfillmentQueue() {
              COALESCE(s.finalized_count, 0) AS finalized_count,
              COALESCE(s.delivered_count, 0) AS delivered_count,
              COALESCE(s.returned_count, 0) AS returned_count,
+             COALESCE(s.attention_count, 0) AS attention_count,
+             s.attention_substatus,
+             COALESCE(s.out_for_delivery_count, 0) AS out_for_delivery_count,
+             COALESCE(s.moving_count, 0) AS moving_count,
+             s.next_eta,
              s.last_delivered_at
       FROM orders o
       JOIN customers c ON c.id = o.customer_id
@@ -171,6 +176,27 @@ function listFulfillmentQueue() {
                count(*) FILTER (WHERE sh.finalized_at IS NOT NULL AND sh.tracking_status = 'DELIVERED') AS delivered_count,
                count(*) FILTER (WHERE sh.finalized_at IS NOT NULL AND sh.tracking_status = 'RETURNED') AS returned_count,
                max(sh.tracking_status_date) FILTER (WHERE sh.tracking_status = 'DELIVERED') AS last_delivered_at,
+               -- the in-between story: attention states a customer is about
+               -- to message about; out-for-delivery today; and the earliest
+               -- carrier ETA among boxes still moving
+               count(*) FILTER (WHERE sh.finalized_at IS NOT NULL
+                                AND (sh.tracking_status = 'FAILURE'
+                                     OR sh.tracking_substatus IN ('delivery_attempted', 'address_issue', 'package_damaged',
+                                                                  'return_to_sender', 'package_lost', 'package_undeliverable', 'package_held'))) AS attention_count,
+               max(sh.tracking_substatus) FILTER (WHERE sh.finalized_at IS NOT NULL
+                                AND (sh.tracking_status = 'FAILURE'
+                                     OR sh.tracking_substatus IN ('delivery_attempted', 'address_issue', 'package_damaged',
+                                                                  'return_to_sender', 'package_lost', 'package_undeliverable', 'package_held'))) AS attention_substatus,
+               count(*) FILTER (WHERE sh.finalized_at IS NOT NULL
+                                AND sh.tracking_substatus = 'out_for_delivery'
+                                AND COALESCE(sh.tracking_status, '') NOT IN ('DELIVERED', 'RETURNED')) AS out_for_delivery_count,
+               -- a polled box with TRANSIT but no carrier ETA must still
+               -- badge as moving (tracking_status is poll-written only, so
+               -- gating on it keeps never-polled rows honestly blank)
+               count(*) FILTER (WHERE sh.finalized_at IS NOT NULL
+                                AND sh.tracking_status IN ('PRE_TRANSIT', 'TRANSIT')) AS moving_count,
+               min(sh.eta) FILTER (WHERE sh.finalized_at IS NOT NULL
+                                AND COALESCE(sh.tracking_status, '') NOT IN ('DELIVERED', 'RETURNED')) AS next_eta,
                max(CASE sh.status WHEN 'delivered' THEN 5 WHEN 'reshipped' THEN 4
                                   WHEN 'shipped' THEN 3 WHEN 'packed' THEN 2 ELSE 1 END) AS max_rank
         FROM shipments sh

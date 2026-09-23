@@ -17,6 +17,7 @@ function updateShipmentTracking() {
       SET tracking_status = CASE WHEN {{params.error}}::text <> '' THEN tracking_status ELSE NULLIF({{params.status}}::text, '') END,
           tracking_substatus = CASE WHEN {{params.error}}::text <> '' THEN tracking_substatus ELSE NULLIF({{params.substatus}}::text, '') END,
           tracking_status_date = CASE WHEN {{params.error}}::text <> '' THEN tracking_status_date ELSE NULLIF({{params.status_date}}::text, '')::timestamptz END,
+          eta = CASE WHEN {{params.error}}::text <> '' THEN eta ELSE NULLIF({{params.eta}}::text, '')::timestamptz END,
           tracking_error = NULLIF({{params.error}}::text, ''),
           tracking_checked_at = now()
       WHERE id = {{params.shipment_id}}::bigint

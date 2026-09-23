@@ -27,7 +27,13 @@ import type { ShippoHttp } from '@/lib/useShippoHttp';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
 import type { PushPackableLine } from '@/lib/pushShipment';
 import type { B44Config } from '@/lib/base44';
-import { fmtUSD, fmtNum, fmtDateTime } from '@/lib/fmt';
+import { fmtUSD, fmtNum, fmtDateTime, fmtDate } from '@/lib/fmt';
+
+// Shippo substatuses that mean "the customer is about to message you" —
+// keep in lockstep with listFulfillmentQueue's attention filters (the SQL
+// side of the same classification)
+const ATTENTION_SUBSTATUSES = ['delivery_attempted', 'address_issue', 'package_damaged',
+  'return_to_sender', 'package_lost', 'package_undeliverable', 'package_held'];
 import { rows, dbText } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -65,8 +71,9 @@ type ShipmentRow = {
   note: string | null; from_label: string | null; label_url: string | null;
   shippo_rate_id: string | null; shippo_transaction_id: string | null;
   refund_status: string | null; refund_requested_at: string | null;
-  tracking_status: string | null; tracking_status_date: string | null; tracking_checked_at: string | null;
-  tracking_error: string | null;
+  tracking_status: string | null; tracking_substatus: string | null;
+  tracking_status_date: string | null; tracking_checked_at: string | null;
+  tracking_error: string | null; eta: string | null;
   purchase_started_at: string | null; purchase_attempted_at: string | null;
   attempt_verified_no_label_at: string | null;
   finalized_at: string | null; shipped_at: string | null; b44_pushed_at: string | null;
@@ -1537,6 +1544,29 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         title="The carrier returned this box to sender — it needs re-shipping or follow-up">
                         carrier: returned
                       </span>
+                    )}
+                    {s.refund_status !== 'SUCCESS'
+                      && !['DELIVERED', 'RETURNED'].includes(s.tracking_status || '')
+                      && (s.tracking_status === 'FAILURE' || ATTENTION_SUBSTATUSES.includes(s.tracking_substatus || '')) && (
+                      <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                        title="The carrier flagged this box — the customer may be about to ask about it">
+                        carrier: {(s.tracking_substatus || 'needs attention').replace(/_/g, ' ')}
+                      </span>
+                    )}
+                    {s.refund_status !== 'SUCCESS'
+                      && ['PRE_TRANSIT', 'TRANSIT'].includes(s.tracking_status || '')
+                      && !ATTENTION_SUBSTATUSES.includes(s.tracking_substatus || '') && (
+                      s.tracking_substatus === 'out_for_delivery' ? (
+                        <span className="rounded bg-cyan-400/15 text-cyan-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          title={s.tracking_checked_at ? `On the truck as of the last check (${fmtDateTime(s.tracking_checked_at)})` : 'On the truck as of the last check'}>
+                          carrier: out for delivery
+                        </span>
+                      ) : (
+                        <span className="rounded bg-sky-400/10 text-sky-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          title={s.tracking_checked_at ? `Per the carrier — last checked ${fmtDateTime(s.tracking_checked_at)}` : 'Per the carrier'}>
+                          carrier: in transit{s.eta ? ` · eta ${new Date(s.eta) < new Date(new Date().toDateString()) ? 'passed ' : ''}${fmtDate(s.eta)}` : ''}
+                        </span>
+                      )
                     )}
                     {s.refund_status !== 'SUCCESS' && s.tracking_error && (
                       // the visible reason behind "N lookups failed" in the
