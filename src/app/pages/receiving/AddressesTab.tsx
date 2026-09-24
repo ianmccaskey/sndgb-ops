@@ -6,6 +6,8 @@ import setDefaultShipFrom from '@/actions/receiving/setDefaultShipFrom';
 import setTransferOrigin from '@/actions/receiving/setTransferOrigin';
 import setDestinationActive from '@/actions/receiving/setDestinationActive';
 import saveDestination from '@/actions/receiving/saveDestination';
+import saveSetting from '@/actions/settings/saveSetting';
+import { myShipFromKey, myShipFromId } from '@/lib/userDefaults';
 import { Field } from '@/components/Field';
 import { useApp } from '@/app/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -67,10 +69,13 @@ function AddressForm({ title, hint, onSave, msg }: {
   );
 }
 
-function AddressList({ title, items, onToggle, onMakeDefault, onSetOrigin }: {
+function AddressList({ title, items, onToggle, onMakeDefault, onSetOrigin, myDefaultId, onMakeMyDefault, myDefaultBusy }: {
   title: string; items: RxAddress[]; onToggle?: (a: RxAddress) => void;
   onMakeDefault?: (a: RxAddress) => void;
   onSetOrigin?: (a: RxAddress, originId: string) => void;
+  myDefaultId?: string;
+  onMakeMyDefault?: (a: RxAddress) => void;
+  myDefaultBusy?: boolean;
 }) {
   return (
     <Card>
@@ -81,7 +86,10 @@ function AddressList({ title, items, onToggle, onMakeDefault, onSetOrigin }: {
             <div className="min-w-0 text-sm">
               <div className="font-medium">
                 {a.label}
-                {a.is_default_ship_from && <span className="ml-1.5 rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The Ship dialog preselects this address">default ship-from</span>}
+                {a.is_default_ship_from && <span className="ml-1.5 rounded bg-violet-400/10 text-violet-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The Ship dialog preselects this address only for an admin with no personal default of their own">fallback ship-from</span>}
+                {myDefaultId && String(a.id) === myDefaultId && (a.active
+                  ? <span className="ml-1.5 rounded bg-cyan-400/10 text-cyan-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="YOUR ship-from default — the Ship dialog preselects this address when you are signed in (each admin has their own)">my default</span>
+                  : <span className="ml-1.5 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="This is still YOUR ship-from default but it is archived — the Ship dialog falls back to the fallback address; set a new default or restore this one">my default (inactive)</span>)}
                 {!a.active && <span className="ml-1 text-xs font-normal text-muted-foreground">(archived)</span>}
               </div>
               <div className="text-xs text-muted-foreground">
@@ -109,10 +117,17 @@ function AddressList({ title, items, onToggle, onMakeDefault, onSetOrigin }: {
               )}
             </div>
             <span className="flex gap-1 shrink-0">
+              {onMakeMyDefault && a.active && String(a.id) !== myDefaultId && (
+                <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={myDefaultBusy}
+                  title="Make the Ship dialog preselect this address for YOU — the other admin keeps their own default"
+                  onClick={() => onMakeMyDefault(a)}>
+                  Set as my default
+                </Button>
+              )}
               {onMakeDefault && a.active && !a.is_default_ship_from && (
-                <Button size="sm" variant="ghost" className="h-7 text-xs" title="Make the Ship dialog preselect this address"
+                <Button size="sm" variant="ghost" className="h-7 text-xs" title="Make this the FALLBACK — the Ship dialog preselects it only for an admin without a personal default"
                   onClick={() => onMakeDefault(a)}>
-                  Make default
+                  Make fallback
                 </Button>
               )}
               {onToggle && (
@@ -133,7 +148,9 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
   addresses: RxAddress[]; destinations: RxAddress[];
   reloadAddresses: () => void; reloadDestinations: () => void;
 }) {
-  const { userName } = useApp();
+  const { userName, settings, reloadSettings } = useApp();
+  const [doSaveSetting] = useMutateAction(saveSetting);
+  const myDefaultId = myShipFromId(settings, userName);
   const [doSaveAddress] = useMutateAction(saveReceiveAddress);
   const [doSetActive] = useMutateAction(setAddressActive);
   const [doSetDefault] = useMutateAction(setDefaultShipFrom);
@@ -141,6 +158,7 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
   const [doSetDestActive] = useMutateAction(setDestinationActive);
   const [doSaveDest] = useMutateAction(saveDestination);
   const [addrMsg, setAddrMsg] = useState('');
+  const [myDefaultBusy, setMyDefaultBusy] = useState(false);
   const [destMsg, setDestMsg] = useState('');
 
   const save = (kind: 'address' | 'dest') => async (d: Draft): Promise<boolean> => {
@@ -174,9 +192,34 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
         <AddressForm title="Add / update receive address" msg={addrMsg} onSave={save('address')}
           hint="Saving an existing label updates that address. Receive addresses are the ship-from on transfer labels — every field Shippo needs is required." />
         <AddressList title="Receive addresses" items={addresses}
+          myDefaultId={myDefaultId}
+          myDefaultBusy={myDefaultBusy}
+          onMakeMyDefault={async a => {
+            setAddrMsg('');
+            setMyDefaultBusy(true);
+            try {
+              await doSaveSetting({ key: myShipFromKey(userName), value: String(a.id) });
+              reloadSettings();
+            } finally {
+              setMyDefaultBusy(false);
+            }
+          }}
           onToggle={async a => {
-            if (a.active && a.is_default_ship_from
-              && !window.confirm(`"${a.label}" is the default ship-from — archiving releases the default, and the Ship dialog will stop preselecting an address until you pick a new one. Archive anyway?`)) return;
+            if (a.active) {
+              // an archive can dangle BOTH tiers: the global fallback and
+              // any admin's personal default (the Ship dialog would then
+              // silently preselect someone else's return address — the
+              // exact incident this system exists to prevent)
+              const owners = Object.entries(settings)
+                .filter(([k, v]) => k.startsWith('default_ship_from:') && v === String(a.id))
+                .map(([k]) => k.split(':')[1]);
+              const warnings = [
+                a.is_default_ship_from ? 'it is the FALLBACK ship-from (admins without a personal default lose their preselection)' : '',
+                owners.length > 0 ? `it is the personal ship-from default for ${owners.join(' and ')} — their Ship dialog will silently fall back to the fallback address` : '',
+              ].filter(Boolean);
+              if (warnings.length > 0
+                && !window.confirm(`Archiving "${a.label}": ${warnings.join('; ')}. Archive anyway?`)) return;
+            }
             await doSetActive({ id: a.id, active: !a.active, actor: userName });
             reloadAddresses();
           }}

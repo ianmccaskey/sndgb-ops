@@ -24,6 +24,7 @@ import { productChipClass, boxConsumption } from './shared';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Field } from '@/components/Field';
 import { TrackingLink } from '@/components/TrackingLink';
+import { myShipFromId } from '@/lib/userDefaults';
 import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCandidate, DrainRow } from './shared';
 
 type ItemLine = { product: string; qty: string };
@@ -53,7 +54,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   onPartOutSeedConsumed?: () => void;
 }) {
   void reloadDestinations;
-  const { userName, groupBuyId } = useApp();
+  const { userName, groupBuyId, settings } = useApp();
   // outstanding vendor-direct order lines (money-gated server-side) —
   // offered as destinations when the transfer carries their product
   const [rawDirectShips, , , reloadDirectShips] = useLoadAction(listDirectShipCandidates, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
@@ -123,6 +124,20 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const [custom, setCustom] = useState<CustomDest>(EMPTY_DEST);
   const [dims, setDims] = useState({ length: '', width: '', height: '', weight: '' });
   const [fLines, setFLines] = useState<ItemLine[]>([{ product: '', qty: '' }]);
+  // preselect the signed-in admin's own ship-from default (mapped to its
+  // transfer ORIGIN when the default is a group member). FUNCTIONAL update
+  // — on a part-out mount this effect and the seed effect run in the same
+  // commit, and a closure check of fFrom would see '' and clobber the
+  // seed; the functional guard yields to whatever was queued first.
+  React.useEffect(() => {
+    if (addresses.length === 0) return;
+    const mineRaw = addresses.find(a => a.active && String(a.id) === myShipFromId(settings, userName));
+    if (!mineRaw) return;
+    const originId = mineRaw.transfer_origin_id == null ? mineRaw.id : mineRaw.transfer_origin_id;
+    const origin = addresses.find(a => a.active && a.transfer_origin_id == null && Number(a.id) === Number(originId));
+    if (origin) setFFrom(cur => (cur === '' ? String(origin.id) : cur));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addresses, settings]);
   const [fNote, setFNote] = useState('');
   const [fMsg, setFMsg] = useState('');
   const [ratesLoading, setRatesLoading] = useState(false);

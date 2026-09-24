@@ -45,6 +45,7 @@ import { Led } from '@/components/Led';
 import type { RxAddress } from '@/app/pages/receiving/shared';
 import { Field } from '@/components/Field';
 import { TrackingLink } from '@/components/TrackingLink';
+import { myShipFromId } from '@/lib/userDefaults';
 
 /*
  * The shipping modal: quote + buy a Shippo label (or record a manual one)
@@ -568,13 +569,18 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // it or moved the default mid-session) — falling back to the current
   // default or to unselected. A changed selection changes quoteSig, so
   // stale rates invalidate with it.
+  // ship-from preselection: the signed-in admin's OWN default first (per
+  // Ian — a label he packs must not silently carry Paige's return address
+  // because the global default was hers), then the global default flag
+  const myDefault = myShipFromId(settings, userName);
   useEffect(() => {
     if (addresses.length === 0) return;
     const cur = addresses.find(a => String(a.id) === shipFrom);
     if (cur?.active) return;
-    const d = addresses.find(a => a.active && a.is_default_ship_from);
+    const mine = addresses.find(a => a.active && String(a.id) === myDefault);
+    const d = mine || addresses.find(a => a.active && a.is_default_ship_from);
     setShipFrom(d ? String(d.id) : '');
-  }, [addresses, shipFrom]);
+  }, [addresses, shipFrom, myDefault]);
   const fromRow = addresses.find(a => String(a.id) === shipFrom) || null;
   // row boundary: the transport re-types digit-only text (ZIPs, phones)
   // as JS numbers — Shippo 400s a numeric zip ("Invalid input type for
@@ -1282,7 +1288,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 <Select value={shipFrom} onValueChange={setShipFrom}>
                   <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Ship from…" /></SelectTrigger>
                   <SelectContent>
-                    {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}{a.is_default_ship_from ? ' (default)' : ''}</SelectItem>)}
+                    {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}{String(a.id) === myDefault ? ' (my default)' : a.is_default_ship_from ? ' (fallback)' : ''}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
