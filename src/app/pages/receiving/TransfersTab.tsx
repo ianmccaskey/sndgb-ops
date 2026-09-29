@@ -493,6 +493,26 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         return;
       }
       if (!draftId) { setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a line exceeds on-hand (retry to re-confirm), the ship-from address was edited or archived since rates were fetched, or the direct-ship order line is no longer eligible (fulfilled meanwhile, order held, payment pending, its SHIP-TO ADDRESS was corrected since the quote, or this transfer carries LESS than the ordered quantity of their product) — reload and re-quote.'); return; }
+      // 1.5 Shippo ORDER for the notification emails — DIRECT-SHIP only
+      // (a customer is on the other end; internal transfers stay
+      // unlinked). Created BEFORE the heartbeat so its network latency
+      // can never widen the lease-to-purchase window (Codex review: an
+      // /orders/ stall past the lease age lets another session re-claim
+      // and double-buy). Stored on the draft so retries reuse it.
+      // FAIL-SOFT: an unlinked label still ships. Test mode never
+      // links — a test order would earn a permanent "shippo emails"
+      // chip for a label that will never email anyone.
+      let shippoOrderId: string | null = null;
+      if (isDirect && directCandidate && String(to.email || '').trim() && !testMode) {
+        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
+          to, orderNumber: directCandidate.order_number,
+          lineItems: lines.map(l => {
+            const sku = products.find(p => String(p.id) === l.product)?.sku_code || '';
+            return { title: sku || 'item', sku, quantity: Math.max(1, Math.round(Number(l.qty)) || 1) };
+          }),
+        });
+        if (shippoOrderId) await doSetShippoOrder({ transfer_id: draftId, shippo_order_id: shippoOrderId }).catch(() => null);
+      }
       // 2. HEARTBEAT immediately before money moves: if this tab slept
       //    long enough for the birth lease to age out and another session
       //    deleted or re-claimed the draft, the own-token refresh returns
@@ -506,23 +526,6 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
           return;
         }
         claimedAt = hbRow.claimed_at || claimedAt;
-      }
-      // 2.5 Shippo ORDER for the notification emails — DIRECT-SHIP only
-      // (a customer is on the other end; internal transfers stay
-      // unlinked). Created free before money moves, stored on the draft
-      // so retries reuse it. FAIL-SOFT: an unlinked label still ships.
-      // Test mode never links — a test order would earn a permanent
-      // "shippo emails" chip for a label that will never email anyone.
-      let shippoOrderId: string | null = null;
-      if (isDirect && directCandidate && String(to.email || '').trim() && !testMode) {
-        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
-          to, orderNumber: directCandidate.order_number,
-          lineItems: lines.map(l => {
-            const sku = products.find(p => String(p.id) === l.product)?.sku_code || '';
-            return { title: sku || 'item', sku, quantity: Math.max(1, Math.round(Number(l.qty)) || 1) };
-          }),
-        });
-        if (shippoOrderId) await doSetShippoOrder({ transfer_id: draftId, shippo_order_id: shippoOrderId }).catch(() => null);
       }
       // 3. buy the label (single attempt inside)
       let result: PurchaseResult;
@@ -800,21 +803,14 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         await doClearAttempt({ transfer_id: t.id, observed_attempted_at: t.purchase_attempted_at, actor: userName }).catch(() => null);
       }
       if (!window.confirm('No existing label found at Shippo for this rate. Buy it now? Note: rates expire after ~7 days.')) return;
-      // claim the EXCLUSIVE purchase lease BEFORE money moves: zero rows
-      // means the draft is gone (deleted/finalized elsewhere) OR another
-      // fresh purchase attempt holds the lease — either way, abort with no
-      // money spent; two admins racing this end with ONE Shippo POST
-      const claim = await doClaimPurchase({ transfer_id: t.id, prior_claimed_at: '', actor: userName }) as unknown[] | null;
-      const claimRow = Array.isArray(claim) && claim.length > 0 ? claim[0] as { id: string; claimed_at?: string } : null;
-      if (!claimRow) {
-        setDraftMsg(m => ({ ...m, [t.id]: 'Not purchased — this draft no longer exists, another purchase attempt (this draft\'s original try, or the other admin) is still fresh (<10 min), this draft\'s direct-ship reservation expired and was taken over by a NEWER draft (buying here would duplicate that shipment — delete this draft instead), or the customer\'s ship-to address changed since this draft was quoted (delete and re-quote). An explicit Shippo refusal frees a fresh lease immediately; otherwise wait a few minutes and use "Check Shippo & retry" again.' }));
-        reloadTransfers();
-        return;
-      }
       // reuse the Shippo order created before the first attempt (kept
       // on the draft); a direct-ship draft without one gets a fresh
       // order now — mirroring the fulfillment retry — so the retried
-      // label still emails the customer. Test mode never links.
+      // label still emails the customer. BEFORE the claim, so
+      // order-create latency never widens the lease-to-purchase window
+      // (a stray order for a claim that then refuses is free clutter,
+      // and the stored id gets reused next attempt). Test mode never
+      // links.
       const destEmailT = String(t.destination?.email || '').trim();
       let shippoOrderId: string | null = t.shippo_order_id || null;
       if (!shippoOrderId && t.direct_order_item_id != null && !t.direct_link_reclaimed_at && destEmailT && !testMode) {
@@ -828,11 +824,23 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             email: destEmailT,
           },
           // the customer-facing number lives only in the label snapshot
-          // here ("Direct: Name #NUMBER"); a miss just omits the field
-          orderNumber: (t.destination_label || '').match(/#(\S+)/)?.[1] || '',
+          // here ("Direct: Name #NUMBER" — anchored to the FINAL # so a
+          // '#' inside the name can't win); a miss just omits the field
+          orderNumber: (t.destination_label || '').match(/#(\S+)$/)?.[1] || '',
           lineItems: (t.items || []).map(i => ({ title: i.sku_code, sku: i.sku_code, quantity: Math.max(1, Math.round(Number(i.qty)) || 1) })),
         });
         if (shippoOrderId) await doSetShippoOrder({ transfer_id: t.id, shippo_order_id: shippoOrderId }).catch(() => null);
+      }
+      // claim the EXCLUSIVE purchase lease BEFORE money moves: zero rows
+      // means the draft is gone (deleted/finalized elsewhere) OR another
+      // fresh purchase attempt holds the lease — either way, abort with no
+      // money spent; two admins racing this end with ONE Shippo POST
+      const claim = await doClaimPurchase({ transfer_id: t.id, prior_claimed_at: '', actor: userName }) as unknown[] | null;
+      const claimRow = Array.isArray(claim) && claim.length > 0 ? claim[0] as { id: string; claimed_at?: string } : null;
+      if (!claimRow) {
+        setDraftMsg(m => ({ ...m, [t.id]: 'Not purchased — this draft no longer exists, another purchase attempt (this draft\'s original try, or the other admin) is still fresh (<10 min), this draft\'s direct-ship reservation expired and was taken over by a NEWER draft (buying here would duplicate that shipment — delete this draft instead), or the customer\'s ship-to address changed since this draft was quoted (delete and re-quote). An explicit Shippo refusal frees a fresh lease immediately; otherwise wait a few minutes and use "Check Shippo & retry" again.' }));
+        reloadTransfers();
+        return;
       }
       let result: PurchaseResult;
       try {

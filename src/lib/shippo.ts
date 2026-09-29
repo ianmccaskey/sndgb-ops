@@ -361,8 +361,10 @@ type Txn = { object_id?: string; status?: string; tracking_number?: string; labe
  * goes SHIPPED does). FAIL-SOFT BY CONTRACT: returns the order's
  * object_id or null, never throws — an unlinked label still ships the
  * box, and the customer merely gets no Shippo email (the UI says so).
- * Creating an order is free and side-effect-light, so it retries twice;
- * a stray duplicate order at Shippo is dashboard clutter, not money.
+ * SINGLE attempt, no retry: the POST is not idempotent, and a lost
+ * response would mean a retry creates a DUPLICATE open order at Shippo
+ * — a manual-fulfillment trap in their dashboard. One miss just costs
+ * the email, which the purchase outcome reports.
  */
 export async function createShippoOrder(http: ShippoHttp, key: string, o: {
   to: ShippoAddress; orderNumber: string;
@@ -377,18 +379,15 @@ export async function createShippoOrder(http: ShippoHttp, key: string, o: {
     order_status: 'PAID',
     ...(o.lineItems && o.lineItems.length > 0 ? { line_items: o.lineItems } : {}),
   };
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const body = unwrap(await http.post(key.trim(), '/orders/', payload)) as { object_id?: unknown } | null;
-      if (body && typeof body === 'object' && typeof body.object_id === 'string' && body.object_id) {
-        return body.object_id;
-      }
-      return null; // unrecognized success shape — don't link against a guess
-    } catch {
-      if (attempt === 0) await new Promise(r => setTimeout(r, 800));
+  try {
+    const body = unwrap(await http.post(key.trim(), '/orders/', payload)) as { object_id?: unknown } | null;
+    if (body && typeof body === 'object' && typeof body.object_id === 'string' && body.object_id) {
+      return body.object_id;
     }
+    return null; // unrecognized success shape — don't link against a guess
+  } catch {
+    return null;
   }
-  return null;
 }
 
 /**

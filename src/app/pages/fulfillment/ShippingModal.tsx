@@ -831,23 +831,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       // money moves, so even a failed purchase leaves the evidence with
       // its draft (failures stay pending and visible, never blocking)
       await uploadPendingPhotos(draftId);
-      // 2. HEARTBEAT immediately before money moves
-      if (claimedAt) {
-        const hb = await doClaim({ shipment_id: draftId, prior_claimed_at: claimedAt, actor: userName }) as unknown[] | null;
-        const hbRow = Array.isArray(hb) && hb.length > 0 ? hb[0] as { claimed_at?: string } : null;
-        if (!hbRow) {
-          setPurchaseMsg('Not purchased — this draft was deleted or claimed by another session while this page was idle, or the order\'s address/hold/payment state changed. Nothing was charged; reload and re-quote.');
-          reloadShipments();
-          return;
-        }
-        claimedAt = hbRow.claimed_at || claimedAt;
-      }
-      // 2.5 Shippo ORDER for the notification emails: created (free)
-      // before money moves, stored on the draft so retries reuse it.
-      // FAIL-SOFT — an unlinked label still ships; the customer just
-      // gets no Shippo email and the outcome line says so. Test mode
-      // never links: a test order would earn the row a permanent
-      // "shippo emails" chip for a label that will never email anyone.
+      // 1.5 Shippo ORDER for the notification emails: created (free)
+      // BEFORE the heartbeat, so its network latency can never widen
+      // the window between lease refresh and the money POST (Codex
+      // review: an /orders/ stall past the lease age lets another
+      // session re-claim and double-buy). Stored on the draft so
+      // retries reuse it. FAIL-SOFT — an unlinked label still ships;
+      // the outcome line says so. Test mode never links: a test order
+      // would earn a permanent "shippo emails" chip for a label that
+      // will never email anyone.
       let shippoOrderId: string | null = null;
       if (shipTo.email && !testMode) {
         shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
@@ -858,6 +850,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           })),
         });
         if (shippoOrderId) await doSetShippoOrder({ shipment_id: draftId, shippo_order_id: shippoOrderId }).catch(() => null);
+      }
+      // 2. HEARTBEAT immediately before money moves
+      if (claimedAt) {
+        const hb = await doClaim({ shipment_id: draftId, prior_claimed_at: claimedAt, actor: userName }) as unknown[] | null;
+        const hbRow = Array.isArray(hb) && hb.length > 0 ? hb[0] as { claimed_at?: string } : null;
+        if (!hbRow) {
+          setPurchaseMsg('Not purchased — this draft was deleted or claimed by another session while this page was idle, or the order\'s address/hold/payment state changed. Nothing was charged; reload and re-quote.');
+          reloadShipments();
+          return;
+        }
+        claimedAt = hbRow.claimed_at || claimedAt;
       }
       // 3. buy the label (single attempt inside)
       let result: PurchaseResult;
@@ -1043,17 +1046,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         await doClearAttempt({ shipment_id: s.id, observed_attempted_at: s.purchase_attempted_at, actor: userName }).catch(() => null);
       }
       if (!window.confirm('No existing label found at Shippo for this rate. Buy it now? Note: rates expire after ~7 days.')) return;
-      const claim = await doClaim({ shipment_id: s.id, prior_claimed_at: '', actor: userName }) as unknown[] | null;
-      const claimRow = Array.isArray(claim) && claim.length > 0 ? claim[0] as { claimed_at?: string } : null;
-      if (!claimRow) {
-        setRowMsg(m => ({ ...m, [s.id]: 'Not purchased — the draft no longer exists, another purchase attempt is fresh (<10 min), or the order\'s address/hold/payment state changed since the draft. Nothing was charged.' }));
-        reloadShipments();
-        return;
-      }
       // reuse the draft's Shippo order (created before the first
       // attempt); an old draft without one gets a fresh order now so
-      // the retried label still emails the customer. Test mode never
-      // links (same rationale as the primary path).
+      // the retried label still emails the customer. BEFORE the claim,
+      // so order-create latency never widens the lease-to-purchase
+      // window (a stray order for a claim that then refuses is free
+      // clutter, and the stored id gets reused next attempt). Test
+      // mode never links (same rationale as the primary path).
       let shippoOrderId: string | null = s.shippo_order_id || null;
       if (!shippoOrderId && shipTo?.email && !testMode) {
         shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
@@ -1064,6 +1063,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           })),
         });
         if (shippoOrderId) await doSetShippoOrder({ shipment_id: s.id, shippo_order_id: shippoOrderId }).catch(() => null);
+      }
+      const claim = await doClaim({ shipment_id: s.id, prior_claimed_at: '', actor: userName }) as unknown[] | null;
+      const claimRow = Array.isArray(claim) && claim.length > 0 ? claim[0] as { claimed_at?: string } : null;
+      if (!claimRow) {
+        setRowMsg(m => ({ ...m, [s.id]: 'Not purchased — the draft no longer exists, another purchase attempt is fresh (<10 min), or the order\'s address/hold/payment state changed since the draft. Nothing was charged.' }));
+        reloadShipments();
+        return;
       }
       let result: PurchaseResult;
       try {
