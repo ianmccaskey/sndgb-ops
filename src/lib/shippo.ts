@@ -390,8 +390,8 @@ export async function createShippoOrder(http: ShippoHttp, key: string, o: {
     // unrecognized success shape — don't link against a guess, but keep
     // a slice of what came back for the operator
     let shape = '';
-    try { shape = JSON.stringify(body)?.slice(0, 140) || String(body); } catch { shape = String(body); }
-    return { id: null, error: `order created a response in an unrecognized shape: ${shape}` };
+    try { shape = JSON.stringify(body) || String(body); } catch { shape = String(body); }
+    return { id: null, error: `order created a response in an unrecognized shape: ${shape.slice(0, 140)}` };
   } catch (e: unknown) {
     // normalizeError sanitizes token-shaped substrings before anything
     // reaches the UI
