@@ -26,8 +26,6 @@ import setShipmentShippoOrder from '@/actions/fulfillment/setShipmentShippoOrder
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
-import { useShipEmailNotify } from '@/lib/useShipEmailNotify';
-import type { NotifyOutcome } from '@/lib/useShipEmailNotify';
 import type { PushPackableLine } from '@/lib/pushShipment';
 import type { B44Config } from '@/lib/base44';
 import { fmtUSD, fmtNum, fmtDateTime, fmtDate } from '@/lib/fmt';
@@ -37,6 +35,10 @@ import { fmtUSD, fmtNum, fmtDateTime, fmtDate } from '@/lib/fmt';
 // side of the same classification)
 const ATTENTION_SUBSTATUSES = ['delivery_attempted', 'address_issue', 'package_damaged',
   'return_to_sender', 'package_lost', 'package_undeliverable', 'package_held'];
+
+// an unlinked label is a box Shippo will silently never email about —
+// the note names the recovery, not just the fact
+const UNLINKED_LABEL_NOTE = 'NOTE: the label could not be linked to a Shippo order, so Shippo will NOT email tracking for this box — email the customer the tracking number yourself.';
 import { rows, dbText } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -78,7 +80,7 @@ type ShipmentRow = {
   tracking_status: string | null; tracking_substatus: string | null;
   tracking_status_date: string | null; tracking_checked_at: string | null;
   tracking_error: string | null; eta: string | null;
-  tracking_email_sent_at: string | null; tracking_email_error: string | null; dest_email: string;
+  dest_email: string;
   shippo_order_id: string | null;
   purchase_started_at: string | null; purchase_attempted_at: string | null;
   attempt_verified_no_label_at: string | null;
@@ -137,14 +139,6 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [doGetPhoto] = useMutateAction(getShipmentPhoto);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doSetShippoOrder] = useMutateAction(setShipmentShippoOrder);
-  // the app's own "shipped" email (Resend) — fires after every finalize
-  // landing; the SQL claim decides eligibility, so calls are unconditional
-  const shipEmail = useShipEmailNotify(settings, testMode);
-  const [emailSendingId, setEmailSendingId] = useState<number | null>(null);
-  // email outcomes render in their own channel: purchaseMsg/msg/rowMsg are
-  // failure-styled, and "email sent" must never read as an error
-  const [emailOutcome, setEmailOutcome] = useState<NotifyOutcome | null>(null);
-  const [rowEmailMsg, setRowEmailMsg] = useState<Record<number, NotifyOutcome>>({});
   const [rawPhotos, , , reloadPhotos] = useLoadAction(listShipmentPhotos, [order.id], { order_id: order.id });
   const photos = rows<{ id: number; shipment_id: number; thumb_data: string; created_by: string | null; created_at: string }>(rawPhotos);
   // read action invoked imperatively (getOrderTxRefs precedent): the push's
@@ -738,7 +732,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const purchase = async () => {
     if (purchaseInFlight.current) return;   // synchronous double-click guard
     purchaseInFlight.current = true;
-    setPurchasing(true); setPurchaseMsg(''); setEmailOutcome(null);
+    setPurchasing(true); setPurchaseMsg('');
     try {
       const rate = ratesResult?.rates.find(r => r.object_id === pickedRate);
       if (!rate || !shipTo || !fromRow) { setPurchaseMsg('Pick a rate first.'); return; }
@@ -899,12 +893,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       // about — say it while the operator can still act, and name the
       // action (the bare fact alone leaves them guessing)
       if (!shippoOrderId && shipTo.email && !testMode) {
-        setPurchaseMsg(prev => [prev, unlinkedLabelNote()].filter(Boolean).join(' '));
+        setPurchaseMsg(prev => [prev, UNLINKED_LABEL_NOTE].filter(Boolean).join(' '));
       }
-      // customer "shipped" email — before the upstream push so the
-      // notification isn't delayed behind it
-      const em = await shipEmail.notifyShipment(draftId);
-      if (em.note) setEmailOutcome(em);
       // a just-created draft is born at push_epoch 0; a flip that raced
       // this purchase bumps it and the stamp CAS refuses
       await runPush(draftId, 0, rate.provider, result.trackingNumber || '', shippedItems);
@@ -917,7 +907,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const recordManual = async () => {
     if (manualInFlight.current) return;
     manualInFlight.current = true;
-    setManualBusy(true); setMsg(''); setEmailOutcome(null);
+    setManualBusy(true); setMsg('');
     try {
       const carrier = mCarrier === 'other' ? mCarrierOther.trim() : mCarrier;
       if (!carrier) { setMsg('Pick or type the carrier.'); return; }
@@ -963,10 +953,6 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const shippedItems = chosen.map(c => ({ order_item_id: Number(c.line.order_item_id), qty: c.qty, sku: c.line.sku_code }));
       onShipped(chosen.map(c => ({ product_id: Number(c.line.product_id), qty: Number(c.qty) })));
       reloadPackable(); reloadShipments(); reload();
-      // manual labels are exactly the ones Shippo could never have emailed
-      // — the app's own "shipped" email covers them too
-      const em = await shipEmail.notifyShipment(recordedId);
-      if (em.note) setEmailOutcome(em);
       await runPush(recordedId, 0, carrier, mTracking.trim().toUpperCase().replace(/\s/g, ''), shippedItems);
     } finally {
       manualInFlight.current = false;
@@ -988,10 +974,6 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     const items = (s.items || []).map(i => ({ order_item_id: Number(i.order_item_id), qty: String(i.qty), sku: i.sku_code }));
     onShipped((s.items || []).map(i => ({ product_id: Number(i.product_id), qty: Number(i.qty) })));
     reloadPackable(); reloadShipments(); reload();
-    // recovery landings deserve the same customer email as the happy path
-    // — the claim CAS makes a repeat landing a silent no-op
-    const em = await shipEmail.notifyShipment(s.id);
-    if (em.note) setRowEmailMsg(m => ({ ...m, [s.id]: em }));
     await runPush(s.id, Number(s.push_epoch || 0), carrier, tracking, items);
   };
 
@@ -1084,7 +1066,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (fin.ok) {
         // the retry path is where link failures are LIKELIEST (flaky
         // networks) — it must not go quiet about an unlinked label
-        const linkNote = !shippoOrderId && shipTo?.email && !testMode ? unlinkedLabelNote() : '';
+        const linkNote = !shippoOrderId && shipTo?.email && !testMode ? UNLINKED_LABEL_NOTE : '';
         setRowMsg(m => ({ ...m, [s.id]: [finWarnings(fin) || 'Purchased and saved.', linkNote].filter(Boolean).join(' ') }));
         await shipmentLanded(s, s.carrier || '', result.trackingNumber || '');
       }
@@ -1224,40 +1206,6 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       s.items.map(i => ({ order_item_id: i.order_item_id, qty: String(i.qty), sku: i.sku_code })));
   };
 
-  // an unlinked label = no Shippo email for that box. The wording names
-  // the recovery: either the app-email fallback already covers it, or
-  // the operator emails the tracking themselves.
-  const unlinkedLabelNote = () => shipEmail.enabled
-    ? 'NOTE: the label could not be linked to a Shippo order — the app-sent shipped email (status shown here) is the only notification for this box.'
-    : 'NOTE: the label could not be linked to a Shippo order, so Shippo will NOT email tracking for this box. Email the customer the tracking number yourself, or enable the app-email fallback in Settings for future boxes.';
-
-  // operator-driven send/retry for one shipment's customer email (failed
-  // sends, and older shipments from before the feature existed)
-  const sendEmailRow = async (s: ShipmentRow) => {
-    if (emailSendingId != null) return;
-    // an UNVERIFIED row holds its claim (the send may have delivered) —
-    // releasing it is the operator's call, taken only after checking
-    // Resend's own send log
-    const unverified = !!s.tracking_email_sent_at && !!s.tracking_email_error;
-    if (unverified && !window.confirm(`Only continue if resend.com/emails shows NO send to ${s.dest_email} for this box — releasing after a real send can email the customer twice. Release and retry?`)) return;
-    setEmailSendingId(s.id);
-    try {
-      if (unverified) {
-        const released = await shipEmail.releaseShipment(s.id);
-        if (!released) {
-          setRowEmailMsg(m => ({ ...m, [s.id]: { ok: false, note: 'Not released — the row changed meanwhile (sent, released, or retried elsewhere). Reload to see its current state.' } }));
-          reloadShipments();
-          return;
-        }
-      }
-      const out = await shipEmail.notifyShipment(s.id);
-      setRowEmailMsg(m => ({ ...m, [s.id]: out.note ? out : { ok: true, note: 'Nothing sent — it was already sent, or this shipment is not eligible (refund activity, or no customer email on the label).' } }));
-      reloadShipments();
-    } finally {
-      setEmailSendingId(null);
-    }
-  };
-
   const drafts = shipments.filter(s => !s.finalized_at);
   const finals = shipments.filter(s => !!s.finalized_at);
 
@@ -1281,20 +1229,19 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 up front, because silence here is what hid the Shippo
                 email gap for 389 labels. Every state says something: the
                 gap repeats the moment one combination stays quiet.
-                Primary channel is Shippo's own order-linked emails
-                (labels bought here get a Shippo Order + auto-SHIPPED);
-                the app-sent email is an optional supplement. */}
+                Labels bought here get a Shippo Order + auto-SHIPPED,
+                which is what arms Shippo's notification emails. */}
             {!order.contact_email?.trim() ? (
               <p className="text-xs text-amber-300 mt-1">No customer email on this order — Shippo can't send tracking emails for its labels.</p>
             ) : testMode ? (
               <p className="text-xs text-amber-300 mt-1">Shippo test mode — test labels never send tracking emails.</p>
             ) : !shippoKey ? (
               <p className="text-xs text-muted-foreground mt-1">
-                Manual records only (no Shippo token in Settings) — {shipEmail.enabled ? `the app's own shipped email goes to ${order.contact_email.trim()} when a record is saved` : 'no tracking email of any kind goes out'}.
+                Manual records only (no Shippo token in Settings) — no tracking email of any kind goes out.
               </p>
             ) : (
               <p className="text-xs text-muted-foreground mt-1">
-                Shippo emails tracking to {order.contact_email.trim()} when a label is bought here — manual labels don't trigger it{shipEmail.enabled ? ", but the app's own shipped email covers them" : ' and nothing else emails them (app-email fallback is off)'}.
+                Shippo emails tracking to {order.contact_email.trim()} when a label is bought here — manual labels don't trigger it, and nothing else emails them.
               </p>
             )}
             {order.customer_note && <p className="text-xs text-amber-300 mt-1">“{order.customer_note}”</p>}
@@ -1616,9 +1563,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           )}
 
           {msg && <p className="text-sm text-rose-400">{msg}</p>}
-          {purchaseMsg && <p className="text-sm text-rose-400">{purchaseMsg}</p>}
-          {emailOutcome?.note && <p className={`text-sm ${emailOutcome.ok ? 'text-emerald-300' : 'text-rose-400'}`}>{emailOutcome.note}</p>}
-          {success && (
+          {purchaseMsg && <p className="text-sm text-rose-400">{purchaseMsg}</p>}          {success && (
             <div className="rounded border border-emerald-400/30 bg-emerald-400/10 p-2 text-sm space-y-1">
               <p className="font-medium text-emerald-300">Label purchased — tracking <span className="font-mono">{success.trackingNumber}</span></p>
               {success.labelUrl && <p className="text-xs"><a className="underline" href={success.labelUrl} target="_blank" rel="noreferrer">Open label (PDF)</a> <span className="text-muted-foreground">— public unauthenticated link, don't share</span></p>}
@@ -1728,24 +1673,6 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         shippo emails
                       </span>
                     )}
-                    {s.refund_status !== 'SUCCESS' && s.tracking_email_sent_at && !s.tracking_email_error && (
-                      <span className="rounded bg-emerald-400/10 text-emerald-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase whitespace-nowrap"
-                        title={`Shipped email sent ${fmtDateTime(s.tracking_email_sent_at)} to ${s.dest_email || 'the label email'}`}>
-                        emailed
-                      </span>
-                    )}
-                    {s.refund_status !== 'SUCCESS' && s.tracking_email_sent_at && s.tracking_email_error && (
-                      <span className="rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase whitespace-nowrap"
-                        title={`${s.tracking_email_error} — held to prevent a double-send. Check resend.com/emails for ${s.dest_email || 'the label email'}; use "Release & retry" only if no send is listed there.`}>
-                        email unverified
-                      </span>
-                    )}
-                    {s.refund_status !== 'SUCCESS' && !s.tracking_email_sent_at && s.tracking_email_error && (
-                      <span className="rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase whitespace-nowrap"
-                        title={`${s.tracking_email_error}${s.refund_status ? ' — retry is unavailable while there is refund activity on this label.' : ''}`}>
-                        email failed
-                      </span>
-                    )}
                   </p>
                   {photos.filter(ph => Number(ph.shipment_id) === s.id).length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
@@ -1772,21 +1699,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {s.shippo_transaction_id && s.refund_status && s.refund_status !== 'SUCCESS' && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => recheckRefund(s)}>Re-check refund</Button>
                     )}
-                    {shipEmail.enabled && !testMode && !s.refund_status
-                      && (!s.tracking_email_sent_at || s.tracking_email_error)
-                      && !!s.dest_email && !!s.tracking_number && (
-                      <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={emailSendingId != null}
-                        title={`Email the customer this box's tracking (${s.dest_email})`}
-                        onClick={() => sendEmailRow(s)}>
-                        {emailSendingId === s.id ? 'Sending…'
-                          : s.tracking_email_sent_at ? 'Release & retry'
-                          : s.tracking_email_error ? 'Retry email' : 'Send email'}
-                      </Button>
-                    )}
                   </div>
-                  {rowMsg[s.id] && <p className="text-amber-200">{rowMsg[s.id]}</p>}
-                  {rowEmailMsg[s.id]?.note && <p className={rowEmailMsg[s.id].ok ? 'text-emerald-300' : 'text-amber-200'}>{rowEmailMsg[s.id].note}</p>}
-                </div>
+                  {rowMsg[s.id] && <p className="text-amber-200">{rowMsg[s.id]}</p>}                </div>
               ))}
             </div>
           )}

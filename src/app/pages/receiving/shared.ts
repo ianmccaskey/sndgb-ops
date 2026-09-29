@@ -60,9 +60,6 @@ export type TransferRow = {
   // but can never buy a new one — and any label it recovers is ORPHANED
   // from the order line)
   direct_order_item_id: number | null; direct_link_reclaimed_at: string | null;
-  // the app's own "shipped" email (direct-ship transfers only): sent_at
-  // doubles as the send claim, error is the operator-facing retry reason
-  tracking_email_sent_at: string | null; tracking_email_error: string | null;
   // Shippo Order linked to this label (direct-ship): Shippo's own
   // tracking emails fire for linked labels and never for unlinked ones
   shippo_order_id: string | null;

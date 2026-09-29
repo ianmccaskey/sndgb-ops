@@ -1,4 +1,4 @@
-# Shipment-notification emails
+# Shipment-notification emails (Shippo order-linked)
 
 ## Why this exists
 
@@ -10,119 +10,47 @@ a Shippo Order that gets fulfilled. Labels purchased through the raw API
 create only a shipment + transaction, no Order; our Shippo Orders tab
 was empty, so there was never anything for their notifier to act on.
 
-## Primary channel: Shippo order-linked emails (free, zero setup)
+## How the app closes the gap
 
-Since 2026-09-29 the app closes the gap the way Shippo prescribes: right
-before each label purchase it creates a Shippo **Order** carrying the
-customer's email, order number, and box contents, stores its id on the
-draft (`shipments/transfers.shippo_order_id`), and passes it in the
-transaction request. Shippo auto-flips the order to SHIPPED on purchase,
-which arms their tracking notification emails (the dashboard toggle
-under Settings → Tracking → Emails, already ON with "Send immediately").
-
-Properties of this channel:
+Right before each label purchase the app creates a Shippo **Order**
+carrying the customer's email, order number, and box contents, stores
+its id on the draft (`shipments/transfers.shippo_order_id`), and passes
+it in the transaction request. Shippo auto-flips the order to SHIPPED on
+purchase, which arms their tracking notification emails (dashboard
+Settings → Tracking → Emails, already ON with "Send immediately").
 
 - **Covers**: every Shippo label bought in the app — order shipments and
   direct-ship transfers (internal admin transfers are deliberately
   unlinked; no customer, no email). Retry/recovery purchases reuse the
   draft's stored order id, so a retried label never creates a duplicate
-  Shippo order.
+  Shippo order. Order creation runs BEFORE the purchase-lease heartbeat
+  so its latency can never widen the money window.
 - **Does NOT cover**: manually recorded labels (bought outside the app),
-  labels recovered from a transaction that was originally purchased
-  unlinked, the 389 pre-feature labels, and Shippo test-mode labels.
+  labels recovered from a transaction originally purchased unlinked, the
+  389 pre-feature labels, and Shippo test-mode labels (never linked by
+  design — simulated tracking must not email anyone).
 - **Fail-soft**: if the order create fails, the label still purchases —
   unlinked — and the purchase outcome says "Shippo will NOT email
-  tracking for this box" so the operator can act. Linked boxes show an
-  emerald `shippo email` chip on the shipment/transfer row
-  (positive-only; absence is the norm for pre-feature rows).
+  tracking for this box — email the customer the tracking number
+  yourself." Linked boxes show an emerald `shippo emails` chip on the
+  shipment/transfer row (positive-only; absence is the norm for
+  pre-feature rows). The Ship modal and the direct-ship panel state up
+  front, per box, whether an email will go out and why not when it
+  won't.
 - **Content/branding**: Shippo's template from Shippo's sender. Custom
   branding is a paid Shippo plan feature.
+- **Verifying a send**: Shippo dashboard → Orders shows the order as
+  SHIPPED with its transaction; their Emails settings page governs which
+  events send.
 
-## Optional fallback: app-sent emails via Resend
+## History: the removed Resend fallback
 
-The machinery below predates the Orders fix and remains available,
-OFF by default. Turn it on only if you also want the app's own branded
-"shipped" email — its unique value is covering exactly what Shippo
-can't: manual label records and operator-driven resends for old boxes.
-Everything in the sections that follow describes THIS optional channel.
-
-## One-time setup (operator, optional Resend fallback only)
-
-1. **Resend account** — resend.com, free tier is far above our volume.
-2. **Verify the sending domain** — resend.com/domains → Add domain →
-   add the DNS records they show (SPF + DKIM) where the domain's DNS is
-   hosted. Until this verifies, Resend only delivers to the account
-   owner's own address (their 403 says exactly that) — fine for testing,
-   useless for customers.
-3. **API key** — resend.com → API Keys → Create ("Sending access" is
-   enough). Starts with `re_`.
-4. **UI Bakery datasource** — the workspace needs an HTTP datasource
-   named exactly `Resend API` with base URL `https://api.resend.com`
-   and nothing else configured. Full contract:
-   [src/actions/resend/DATASOURCE.md](../src/actions/resend/DATASOURCE.md).
-5. **Settings → Shipment emails** — paste the key, set the from-address
-   (must use the verified domain, e.g. `SND GB <ship@yourdomain.com>`),
-   optional reply-to, Save, then **Send test email** to yourself and
-   check inbox + spam.
-
-The feature is OFF until both the key and from-address are saved —
-everything below silently no-ops while it's off.
-
-## When an email goes out
-
-| Event | Email? |
-|---|---|
-| Shippo label purchased in the Ship modal | yes, right after the finalize saves |
-| Manual label recorded in the Ship modal | yes (these were never coverable by any carrier integration) |
-| Draft recovery lands (retry save / recover by txn / check-Shippo-retry / delete-turned-recovery) | yes, same as the happy path |
-| Direct-ship transfer finalized (label bought or manual) | yes — to the customer on the order line |
-| Internal admin-to-admin transfer | never (no customer) |
-| Shippo TEST-mode label | never (the tracking is simulated) |
-| Order/destination has no email | never (the Ship modal says so up front) |
-| Any refund activity on the label | never auto-sent (a human is unwinding it) |
-| Reclaimed direct-ship draft's recovered label | never auto-sent (orphaned label — human decides) |
-| Historical shipments from before this feature | never automatically — each finalized row shows a **Send email** button instead |
-
-## Double-send safety
-
-`tracking_email_sent_at` on the shipment/transfer row is a CAS claim:
-only the session that flips it from NULL may send, so recovery paths
-re-running a finalize can't email twice. On top of that, every send
-carries a Resend `Idempotency-Key` derived from the row id (Resend
-stores keys 24h and replays the first result).
-
-Failures split by what is actually known:
-
-- **Definitive refusal** (Resend's structured 4xx — bad key, unverified
-  domain, invalid payload): nothing was sent, so the claim is released
-  (CAS on the exact claim token), the error lands on the row (amber
-  "email failed" chip), and the row offers **Retry email**.
-- **Ambiguous failure** (timeout, 5xx, unrecognized response): the email
-  *may have been delivered*, so the claim is **held** and the row shows
-  an amber **"email unverified"** chip. Nothing retries automatically —
-  a blind retry past the 24h idempotency window could email the
-  customer twice. The row offers **Release & retry**, to be used only
-  after resend.com/emails shows no send for that recipient (the confirm
-  dialog says exactly that).
-
-Accepted edge: if the browser dies between claim and send, the row reads
-"emailed" with no email — rare, and fails in the safe direction (never a
-duplicate to a customer).
-
-## Where the state shows
-
-- **Ship modal, ship-to card**: says up front whether a shipped email
-  will go out for this box, and why not when it won't.
-- **Ship modal, finalized rows**: `emailed` chip (hover = when + to
-  whom), `email failed` chip + Retry, or a `Send email` button for
-  never-sent rows (including pre-feature history — operator's choice,
-  nothing is backfilled automatically).
-- **Receiving → Transfers log**: same chips/button on direct-ship rows.
-
-## Deliverability notes
-
-- SPF/DKIM come from the domain verification records. If customers
-  report spam-foldering, add the DMARC record Resend suggests on the
-  domain page.
-- resend.com/emails lists every send with its delivery status — the
-  first place to look when a customer says "no email".
+An app-sent email channel (Resend, claim-then-send CAS on
+`tracking_email_sent_at`, unverified-hold discipline) was built first
+and then REMOVED on 2026-09-29 — Ian chose Shippo-only, and the unused
+`resendPost` action broke UI Bakery's sync by requiring a datasource
+that didn't exist. If app-sent emails are ever wanted again (e.g. for
+manual labels), the full twice-reviewed implementation lives in git
+history: commits 183284d and d459e5b (removal commit for the file list).
+The `tracking_email_sent_at` / `tracking_email_error` columns from
+migration 1789800000 remain in the database, unused and harmless.
