@@ -21,16 +21,24 @@ import { BarcodeFormat, BinaryBitmap, DecodeHintType, HybridBinarizer, MultiForm
  * canonically (UPPER, trimmed).
  */
 
-const drawScaledRotated = (bitmap: ImageBitmap, maxEdge: number, rotateDeg: 0 | 90): HTMLCanvasElement => {
+const drawScaledRotated = (bitmap: ImageBitmap, maxEdge: number, rotateDeg: number): HTMLCanvasElement => {
   const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
   const w = Math.max(1, Math.round(bitmap.width * scale));
   const h = Math.max(1, Math.round(bitmap.height * scale));
+  const rad = (rotateDeg * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
   const canvas = document.createElement('canvas');
-  if (rotateDeg === 90) { canvas.width = h; canvas.height = w; } else { canvas.width = w; canvas.height = h; }
+  canvas.width = Math.max(1, Math.round(w * cos + h * sin));
+  canvas.height = Math.max(1, Math.round(w * sin + h * cos));
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Image processing is unavailable in this browser.');
-  if (rotateDeg === 90) { ctx.translate(h, 0); ctx.rotate(Math.PI / 2); }
-  ctx.drawImage(bitmap, 0, 0, w, h);
+  // the rotated image's corner triangles must be WHITE, not transparent-
+  // rendered-black — a dark frame reads as bar edges and poisons the scan
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate(rad);
+  ctx.drawImage(bitmap, -w / 2, -h / 2, w, h);
   return canvas;
 };
 
@@ -50,7 +58,7 @@ export async function decodeCarrierLabel(file: File): Promise<string[]> {
   // rasterizes; engines without the options fall back to a plain load),
   // canvases cap at <=2000px, and the search loop YIELDS between passes
   // so the page keeps painting instead of freezing in one long task
-  const DEADLINE_MS = 4000;
+  const DEADLINE_MS = 6500;
   const started = performance.now();
   const overBudget = () => performance.now() - started > DEADLINE_MS;
   const yieldToUi = () => new Promise<void>(r => setTimeout(r, 0));
@@ -80,10 +88,30 @@ export async function decodeCarrierLabel(file: File): Promise<string[]> {
     hints.set(DecodeHintType.TRY_HARDER, true);
     const reader = new MultiFormatReader();
     const texts = new Set<string>();
-    for (const maxEdge of [2000, 1200]) {
-      for (const rot of [0, 90] as const) {
+    // base variants first (the fast path for a clean square-on photo),
+    // then RESCUE variants: small-angle rotations for wrinkled or
+    // angle-photographed labels (vendor boxes from overseas arrive with
+    // rippled labels that defeat a straight horizontal scanline — zxing's
+    // TRY_HARDER absorbs only ~3°). Rescue passes run ONLY while nothing
+    // has decoded — a photo that already yielded barcodes doesn't spend
+    // its remaining budget re-finding them at a tilt.
+    const variants: { maxEdge: number; deg: number; rescue: boolean }[] = [
+      { maxEdge: 2000, deg: 0, rescue: false },
+      { maxEdge: 2000, deg: 90, rescue: false },
+      { maxEdge: 1200, deg: 0, rescue: false },
+      { maxEdge: 1200, deg: 90, rescue: false },
+      { maxEdge: 2000, deg: 8, rescue: true },
+      { maxEdge: 2000, deg: -8, rescue: true },
+      { maxEdge: 2000, deg: 16, rescue: true },
+      { maxEdge: 2000, deg: -16, rescue: true },
+      { maxEdge: 2000, deg: 98, rescue: true },
+      { maxEdge: 2000, deg: 82, rescue: true },
+    ];
+    {
+      for (const v of variants) {
         if (overBudget()) return [...texts];
-        const canvas = drawScaledRotated(bitmap, maxEdge, rot);
+        if (v.rescue && texts.size > 0) continue;
+        const canvas = drawScaledRotated(bitmap, v.maxEdge, v.deg);
         // mask-and-rescan: after each decode, blank the found barcode and
         // scan again so a routing/service barcode cannot shadow the
         // tracking one. 1D result points are SPARSE ENDPOINTS (not a
