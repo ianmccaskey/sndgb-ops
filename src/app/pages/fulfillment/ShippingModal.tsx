@@ -74,7 +74,7 @@ type PackableLine = {
 type ShipmentRow = {
   id: number; order_id: number; status: string; carrier: string | null; servicelevel: string | null;
   tracking_number: string | null; label_cost_usd: string; rate_amount: string | null; box: string | null;
-  note: string | null; from_label: string | null; label_url: string | null;
+  note: string | null; from_label: string | null; parcel: Record<string, string> | null; label_url: string | null;
   shippo_rate_id: string | null; shippo_transaction_id: string | null;
   refund_status: string | null; refund_requested_at: string | null;
   tracking_status: string | null; tracking_substatus: string | null;
@@ -838,7 +838,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       let orderLinkError: string | null = null;
       if (shipTo.email && !testMode) {
         const orderRes = await createShippoOrder(shippoHttp, shippoKey, {
-          to: shipTo, orderNumber: order.order_number,
+          to: shipTo, orderNumber: order.order_number, weightLb: weight.trim(),
           lineItems: chosen.map(c => ({
             title: c.line.product_name || c.line.sku_code, sku: c.line.sku_code,
             quantity: Math.max(1, Math.round(Number(c.qty)) || 1),
@@ -1043,6 +1043,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (!shippoOrderId && shipTo?.email && !testMode) {
         const orderRes = await createShippoOrder(shippoHttp, shippoKey, {
           to: shipTo, orderNumber: order.order_number,
+          // the draft's own parcel snapshot carries the quoted weight
+          weightLb: String(s.parcel?.weight ?? ''),
           lineItems: (s.items || []).map(i => ({
             title: i.sku_code, sku: i.sku_code,
             quantity: Math.max(1, Math.round(Number(i.qty)) || 1),

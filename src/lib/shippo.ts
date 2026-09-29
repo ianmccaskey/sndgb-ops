@@ -371,8 +371,16 @@ type Txn = { object_id?: string; status?: string; tracking_number?: string; labe
 export type ShippoOrderResult = { id: string | null; error: string | null };
 export async function createShippoOrder(http: ShippoHttp, key: string, o: {
   to: ShippoAddress; orderNumber: string;
+  weightLb: string;          // the parcel weight — see below
   lineItems?: { title: string; sku: string; quantity: number }[];
 }): Promise<ShippoOrderResult> {
+  // weight + weight_unit are REQUIRED by /orders/ (verified live
+  // 2026-09-29: 400 '{"weight":["This field is required."],
+  // "weight_unit":[...]}' — the docs example carries them without
+  // marking them required). Callers pass the box's parcel weight; a
+  // missing/garbled one falls back to 1 lb, because a plausible weight
+  // on a notification-only object beats refusing the customer's email.
+  const w = String(o.weightLb ?? '').trim();
   const payload = {
     to_address: o.to,
     // blank order numbers are omitted, not sent as '' — a recovery path
@@ -380,6 +388,8 @@ export async function createShippoOrder(http: ShippoHttp, key: string, o: {
     ...(o.orderNumber ? { order_number: o.orderNumber } : {}),
     placed_at: new Date().toISOString(),
     order_status: 'PAID',
+    weight: /^\d+(?:\.\d+)?$/.test(w) && Number(w) > 0 ? w : '1',
+    weight_unit: 'lb',
     ...(o.lineItems && o.lineItems.length > 0 ? { line_items: o.lineItems } : {}),
   };
   try {

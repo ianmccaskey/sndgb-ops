@@ -500,7 +500,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       let orderLinkError: string | null = null;
       if (isDirect && directCandidate && String(to.email || '').trim() && !testMode) {
         const orderRes = await createShippoOrder(shippoHttp, shippoKey, {
-          to, orderNumber: directCandidate.order_number,
+          to, orderNumber: directCandidate.order_number, weightLb: dims.weight.trim(),
           lineItems: lines.map(l => {
             const sku = products.find(p => String(p.id) === l.product)?.sku_code || '';
             return { title: sku || 'item', sku, quantity: Math.max(1, Math.round(Number(l.qty)) || 1) };
@@ -771,6 +771,8 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
           // here ("Direct: Name #NUMBER" — anchored to the FINAL # so a
           // '#' inside the name can't win); a miss just omits the field
           orderNumber: (t.destination_label || '').match(/#(\S+)$/)?.[1] || '',
+          // the draft's own parcel snapshot carries the quoted weight
+          weightLb: String(t.parcel?.weight ?? ''),
           lineItems: (t.items || []).map(i => ({ title: i.sku_code, sku: i.sku_code, quantity: Math.max(1, Math.round(Number(i.qty)) || 1) })),
         });
         shippoOrderId = orderRes.id; orderLinkError = orderRes.error;
