@@ -1,10 +1,13 @@
 import { action } from '@uibakery/data';
 
 /**
- * Releases a failed shipment-email claim: clears the sent_at claim and
- * records the operator-readable error so the shipment row can offer a
- * retry. Guarded on the claim still being held — a stale failure from a
- * lost session must not clear a later successful send.
+ * Releases a shipment-email claim after a DEFINITIVE Resend refusal
+ * (nothing was sent): clears the sent_at claim and records the
+ * operator-readable error so the row offers a retry. CAS on the exact
+ * claim token the claim action returned — a duplicated or replayed
+ * release can never clear a LATER claim's successful send. Callers
+ * check RETURNING: zero rows = the release did not land, and the row
+ * may wrongly read "emailed" until reloaded and released by hand.
  */
 function recordShipmentEmailError() {
   return action('recordShipmentEmailError', 'SQL', {
@@ -14,7 +17,7 @@ function recordShipmentEmailError() {
          SET tracking_email_sent_at = NULL,
              tracking_email_error = {{params.error}}::text
        WHERE id = {{params.shipment_id}}::bigint
-         AND tracking_email_sent_at IS NOT NULL
+         AND tracking_email_sent_at = {{params.claimed_at}}::timestamptz
       RETURNING id
     `,
   });

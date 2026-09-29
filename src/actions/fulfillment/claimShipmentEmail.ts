@@ -24,9 +24,13 @@ function claimShipmentEmail() {
            -- any refund activity (even a failed request) means a human is
            -- unwinding this label — never auto-email "shipped" on it
            AND s.refund_status IS NULL
-        RETURNING s.id, s.order_id, s.carrier, s.servicelevel, s.tracking_number, s.destination
+        RETURNING s.id, s.order_id, s.carrier, s.servicelevel, s.tracking_number, s.destination, s.tracking_email_sent_at
       )
       SELECT c.id, c.carrier, COALESCE(c.servicelevel, '') AS servicelevel,
+             -- exact-text claim token for the release/unverified CAS
+             -- (jsonb round trip preserves microseconds; driver Date
+             -- coercion may not — purchase_attempted_at precedent)
+             (jsonb_build_object('a', c.tracking_email_sent_at)->>'a') AS claimed_at,
              -- '#' guard: digit-only tracking survives the JS transport
              '#' || c.tracking_number AS tracking_number,
              btrim(c.destination->>'email') AS email,

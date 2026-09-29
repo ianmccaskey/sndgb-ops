@@ -58,9 +58,21 @@ everything below silently no-ops while it's off.
 only the session that flips it from NULL may send, so recovery paths
 re-running a finalize can't email twice. On top of that, every send
 carries a Resend `Idempotency-Key` derived from the row id (Resend
-stores keys 24h and replays the first result). A failed send releases
-the claim, records the error on the row (amber "email failed" chip,
-hover for the reason), and the row offers **Retry email**.
+stores keys 24h and replays the first result).
+
+Failures split by what is actually known:
+
+- **Definitive refusal** (Resend's structured 4xx — bad key, unverified
+  domain, invalid payload): nothing was sent, so the claim is released
+  (CAS on the exact claim token), the error lands on the row (amber
+  "email failed" chip), and the row offers **Retry email**.
+- **Ambiguous failure** (timeout, 5xx, unrecognized response): the email
+  *may have been delivered*, so the claim is **held** and the row shows
+  an amber **"email unverified"** chip. Nothing retries automatically —
+  a blind retry past the 24h idempotency window could email the
+  customer twice. The row offers **Release & retry**, to be used only
+  after resend.com/emails shows no send for that recipient (the confirm
+  dialog says exactly that).
 
 Accepted edge: if the browser dies between claim and send, the row reads
 "emailed" with no email — rare, and fails in the safe direction (never a

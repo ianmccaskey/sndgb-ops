@@ -1175,8 +1175,21 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // sends, and older shipments from before the feature existed)
   const sendEmailRow = async (s: ShipmentRow) => {
     if (emailSendingId != null) return;
+    // an UNVERIFIED row holds its claim (the send may have delivered) —
+    // releasing it is the operator's call, taken only after checking
+    // Resend's own send log
+    const unverified = !!s.tracking_email_sent_at && !!s.tracking_email_error;
+    if (unverified && !window.confirm(`Only continue if resend.com/emails shows NO send to ${s.dest_email} for this box — releasing after a real send can email the customer twice. Release and retry?`)) return;
     setEmailSendingId(s.id);
     try {
+      if (unverified) {
+        const released = await shipEmail.releaseShipment(s.id);
+        if (!released) {
+          setRowEmailMsg(m => ({ ...m, [s.id]: { ok: false, note: 'Not released — the row changed meanwhile (sent, released, or retried elsewhere). Reload to see its current state.' } }));
+          reloadShipments();
+          return;
+        }
+      }
       const out = await shipEmail.notifyShipment(s.id);
       setRowEmailMsg(m => ({ ...m, [s.id]: out.note ? out : { ok: true, note: 'Nothing sent — it was already sent, or this shipment is not eligible (refund activity, or no customer email on the label).' } }));
       reloadShipments();
@@ -1639,10 +1652,16 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}
                     {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase">refund {s.refund_status}</span>}
                     {!s.b44_pushed_at && s.refund_status !== 'SUCCESS' && <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase" title="The ordering app has not been told about this shipment yet"><Led className="w-1.5 h-1.5" />not pushed</span>}
-                    {s.refund_status !== 'SUCCESS' && s.tracking_email_sent_at && (
+                    {s.refund_status !== 'SUCCESS' && s.tracking_email_sent_at && !s.tracking_email_error && (
                       <span className="rounded bg-emerald-400/10 text-emerald-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase whitespace-nowrap"
                         title={`Shipped email sent ${fmtDateTime(s.tracking_email_sent_at)} to ${s.dest_email || 'the label email'}`}>
                         emailed
+                      </span>
+                    )}
+                    {s.refund_status !== 'SUCCESS' && s.tracking_email_sent_at && s.tracking_email_error && (
+                      <span className="rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase whitespace-nowrap"
+                        title={`${s.tracking_email_error} — held to prevent a double-send. Check resend.com/emails for ${s.dest_email || 'the label email'}; use "Release & retry" only if no send is listed there.`}>
+                        email unverified
                       </span>
                     )}
                     {s.refund_status !== 'SUCCESS' && !s.tracking_email_sent_at && s.tracking_email_error && (
@@ -1677,12 +1696,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {s.shippo_transaction_id && s.refund_status && s.refund_status !== 'SUCCESS' && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => recheckRefund(s)}>Re-check refund</Button>
                     )}
-                    {shipEmail.enabled && !testMode && !s.tracking_email_sent_at && !s.refund_status
+                    {shipEmail.enabled && !testMode && !s.refund_status
+                      && (!s.tracking_email_sent_at || s.tracking_email_error)
                       && !!s.dest_email && !!s.tracking_number && (
                       <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={emailSendingId != null}
                         title={`Email the customer this box's tracking (${s.dest_email})`}
                         onClick={() => sendEmailRow(s)}>
-                        {emailSendingId === s.id ? 'Sending…' : s.tracking_email_error ? 'Retry email' : 'Send email'}
+                        {emailSendingId === s.id ? 'Sending…'
+                          : s.tracking_email_sent_at ? 'Release & retry'
+                          : s.tracking_email_error ? 'Retry email' : 'Send email'}
                       </Button>
                     )}
                   </div>

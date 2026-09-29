@@ -109,6 +109,19 @@ function sanitize(text: string): string {
 }
 
 /**
+ * Thrown ONLY on a DEFINITIVE Resend refusal: the platform's STRUCTURED
+ * error envelope ("status=NNN") carries a 4xx, meaning Resend received
+ * the request and rejected it — nothing was sent, so the caller may
+ * safely release the DB claim and offer a retry. Every other failure
+ * (5xx, network, no parsable status, unrecognized success shape) is
+ * AMBIGUOUS — the email may have been delivered — and the claim must be
+ * HELD, or a retry after Resend's 24h idempotency window could email
+ * the customer twice. Loose digit matches in unstructured text are
+ * hints only, never this classification (Shippo-client precedent).
+ */
+export class EmailRefusedError extends Error {}
+
+/**
  * The shared POST /emails wire: one attempt, positive schema gate
  * (Resend's send result is an object with a string id), key-sanitized
  * operator-readable errors with hints for the two classic failures.
@@ -125,7 +138,14 @@ async function postEmail(http: ResendHttp, cfg: ShipEmailConfig, message: Record
     const hint = /\b403\b/.test(raw)
       ? ' — a 403 usually means the from-domain is not verified at resend.com/domains (unverified accounts can only send to their own address), or the from address does not match the verified domain'
       : /\b401\b/.test(raw) ? ' — a 401 means Resend rejected the API key; re-check it in Settings' : '';
-    throw new Error(`Resend did not accept the email (${raw.slice(0, 200)})${hint}.`);
+    // structured status only (the platform throws "…status=NNN,
+    // response=…") — a digit that merely appears in prose must not
+    // upgrade an ambiguous failure to a claim-releasing refusal
+    const structured = raw.match(/status=(\d{3})\b/);
+    if (structured && structured[1].startsWith('4')) {
+      throw new EmailRefusedError(`Resend refused the email (${raw.slice(0, 200)})${hint}.`);
+    }
+    throw new Error(`The email did not confirm (${raw.slice(0, 200)})${hint} — it may or may not have been sent.`);
   }
   // unwrap an axios-style envelope if the platform adds one (Resend
   // bodies never carry data+status/headers together themselves)
@@ -133,6 +153,8 @@ async function postEmail(http: ResendHttp, cfg: ShipEmailConfig, message: Record
       && ('status' in (body as Record<string, unknown>) || 'headers' in (body as Record<string, unknown>))) {
     body = (body as Record<string, unknown>).data;
   }
+  // AMBIGUOUS by design (plain Error, never EmailRefusedError): an
+  // unrecognized success envelope may still have delivered
   if (!body || typeof body !== 'object' || typeof (body as Record<string, unknown>).id !== 'string') {
     throw new Error('Resend\'s response came back in an unrecognized shape — the email may or may not have been sent; check resend.com/emails before retrying.');
   }

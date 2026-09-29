@@ -25,9 +25,11 @@ function claimTransferEmail() {
            AND COALESCE(btrim(t.destination->>'email'), '') <> ''
            AND COALESCE(btrim(t.tracking_number), '') <> ''
            AND t.refund_status IS NULL
-        RETURNING t.id, t.carrier, t.servicelevel, t.tracking_number, t.destination, t.direct_order_item_id
+        RETURNING t.id, t.carrier, t.servicelevel, t.tracking_number, t.destination, t.direct_order_item_id, t.tracking_email_sent_at
       )
       SELECT c.id, c.carrier, COALESCE(c.servicelevel, '') AS servicelevel,
+             -- exact-text claim token for the release/unverified CAS
+             (jsonb_build_object('a', c.tracking_email_sent_at)->>'a') AS claimed_at,
              -- '#' guard: digit-only tracking survives the JS transport
              '#' || c.tracking_number AS tracking_number,
              btrim(c.destination->>'email') AS email,

@@ -683,8 +683,21 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // direct-ship transfers from before the feature existed)
   const sendEmailRowT = async (t: TransferRow) => {
     if (emailSendingId != null) return;
+    // an UNVERIFIED row holds its claim (the send may have delivered) —
+    // releasing it is the operator's call, after checking Resend's log
+    const unverified = !!t.tracking_email_sent_at && !!t.tracking_email_error;
+    const destEmail = String(t.destination?.email || '').trim();
+    if (unverified && !window.confirm(`Only continue if resend.com/emails shows NO send to ${destEmail} for this box — releasing after a real send can email the customer twice. Release and retry?`)) return;
     setEmailSendingId(t.id);
     try {
+      if (unverified) {
+        const released = await shipEmail.releaseTransfer(t.id);
+        if (!released) {
+          setRowEmailMsg(m => ({ ...m, [t.id]: { ok: false, note: 'Not released — the row changed meanwhile (sent, released, or retried elsewhere). Reload to see its current state.' } }));
+          reloadTransfers();
+          return;
+        }
+      }
       const out = await shipEmail.notifyTransfer(t.id);
       setRowEmailMsg(m => ({ ...m, [t.id]: out.note ? out : { ok: true, note: 'Nothing sent — it was already sent, or this transfer is not eligible (not direct-ship, refund activity, or no customer email on the label).' } }));
       reloadTransfers();
@@ -1386,10 +1399,16 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                             ? <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => refund(t)}>Request refund</Button>
                             : <span className="text-[11px] text-muted-foreground whitespace-nowrap" title="Add the Shippo API token in Settings to request refunds">refund needs key</span>}
                       {/* customer email state — direct-ship transfers only */}
-                      {t.direct_order_item_id != null && t.tracking_email_sent_at && (
+                      {t.direct_order_item_id != null && t.tracking_email_sent_at && !t.tracking_email_error && (
                         <span className="ml-1 rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                           title={`Shipped email sent ${fmtDateTime(t.tracking_email_sent_at)} to ${String(t.destination?.email || '')}`}>
                           emailed
+                        </span>
+                      )}
+                      {t.direct_order_item_id != null && t.tracking_email_sent_at && t.tracking_email_error && (
+                        <span className="ml-1 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          title={`${t.tracking_email_error} — held to prevent a double-send. Check resend.com/emails for ${String(t.destination?.email || '')}; use "Release & retry" only if no send is listed there.`}>
+                          email unverified
                         </span>
                       )}
                       {t.direct_order_item_id != null && !t.tracking_email_sent_at && t.tracking_email_error && (
@@ -1399,12 +1418,14 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                         </span>
                       )}
                       {shipEmail.enabled && !testMode && t.direct_order_item_id != null && !t.direct_link_reclaimed_at
-                        && !t.tracking_email_sent_at && !t.refund_status
+                        && (!t.tracking_email_sent_at || t.tracking_email_error) && !t.refund_status
                         && !!String(t.destination?.email || '').trim() && !!t.tracking_number && (
                         <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" disabled={emailSendingId != null}
                           title={`Email the customer this box's tracking (${String(t.destination?.email || '').trim()})`}
                           onClick={() => sendEmailRowT(t)}>
-                          {emailSendingId === t.id ? 'Sending…' : t.tracking_email_error ? 'Retry email' : 'Send email'}
+                          {emailSendingId === t.id ? 'Sending…'
+                            : t.tracking_email_sent_at ? 'Release & retry'
+                            : t.tracking_email_error ? 'Retry email' : 'Send email'}
                         </Button>
                       )}
                       {draftMsg[t.id] && <p className="text-[11px] text-rose-400">{draftMsg[t.id]}</p>}

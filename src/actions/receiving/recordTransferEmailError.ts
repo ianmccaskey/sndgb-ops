@@ -1,9 +1,9 @@
 import { action } from '@uibakery/data';
 
 /**
- * Releases a failed transfer-email claim (direct-ship customer emails):
- * clears the sent_at claim and records the error for the retry
- * affordance. Guarded on the claim still being held.
+ * Releases a transfer-email claim after a DEFINITIVE Resend refusal
+ * (nothing was sent). Same CAS-on-claim-token contract as
+ * recordShipmentEmailError.
  */
 function recordTransferEmailError() {
   return action('recordTransferEmailError', 'SQL', {
@@ -13,7 +13,7 @@ function recordTransferEmailError() {
          SET tracking_email_sent_at = NULL,
              tracking_email_error = {{params.error}}::text
        WHERE id = {{params.transfer_id}}::bigint
-         AND tracking_email_sent_at IS NOT NULL
+         AND tracking_email_sent_at = {{params.claimed_at}}::timestamptz
       RETURNING id
     `,
   });
