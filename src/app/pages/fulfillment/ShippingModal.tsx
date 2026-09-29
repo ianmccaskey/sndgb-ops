@@ -21,7 +21,8 @@ import type { CapturedPhoto } from '@/lib/imageCapture';
 import { newStashKey, readStash, stashGet, stashUpsert, stashRemove, stashMutateIf, markLandingBlind, readLandingBlindTs, clearLandingBlind } from '@/lib/photoStash';
 import type { StashedPhoto } from '@/lib/photoStash';
 import { announceHold, coordAvailable, remoteCaptureActive, remoteLandingActive, subscribeCoord } from '@/lib/photoCoord';
-import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError, usPhoneOrUndefined } from '@/lib/shippo';
+import { getRates, purchaseLabel, createShippoOrder, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError, usPhoneOrUndefined } from '@/lib/shippo';
+import setShipmentShippoOrder from '@/actions/fulfillment/setShipmentShippoOrder';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
@@ -78,6 +79,7 @@ type ShipmentRow = {
   tracking_status_date: string | null; tracking_checked_at: string | null;
   tracking_error: string | null; eta: string | null;
   tracking_email_sent_at: string | null; tracking_email_error: string | null; dest_email: string;
+  shippo_order_id: string | null;
   purchase_started_at: string | null; purchase_attempted_at: string | null;
   attempt_verified_no_label_at: string | null;
   finalized_at: string | null; shipped_at: string | null; b44_pushed_at: string | null;
@@ -134,6 +136,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [doDeletePhoto] = useMutateAction(deleteShipmentPhoto);
   const [doGetPhoto] = useMutateAction(getShipmentPhoto);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
+  const [doSetShippoOrder] = useMutateAction(setShipmentShippoOrder);
   // the app's own "shipped" email (Resend) — fires after every finalize
   // landing; the SQL claim decides eligibility, so calls are unconditional
   const shipEmail = useShipEmailNotify(settings, testMode);
@@ -839,10 +842,27 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         }
         claimedAt = hbRow.claimed_at || claimedAt;
       }
+      // 2.5 Shippo ORDER for the notification emails: created (free)
+      // before money moves, stored on the draft so retries reuse it.
+      // FAIL-SOFT — an unlinked label still ships; the customer just
+      // gets no Shippo email and the outcome line says so. Test mode
+      // never links: a test order would earn the row a permanent
+      // "shippo emails" chip for a label that will never email anyone.
+      let shippoOrderId: string | null = null;
+      if (shipTo.email && !testMode) {
+        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
+          to: shipTo, orderNumber: order.order_number,
+          lineItems: chosen.map(c => ({
+            title: c.line.product_name || c.line.sku_code, sku: c.line.sku_code,
+            quantity: Math.max(1, Math.round(Number(c.qty)) || 1),
+          })),
+        });
+        if (shippoOrderId) await doSetShippoOrder({ shipment_id: draftId, shippo_order_id: shippoOrderId }).catch(() => null);
+      }
       // 3. buy the label (single attempt inside)
       let result: PurchaseResult;
       try {
-        result = await purchaseLabel(shippoHttp, shippoKey, buyRate.object_id);
+        result = await purchaseLabel(shippoHttp, shippoKey, buyRate.object_id, shippoOrderId);
       } catch (e: unknown) {
         if (e instanceof ShippoPurchaseRefusedError && claimedAt) {
           await doClearLease({ shipment_id: draftId, claimed_at: claimedAt, actor: userName }).catch(() => null);
@@ -872,6 +892,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       reloadPackable(); reloadShipments(); reload();
       const warn = finWarnings(fin);
       if (warn) setPurchaseMsg(warn);
+      // an unlinked label is a box Shippo will silently never email
+      // about — say it while the operator can still act, and name the
+      // action (the bare fact alone leaves them guessing)
+      if (!shippoOrderId && shipTo.email && !testMode) {
+        setPurchaseMsg(prev => [prev, unlinkedLabelNote()].filter(Boolean).join(' '));
+      }
       // customer "shipped" email — before the upstream push so the
       // notification isn't delayed behind it
       const em = await shipEmail.notifyShipment(draftId);
@@ -1024,9 +1050,24 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         reloadShipments();
         return;
       }
+      // reuse the draft's Shippo order (created before the first
+      // attempt); an old draft without one gets a fresh order now so
+      // the retried label still emails the customer. Test mode never
+      // links (same rationale as the primary path).
+      let shippoOrderId: string | null = s.shippo_order_id || null;
+      if (!shippoOrderId && shipTo?.email && !testMode) {
+        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
+          to: shipTo, orderNumber: order.order_number,
+          lineItems: (s.items || []).map(i => ({
+            title: i.sku_code, sku: i.sku_code,
+            quantity: Math.max(1, Math.round(Number(i.qty)) || 1),
+          })),
+        });
+        if (shippoOrderId) await doSetShippoOrder({ shipment_id: s.id, shippo_order_id: shippoOrderId }).catch(() => null);
+      }
       let result: PurchaseResult;
       try {
-        result = await purchaseLabel(shippoHttp, shippoKey, s.shippo_rate_id);
+        result = await purchaseLabel(shippoHttp, shippoKey, s.shippo_rate_id, shippoOrderId);
       } catch (e: unknown) {
         if (e instanceof ShippoPurchaseRefusedError && claimRow.claimed_at) {
           await doClearLease({ shipment_id: s.id, claimed_at: claimRow.claimed_at, actor: userName }).catch(() => null);
@@ -1034,7 +1075,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         throw e;
       }
       const fin = await persistFinalize(s.id, result, s.shippo_rate_id);
-      if (fin.ok) { setRowMsg(m => ({ ...m, [s.id]: finWarnings(fin) || 'Purchased and saved.' })); await shipmentLanded(s, s.carrier || '', result.trackingNumber || ''); }
+      if (fin.ok) {
+        // the retry path is where link failures are LIKELIEST (flaky
+        // networks) — it must not go quiet about an unlinked label
+        const linkNote = !shippoOrderId && shipTo?.email && !testMode ? unlinkedLabelNote() : '';
+        setRowMsg(m => ({ ...m, [s.id]: [finWarnings(fin) || 'Purchased and saved.', linkNote].filter(Boolean).join(' ') }));
+        await shipmentLanded(s, s.carrier || '', result.trackingNumber || '');
+      }
       else {
         setPendingFinalize(m => ({ ...m, [s.id]: result }));
         setRowMsg(m => ({ ...m, [s.id]: `Label purchased (${result.transactionId}) but saving failed — ${result.labelUrl} — use Retry save.` }));
@@ -1171,6 +1218,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       s.items.map(i => ({ order_item_id: i.order_item_id, qty: String(i.qty), sku: i.sku_code })));
   };
 
+  // an unlinked label = no Shippo email for that box. The wording names
+  // the recovery: either the app-email fallback already covers it, or
+  // the operator emails the tracking themselves.
+  const unlinkedLabelNote = () => shipEmail.enabled
+    ? 'NOTE: the label could not be linked to a Shippo order — the app-sent shipped email (status shown here) is the only notification for this box.'
+    : 'NOTE: the label could not be linked to a Shippo order, so Shippo will NOT email tracking for this box. Email the customer the tracking number yourself, or enable the app-email fallback in Settings for future boxes.';
+
   // operator-driven send/retry for one shipment's customer email (failed
   // sends, and older shipments from before the feature existed)
   const sendEmailRow = async (s: ShipmentRow) => {
@@ -1217,18 +1271,25 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             {(order.contact_phone || order.contact_email) && (
               <p className="text-xs text-muted-foreground mt-1">{[order.contact_phone, order.contact_email].filter(Boolean).join(' · ')}</p>
             )}
-            {/* whether a "shipped" email will go out for this box — stated
+            {/* whether a tracking email will go out for this box — stated
                 up front, because silence here is what hid the Shippo
                 email gap for 389 labels. Every state says something: the
-                gap repeats the moment one combination stays quiet. */}
+                gap repeats the moment one combination stays quiet.
+                Primary channel is Shippo's own order-linked emails
+                (labels bought here get a Shippo Order + auto-SHIPPED);
+                the app-sent email is an optional supplement. */}
             {!order.contact_email?.trim() ? (
-              <p className="text-xs text-amber-300 mt-1">No customer email on this order — labels bought now carry no email and no shipped notification can be sent.</p>
-            ) : !shipEmail.enabled ? (
-              <p className="text-xs text-amber-300 mt-1">Shipped emails are OFF — add the Resend key and from-address in Settings to notify customers.</p>
+              <p className="text-xs text-amber-300 mt-1">No customer email on this order — Shippo can't send tracking emails for its labels.</p>
             ) : testMode ? (
-              <p className="text-xs text-amber-300 mt-1">Shippo test mode — no shipped email will be sent.</p>
+              <p className="text-xs text-amber-300 mt-1">Shippo test mode — test labels never send tracking emails.</p>
+            ) : !shippoKey ? (
+              <p className="text-xs text-muted-foreground mt-1">
+                Manual records only (no Shippo token in Settings) — {shipEmail.enabled ? `the app's own shipped email goes to ${order.contact_email.trim()} when a record is saved` : 'no tracking email of any kind goes out'}.
+              </p>
             ) : (
-              <p className="text-xs text-muted-foreground mt-1">Shipped email goes to the email on the label ({order.contact_email.trim()}) when a label is bought or recorded.</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Shippo emails tracking to {order.contact_email.trim()} when a label is bought here — manual labels don't trigger it{shipEmail.enabled ? ", but the app's own shipped email covers them" : ' and nothing else emails them (app-email fallback is off)'}.
+              </p>
             )}
             {order.customer_note && <p className="text-xs text-amber-300 mt-1">“{order.customer_note}”</p>}
           </div>
@@ -1652,6 +1713,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}
                     {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase">refund {s.refund_status}</span>}
                     {!s.b44_pushed_at && s.refund_status !== 'SUCCESS' && <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase" title="The ordering app has not been told about this shipment yet"><Led className="w-1.5 h-1.5" />not pushed</span>}
+                    {/* positive-only: absence of the chip is the norm for
+                        the 389 pre-feature labels — the ship-to notice
+                        carries the general rule, so no amber noise here */}
+                    {s.refund_status !== 'SUCCESS' && s.shippo_order_id && (
+                      <span className="rounded bg-emerald-400/10 text-emerald-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase whitespace-nowrap"
+                        title={`Label linked to Shippo order ${s.shippo_order_id} — Shippo emails this customer tracking updates${s.dest_email ? ` at ${s.dest_email}` : ''}.`}>
+                        shippo emails
+                      </span>
+                    )}
                     {s.refund_status !== 'SUCCESS' && s.tracking_email_sent_at && !s.tracking_email_error && (
                       <span className="rounded bg-emerald-400/10 text-emerald-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase whitespace-nowrap"
                         title={`Shipped email sent ${fmtDateTime(s.tracking_email_sent_at)} to ${s.dest_email || 'the label email'}`}>

@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "createdAt": "2026-09-29T05:44:17.147Z",
+        "reason": "Claude: font stack inside the transactional HTML email template (shipEmail.ts), not app UI - email clients do not load web fonts, so a system-safe Arial/Helvetica stack is the domain-correct choice"
+      }
+    ]
+  }
+}

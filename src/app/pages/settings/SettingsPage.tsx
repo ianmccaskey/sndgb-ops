@@ -506,10 +506,10 @@ export function SettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base">Shipment emails (Resend)</CardTitle></CardHeader>
+        <CardHeader className="pb-2"><CardTitle className="text-base">Shipment emails (Resend) — optional fallback</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <p className="text-xs text-muted-foreground -mt-1">
-            The app emails each customer their tracking number when a label is bought or recorded (Shippo never sends these for API labels). OFF until both fields below are set.
+            Labels bought in the app are linked to Shippo orders, so Shippo already emails customers their tracking. Configure this only if you ALSO want app-sent emails — they cover manually recorded labels and ad-hoc resends, which Shippo can't email. OFF until both fields below are set.
           </p>
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="Resend API key" value={resendKey} onChange={setResendKey} type="password" placeholder="re_…" />

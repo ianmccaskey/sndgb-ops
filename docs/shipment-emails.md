@@ -1,21 +1,52 @@
-# Shipment-notification emails (the app's own, via Resend)
+# Shipment-notification emails
 
 ## Why this exists
 
 Shippo's dashboard "Enable email notification" toggle never fired for a
 single one of our labels, despite every label carrying the customer's
-email. Root cause (established 2026-09-29): Shippo sends notification
-emails for **Orders** — objects created by their dashboard and store
-integrations. Labels purchased through the raw API create only a
-shipment + transaction, no Order; our Shippo Orders tab is empty, so
-there has never been anything for their notifier to act on.
+email. Root cause (established 2026-09-29, confirmed by Shippo support):
+Shippo sends notification emails for **Orders** — labels must be tied to
+a Shippo Order that gets fulfilled. Labels purchased through the raw API
+create only a shipment + transaction, no Order; our Shippo Orders tab
+was empty, so there was never anything for their notifier to act on.
 
-So the app sends its own "your order has shipped" email at label
-finalize, through Resend. The email carries the order number, carrier +
-service, the tracking number as a carrier-site link (same link logic as
-the app's UI), and the box contents.
+## Primary channel: Shippo order-linked emails (free, zero setup)
 
-## One-time setup (operator)
+Since 2026-09-29 the app closes the gap the way Shippo prescribes: right
+before each label purchase it creates a Shippo **Order** carrying the
+customer's email, order number, and box contents, stores its id on the
+draft (`shipments/transfers.shippo_order_id`), and passes it in the
+transaction request. Shippo auto-flips the order to SHIPPED on purchase,
+which arms their tracking notification emails (the dashboard toggle
+under Settings → Tracking → Emails, already ON with "Send immediately").
+
+Properties of this channel:
+
+- **Covers**: every Shippo label bought in the app — order shipments and
+  direct-ship transfers (internal admin transfers are deliberately
+  unlinked; no customer, no email). Retry/recovery purchases reuse the
+  draft's stored order id, so a retried label never creates a duplicate
+  Shippo order.
+- **Does NOT cover**: manually recorded labels (bought outside the app),
+  labels recovered from a transaction that was originally purchased
+  unlinked, the 389 pre-feature labels, and Shippo test-mode labels.
+- **Fail-soft**: if the order create fails, the label still purchases —
+  unlinked — and the purchase outcome says "Shippo will NOT email
+  tracking for this box" so the operator can act. Linked boxes show an
+  emerald `shippo email` chip on the shipment/transfer row
+  (positive-only; absence is the norm for pre-feature rows).
+- **Content/branding**: Shippo's template from Shippo's sender. Custom
+  branding is a paid Shippo plan feature.
+
+## Optional fallback: app-sent emails via Resend
+
+The machinery below predates the Orders fix and remains available,
+OFF by default. Turn it on only if you also want the app's own branded
+"shipped" email — its unique value is covering exactly what Shippo
+can't: manual label records and operator-driven resends for old boxes.
+Everything in the sections that follow describes THIS optional channel.
+
+## One-time setup (operator, optional Resend fallback only)
 
 1. **Resend account** — resend.com, free tier is far above our volume.
 2. **Verify the sending domain** — resend.com/domains → Add domain →

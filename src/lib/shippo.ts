@@ -355,15 +355,57 @@ export type PurchaseResult = {
 type Txn = { object_id?: string; status?: string; tracking_number?: string; label_url?: string; rate?: string | { object_id?: string }; messages?: { text?: string; code?: string; source?: string }[] };
 
 /**
+ * Creates a Shippo ORDER for a label about to be bought — the object
+ * Shippo's tracking notification emails hang off (their support,
+ * 2026-09: raw API labels never email; a label linked to an order that
+ * goes SHIPPED does). FAIL-SOFT BY CONTRACT: returns the order's
+ * object_id or null, never throws — an unlinked label still ships the
+ * box, and the customer merely gets no Shippo email (the UI says so).
+ * Creating an order is free and side-effect-light, so it retries twice;
+ * a stray duplicate order at Shippo is dashboard clutter, not money.
+ */
+export async function createShippoOrder(http: ShippoHttp, key: string, o: {
+  to: ShippoAddress; orderNumber: string;
+  lineItems?: { title: string; sku: string; quantity: number }[];
+}): Promise<string | null> {
+  const payload = {
+    to_address: o.to,
+    // blank order numbers are omitted, not sent as '' — a recovery path
+    // may not know the customer-facing number
+    ...(o.orderNumber ? { order_number: o.orderNumber } : {}),
+    placed_at: new Date().toISOString(),
+    order_status: 'PAID',
+    ...(o.lineItems && o.lineItems.length > 0 ? { line_items: o.lineItems } : {}),
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const body = unwrap(await http.post(key.trim(), '/orders/', payload)) as { object_id?: unknown } | null;
+      if (body && typeof body === 'object' && typeof body.object_id === 'string' && body.object_id) {
+        return body.object_id;
+      }
+      return null; // unrecognized success shape — don't link against a guess
+    } catch {
+      if (attempt === 0) await new Promise(r => setTimeout(r, 800));
+    }
+  }
+  return null;
+}
+
+/**
  * Buys a REAL label. Single POST; QUEUED/WAITING is polled by GET.
  * Throws with operator-readable messages on failure — and when a
  * transaction id is known, the message INCLUDES it so a
  * purchased-but-unconfirmed label is manually recoverable.
+ * shippoOrderId links the transaction to a Shippo Order so their
+ * tracking emails fire; omitted/null purchases exactly as before.
  */
-export async function purchaseLabel(http: ShippoHttp, key: string, rateObjectId: string): Promise<PurchaseResult> {
+export async function purchaseLabel(http: ShippoHttp, key: string, rateObjectId: string, shippoOrderId?: string | null): Promise<PurchaseResult> {
   let txn: Txn | null;
   try {
-    txn = unwrap(await http.post(key.trim(), '/transactions/', { rate: rateObjectId, label_file_type: 'PDF_4x6', async: false })) as Txn | null;
+    txn = unwrap(await http.post(key.trim(), '/transactions/', {
+      rate: rateObjectId, label_file_type: 'PDF_4x6', async: false,
+      ...(shippoOrderId ? { order: shippoOrderId } : {}),
+    })) as Txn | null;
   } catch (e: unknown) {
     // EVERY thrown failure is ambiguous here — even an apparent 4xx: the
     // status is regexed from undocumented error text and is NOT proof the

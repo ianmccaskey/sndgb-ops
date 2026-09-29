@@ -9,7 +9,8 @@ import clearTransferAttemptVerified from '@/actions/receiving/clearTransferAttem
 import finalizeTransfer from '@/actions/receiving/finalizeTransfer';
 import deleteTransferDraft from '@/actions/receiving/deleteTransferDraft';
 import setTransferRefund from '@/actions/receiving/setTransferRefund';
-import { getRates, purchaseLabel, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError, usPhoneOrUndefined } from '@/lib/shippo';
+import { getRates, purchaseLabel, createShippoOrder, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError, usPhoneOrUndefined } from '@/lib/shippo';
+import setTransferShippoOrder from '@/actions/receiving/setTransferShippoOrder';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
 import { useApp } from '@/app/AppContext';
@@ -79,6 +80,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const [doClearLease] = useMutateAction(clearTransferPurchaseLease);
   const [doClearAttempt] = useMutateAction(clearTransferAttemptVerified);
   const [doFinalize] = useMutateAction(finalizeTransfer);
+  const [doSetShippoOrder] = useMutateAction(setTransferShippoOrder);
   const [doDeleteDraft] = useMutateAction(deleteTransferDraft);
   const [doSetRefund] = useMutateAction(setTransferRefund);
 
@@ -505,10 +507,27 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         }
         claimedAt = hbRow.claimed_at || claimedAt;
       }
+      // 2.5 Shippo ORDER for the notification emails — DIRECT-SHIP only
+      // (a customer is on the other end; internal transfers stay
+      // unlinked). Created free before money moves, stored on the draft
+      // so retries reuse it. FAIL-SOFT: an unlinked label still ships.
+      // Test mode never links — a test order would earn a permanent
+      // "shippo emails" chip for a label that will never email anyone.
+      let shippoOrderId: string | null = null;
+      if (isDirect && directCandidate && String(to.email || '').trim() && !testMode) {
+        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
+          to, orderNumber: directCandidate.order_number,
+          lineItems: lines.map(l => {
+            const sku = products.find(p => String(p.id) === l.product)?.sku_code || '';
+            return { title: sku || 'item', sku, quantity: Math.max(1, Math.round(Number(l.qty)) || 1) };
+          }),
+        });
+        if (shippoOrderId) await doSetShippoOrder({ transfer_id: draftId, shippo_order_id: shippoOrderId }).catch(() => null);
+      }
       // 3. buy the label (single attempt inside)
       let result: PurchaseResult;
       try {
-        result = await purchaseLabel(shippoHttp, shippoKey, buyRate.object_id);
+        result = await purchaseLabel(shippoHttp, shippoKey, buyRate.object_id, shippoOrderId);
       } catch (e: unknown) {
         // a DEFINITIVE Shippo refusal (no charge, no label) releases the
         // lease so the draft is immediately retryable/deletable; ambiguous
@@ -535,6 +554,11 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
           ? `Order ${directCandidate ? '#' + directCandidate.order_number + ' (' + directCandidate.customer_name + ')' : ''} marked direct-shipped — the customer's line is fully covered and carries this tracking number.`
           : directMissNote(fin))
         : '');
+      // an unlinked direct-ship label is a box Shippo will silently never
+      // email about — say it while the operator can still act
+      if (isDirect && String(to.email || '').trim() && !shippoOrderId && !testMode) {
+        setPurchaseMsg(unlinkedLabelNote());
+      }
       setRatesResult(null); setPickedRate(''); setFLines([{ product: '', qty: '' }]); setFNote('');
       setSelectedBoxIds([]);
       if (fDest.startsWith('ds_')) setFDest('');
@@ -679,6 +703,13 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     if (em.note) setRowEmailMsg(m => ({ ...m, [transferId]: em }));
   };
 
+  // an unlinked label = no Shippo email for that box. The wording names
+  // the recovery: either the app-email fallback already covers it, or
+  // the operator emails the tracking themselves.
+  const unlinkedLabelNote = () => shipEmail.enabled
+    ? 'NOTE: the label could not be linked to a Shippo order — the app-sent shipped email (status shown here) is the only notification for this box.'
+    : 'NOTE: the label could not be linked to a Shippo order, so Shippo will NOT email tracking for this box. Email the customer the tracking number yourself, or enable the app-email fallback in Settings for future boxes.';
+
   // operator-driven send/retry from the transfer log (failed sends, and
   // direct-ship transfers from before the feature existed)
   const sendEmailRowT = async (t: TransferRow) => {
@@ -780,9 +811,32 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         reloadTransfers();
         return;
       }
+      // reuse the Shippo order created before the first attempt (kept
+      // on the draft); a direct-ship draft without one gets a fresh
+      // order now — mirroring the fulfillment retry — so the retried
+      // label still emails the customer. Test mode never links.
+      const destEmailT = String(t.destination?.email || '').trim();
+      let shippoOrderId: string | null = t.shippo_order_id || null;
+      if (!shippoOrderId && t.direct_order_item_id != null && !t.direct_link_reclaimed_at && destEmailT && !testMode) {
+        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
+          to: {
+            name: sT(t.destination?.name), street1: sT(t.destination?.street1),
+            street2: sT(t.destination?.street2) || undefined as unknown as string,
+            city: sT(t.destination?.city), state: sT(t.destination?.state),
+            zip: sT(t.destination?.zip), country: sT(t.destination?.country) || 'US',
+            phone: sT(t.destination?.phone) || undefined as unknown as string,
+            email: destEmailT,
+          },
+          // the customer-facing number lives only in the label snapshot
+          // here ("Direct: Name #NUMBER"); a miss just omits the field
+          orderNumber: (t.destination_label || '').match(/#(\S+)/)?.[1] || '',
+          lineItems: (t.items || []).map(i => ({ title: i.sku_code, sku: i.sku_code, quantity: Math.max(1, Math.round(Number(i.qty)) || 1) })),
+        });
+        if (shippoOrderId) await doSetShippoOrder({ transfer_id: t.id, shippo_order_id: shippoOrderId }).catch(() => null);
+      }
       let result: PurchaseResult;
       try {
-        result = await purchaseLabel(shippoHttp, shippoKey, t.shippo_rate_id);
+        result = await purchaseLabel(shippoHttp, shippoKey, t.shippo_rate_id, shippoOrderId);
       } catch (e: unknown) {
         if (e instanceof ShippoPurchaseRefusedError && claimRow.claimed_at) {
           await doClearLease({ transfer_id: t.id, claimed_at: claimRow.claimed_at, actor: userName }).catch(() => null);
@@ -790,7 +844,13 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         throw e;
       }
       const fin = await persistFinalize(t.id, result, t.shippo_rate_id);
-      if (fin.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin) })); reloadTransfers(); await notifyDraftEmail(t.id); }
+      if (fin.ok) {
+        // the retry path is where link failures are LIKELIEST — it must
+        // not go quiet about an unlinked direct-ship label
+        const linkNote = t.direct_order_item_id != null && destEmailT && !shippoOrderId && !testMode ? unlinkedLabelNote() : '';
+        setDraftMsg(m => ({ ...m, [t.id]: [directMissNote(fin), linkNote].filter(Boolean).join(' ') }));
+        reloadTransfers(); await notifyDraftEmail(t.id);
+      }
       else {
         setPendingFinalize(m => ({ ...m, [t.id]: result }));
         setDraftMsg(m => ({ ...m, [t.id]: `Label purchased (${result.transactionId}) but saving failed — ${result.labelUrl} — use Retry save.` }));
@@ -1104,16 +1164,22 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
             </p>
           )}
           {/* same up-front email statement as the Ship modal — silence
-              here is what hid the Shippo email gap */}
+              here is what hid the Shippo email gap. Primary channel is
+              Shippo's own order-linked emails; the app-sent email is an
+              optional supplement covering manual records. */}
           {directCandidate && (
             !String(directCandidate.contact_email || '').trim() ? (
-              <p className="text-[11px] text-amber-300">No customer email on this order line — no shipped notification can be sent.</p>
-            ) : !shipEmail.enabled ? (
-              <p className="text-[11px] text-amber-300">Shipped emails are OFF — add the Resend key and from-address in Settings to notify customers.</p>
+              <p className="text-[11px] text-amber-300">No customer email on this order line — Shippo can't send tracking emails for its label.</p>
             ) : testMode ? (
-              <p className="text-[11px] text-amber-300">Shippo test mode — no shipped email will be sent.</p>
+              <p className="text-[11px] text-amber-300">Shippo test mode — test labels never send tracking emails.</p>
+            ) : !shippoKey ? (
+              <p className="text-[11px] text-muted-foreground">
+                Manual records only (no Shippo token in Settings) — {shipEmail.enabled ? `the app's own shipped email goes to ${String(directCandidate.contact_email).trim()} when a record is saved` : 'no tracking email of any kind goes out'}.
+              </p>
             ) : (
-              <p className="text-[11px] text-muted-foreground">Shipped email goes to {String(directCandidate.contact_email).trim()} when the label is bought or recorded.</p>
+              <p className="text-[11px] text-muted-foreground">
+                Shippo emails tracking to {String(directCandidate.contact_email).trim()} when the label is bought here — manual records don't trigger it{shipEmail.enabled ? ", but the app's own shipped email covers them" : ' and nothing else emails them (app-email fallback is off)'}.
+              </p>
             )
           )}
           {fDest === '__custom__' && (
@@ -1398,7 +1464,15 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                           : shippoKey
                             ? <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => refund(t)}>Request refund</Button>
                             : <span className="text-[11px] text-muted-foreground whitespace-nowrap" title="Add the Shippo API token in Settings to request refunds">refund needs key</span>}
-                      {/* customer email state — direct-ship transfers only */}
+                      {/* customer email state — direct-ship transfers only.
+                          Shippo chip is positive-only: absence is the norm
+                          for pre-feature rows */}
+                      {t.direct_order_item_id != null && t.shippo_order_id && (
+                        <span className="ml-1 rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          title={`Label linked to Shippo order ${t.shippo_order_id} — Shippo emails this customer tracking updates${String(t.destination?.email || '').trim() ? ` at ${String(t.destination?.email || '').trim()}` : ''}.`}>
+                          shippo emails
+                        </span>
+                      )}
                       {t.direct_order_item_id != null && t.tracking_email_sent_at && !t.tracking_email_error && (
                         <span className="ml-1 rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                           title={`Shipped email sent ${fmtDateTime(t.tracking_email_sent_at)} to ${String(t.destination?.email || '')}`}>

@@ -25,7 +25,7 @@ function listTransfers() {
              t.shippo_rate_id, t.shippo_transaction_id,
              '#' || t.tracking_number AS tracking_number, t.label_url,
              t.refund_status, t.note, t.finalized_at, t.created_by, t.created_at,
-             t.tracking_email_sent_at, t.tracking_email_error,
+             t.tracking_email_sent_at, t.tracking_email_error, t.shippo_order_id,
              -- exact-text token for the attempted-clear CAS (jsonb round
              -- trip preserves microseconds; driver Date coercion may not)
              (jsonb_build_object('a', t.purchase_attempted_at)->>'a') AS purchase_attempted_at,
