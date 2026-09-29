@@ -12,6 +12,8 @@ import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { testShippoConnection } from '@/lib/shippo';
 import { useShippoHttp } from '@/lib/useShippoHttp';
+import { shipEmailConfig, sendTestEmail } from '@/lib/shipEmail';
+import { useResendHttp } from '@/lib/useResendHttp';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -66,6 +68,16 @@ export function SettingsPage() {
   const [shippoTesting, setShippoTesting] = useState(false);
   const [boxTare, setBoxTare] = useState('');
   const shippoHttp = useShippoHttp();
+
+  // shipment emails (Resend — the app's own "shipped" notifications)
+  const [resendKey, setResendKey] = useState('');
+  const [emailFrom, setEmailFrom] = useState('');
+  const [emailReplyTo, setEmailReplyTo] = useState('');
+  const [emailTestTo, setEmailTestTo] = useState('');
+  const [emailMsg, setEmailMsg] = useState('');
+  const [emailTesting, setEmailTesting] = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const resendHttp = useResendHttp();
 
   // campaign form
   const [gbName, setGbName] = useState('');
@@ -146,6 +158,63 @@ export function SettingsPage() {
     setShippoKey(settings.shippo_api_key || '');
     setBoxTare(settings.default_box_tare_oz || '');
   }, [settings.shippo_api_key, settings.default_box_tare_oz]);
+
+  useEffect(() => {
+    setResendKey(settings.resend_api_key || '');
+    setEmailFrom(settings.ship_email_from || '');
+    setEmailReplyTo(settings.ship_email_reply_to || '');
+  }, [settings.resend_api_key, settings.ship_email_from, settings.ship_email_reply_to]);
+
+  // "Name <addr@domain>" or a bare addr@domain — loose on purpose; the
+  // authoritative validator is Resend itself (surfaced by the test send)
+  const FROM_RE = /^(?:[^<>]*<\s*)?[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+(?:\s*>)?$/;
+
+  const saveShipEmail = async () => {
+    setEmailMsg('');
+    if (emailFrom.trim() && !FROM_RE.test(emailFrom.trim())) {
+      setEmailMsg('The from-address needs to be an email, optionally with a display name — e.g. SND GB <ship@yourdomain.com>.');
+      return;
+    }
+    if (emailReplyTo.trim() && !FROM_RE.test(emailReplyTo.trim())) {
+      setEmailMsg('The reply-to needs to be an email address, or blank.');
+      return;
+    }
+    setEmailSaving(true); setEmailMsg('Saving…');
+    try {
+      await doSaveSetting({ key: 'resend_api_key', value: resendKey.trim() });
+      await doSaveSetting({ key: 'ship_email_from', value: emailFrom.trim() });
+      await doSaveSetting({ key: 'ship_email_reply_to', value: emailReplyTo.trim() });
+      reloadSettings();
+      setEmailMsg(resendKey.trim() && emailFrom.trim()
+        ? 'Saved — shipment emails are ON. Send a test below to prove the chain.'
+        : 'Saved — shipment emails stay OFF until both the key and from-address are set.');
+    } catch (e: unknown) {
+      setEmailMsg(e instanceof Error ? e.message : 'Failed to save');
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  // full-chain probe with the PERSISTED values — the ones the Ship modal
+  // actually runs with — mirroring the Shippo test's discipline
+  const testShipEmail = async () => {
+    const cfg = shipEmailConfig(settings);
+    if (!cfg.enabled) { setEmailMsg('Save the key and from-address first — the test verifies the SAVED values the app runs with.'); return; }
+    if (!emailTestTo.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTestTo.trim())) {
+      setEmailMsg('Enter the address the test email should go to (your own is the safe choice — before the domain is verified, Resend only delivers to the account owner).');
+      return;
+    }
+    setEmailTesting(true); setEmailMsg('Sending test…');
+    try {
+      await sendTestEmail(resendHttp, cfg, emailTestTo.trim());
+      const unsavedNote = (resendKey.trim() !== cfg.key || emailFrom.trim() !== cfg.from) ? ' (NOTE: the fields above have unsaved changes — this tested the SAVED values.)' : '';
+      setEmailMsg(`✓ Sent to ${emailTestTo.trim()} — check the inbox (and spam).${unsavedNote}`);
+    } catch (e: unknown) {
+      setEmailMsg('✗ ' + (e instanceof Error ? e.message : 'Test send failed') + ' If the message mentions the datasource, the workspace needs the "Resend API" HTTP datasource — see src/actions/resend/DATASOURCE.md.');
+    } finally {
+      setEmailTesting(false);
+    }
+  };
 
   const saveShippo = async () => {
     setShippoMsg('');
@@ -432,6 +501,34 @@ export function SettingsPage() {
           </div>
           <p className="text-xs text-muted-foreground">
             Powers inbound package tracking and transfer label purchases on the Receiving page. Enable UPS in your Shippo dashboard (Carriers) to see UPS rates.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-base">Shipment emails (Resend)</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground -mt-1">
+            The app emails each customer their tracking number when a label is bought or recorded (Shippo never sends these for API labels). OFF until both fields below are set.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Field label="Resend API key" value={resendKey} onChange={setResendKey} type="password" placeholder="re_…" />
+            <Field label="From address (verified domain)" value={emailFrom} onChange={setEmailFrom} placeholder="SND GB <ship@yourdomain.com>" />
+            <Field label="Reply-to (optional)" value={emailReplyTo} onChange={setEmailReplyTo} placeholder="you@yourdomain.com" />
+          </div>
+          {emailMsg && <p className="text-sm text-muted-foreground break-all">{emailMsg}</p>}
+          <div className="flex flex-wrap items-end gap-2">
+            <Button size="sm" disabled={emailSaving} onClick={saveShipEmail}>{emailSaving ? 'Saving…' : 'Save shipment emails'}</Button>
+            <div className="flex items-end gap-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Send the test to</Label>
+                <Input value={emailTestTo} onChange={e => setEmailTestTo(e.target.value)} placeholder="you@…" className="h-9 w-52" type="email" />
+              </div>
+              <Button size="sm" variant="outline" disabled={emailTesting} onClick={testShipEmail}>{emailTesting ? 'Sending…' : 'Send test email'}</Button>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The from-domain must be verified at resend.com/domains (DNS records) before customers can receive these — an unverified account only delivers to its own address. Setup runbook: see docs/shipment-emails.md in the repo.
           </p>
         </CardContent>
       </Card>

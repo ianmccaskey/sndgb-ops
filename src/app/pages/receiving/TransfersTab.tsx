@@ -13,7 +13,7 @@ import { getRates, purchaseLabel, getTransaction, findTransactionByRate, request
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
 import { useApp } from '@/app/AppContext';
-import { fmtUSD, fmtNum, fmtDate } from '@/lib/fmt';
+import { fmtUSD, fmtNum, fmtDate, fmtDateTime } from '@/lib/fmt';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +25,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Field } from '@/components/Field';
 import { TrackingLink } from '@/components/TrackingLink';
 import { myShipFromId } from '@/lib/userDefaults';
+import { useShipEmailNotify } from '@/lib/useShipEmailNotify';
+import type { NotifyOutcome } from '@/lib/useShipEmailNotify';
 import type { RxAddress, CatalogProduct, TransferRow, InvRow, Pkg, DirectShipCandidate, DrainRow } from './shared';
 
 type ItemLine = { product: string; qty: string };
@@ -55,6 +57,14 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
 }) {
   void reloadDestinations;
   const { userName, groupBuyId, settings } = useApp();
+  // the app's own "shipped" email for DIRECT-SHIP transfers — the SQL
+  // claim refuses internal admin transfers, so calls are unconditional
+  const shipEmail = useShipEmailNotify(settings, testMode);
+  const [emailSendingId, setEmailSendingId] = useState<number | null>(null);
+  // email outcomes get their own channel: purchaseMsg/draftMsg are
+  // failure-styled rose, and "email sent" must never read as an error
+  const [emailOutcome, setEmailOutcome] = useState<NotifyOutcome | null>(null);
+  const [rowEmailMsg, setRowEmailMsg] = useState<Record<number, NotifyOutcome>>({});
   // outstanding vendor-direct order lines (money-gated server-side) —
   // offered as destinations when the transfer carries their product
   const [rawDirectShips, , , reloadDirectShips] = useLoadAction(listDirectShipCandidates, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
@@ -341,7 +351,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const purchase = async () => {
     if (purchaseInFlight.current) return;   // synchronous double-click guard
     purchaseInFlight.current = true;
-    setPurchasing(true); setPurchaseMsg('');
+    setPurchasing(true); setPurchaseMsg(''); setEmailOutcome(null);
     try {
       const rate = ratesResult?.rates.find(r => r.object_id === pickedRate);
       const to = destAddress();
@@ -529,6 +539,10 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       setSelectedBoxIds([]);
       if (fDest.startsWith('ds_')) setFDest('');
       reloadTransfers();
+      // direct-ship customers get the same "shipped" email as order boxes;
+      // the claim no-ops for internal transfers
+      const em = await shipEmail.notifyTransfer(draftId);
+      if (em.note) setEmailOutcome(em);
     } finally {
       purchaseInFlight.current = false;
       setPurchasing(false);
@@ -542,7 +556,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   // refusing outright is free — no direct_stamped=0 halfway state here)
   const recordManual = async () => {
     if (manualInFlight.current) return;   // synchronous double-click guard
-    setPurchaseMsg(''); setManualSuccess(''); setSuccessDirect('');
+    setPurchaseMsg(''); setManualSuccess(''); setSuccessDirect(''); setEmailOutcome(null);
     const from = addresses.find(a => String(a.id) === fFrom);
     if (!from) { setPurchaseMsg('Pick the ship-from receive address.'); return; }
     const to = destAddress();
@@ -632,6 +646,13 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       setSelectedBoxIds([]);
       if (isDirect) { setFDest(''); reloadDirectShips(); }
       reloadTransfers();
+      // born-finalized manual records email too (labels bought outside the
+      // app are exactly the ones no carrier integration ever covered)
+      const recId = Number((res[0] as { id?: string | number } | null)?.id ?? NaN);
+      if (Number.isFinite(recId)) {
+        const em = await shipEmail.notifyTransfer(recId);
+        if (em.note) setEmailOutcome(em);
+      }
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : '';
       // 23505 on the manual-label unique index = this label is ALREADY
@@ -650,6 +671,28 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
     }
   };
 
+  // append the email outcome to a draft's row message after a recovery
+  // landing — recovery paths deserve the same customer email as the happy
+  // path, and the claim CAS makes a repeat landing a silent no-op
+  const notifyDraftEmail = async (transferId: number) => {
+    const em = await shipEmail.notifyTransfer(transferId);
+    if (em.note) setRowEmailMsg(m => ({ ...m, [transferId]: em }));
+  };
+
+  // operator-driven send/retry from the transfer log (failed sends, and
+  // direct-ship transfers from before the feature existed)
+  const sendEmailRowT = async (t: TransferRow) => {
+    if (emailSendingId != null) return;
+    setEmailSendingId(t.id);
+    try {
+      const out = await shipEmail.notifyTransfer(t.id);
+      setRowEmailMsg(m => ({ ...m, [t.id]: out.note ? out : { ok: true, note: 'Nothing sent — it was already sent, or this transfer is not eligible (not direct-ship, refund activity, or no customer email on the label).' } }));
+      reloadTransfers();
+    } finally {
+      setEmailSendingId(null);
+    }
+  };
+
   const retryFinalize = async (t: TransferRow) => {
     const pending = pendingFinalize[t.id];
     if (!pending) return;
@@ -658,6 +701,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       setPendingFinalize(m => { const n = { ...m }; delete n[t.id]; return n; });
       setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin) }));
       reloadTransfers();
+      await notifyDraftEmail(t.id);
     } else setDraftMsg(m => ({ ...m, [t.id]: 'Save failed again — the label URL is preserved here; keep retrying.' }));
   };
 
@@ -676,7 +720,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         return;
       }
       const fin = await persistFinalize(t.id, result, result.rateId || '');
-      if (fin.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin) })); reloadTransfers(); }
+      if (fin.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin) })); reloadTransfers(); await notifyDraftEmail(t.id); }
       else setDraftMsg(m => ({ ...m, [t.id]: 'Transaction found but saving failed — retry.' }));
     } catch (e: unknown) {
       setDraftMsg(m => ({ ...m, [t.id]: e instanceof Error ? e.message : 'Recovery failed' }));
@@ -700,7 +744,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       }
       if (existing) {
         const fin0 = await persistFinalize(t.id, existing, t.shippo_rate_id);
-        if (fin0.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin0) })); reloadTransfers(); }
+        if (fin0.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin0) })); reloadTransfers(); await notifyDraftEmail(t.id); }
         else setDraftMsg(m => ({ ...m, [t.id]: `An existing label was found (${existing.transactionId}) but saving failed — retry.` }));
         return;
       }
@@ -733,7 +777,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
         throw e;
       }
       const fin = await persistFinalize(t.id, result, t.shippo_rate_id);
-      if (fin.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin) })); reloadTransfers(); }
+      if (fin.ok) { setDraftMsg(m => ({ ...m, [t.id]: directMissNote(fin) })); reloadTransfers(); await notifyDraftEmail(t.id); }
       else {
         setPendingFinalize(m => ({ ...m, [t.id]: result }));
         setDraftMsg(m => ({ ...m, [t.id]: `Label purchased (${result.transactionId}) but saving failed — ${result.labelUrl} — use Retry save.` }));
@@ -774,6 +818,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
           ? directMissNote(fin)
           : `A PURCHASED label exists for this draft (${existing.transactionId}) — recovered instead of deleting, but saving failed — retry.` }));
         reloadTransfers();
+        if (fin.ok) await notifyDraftEmail(t.id);
         return;
       }
     } catch (e: unknown) {
@@ -1045,6 +1090,19 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
               {' '}Partial fills are fine: each transfer credits its {directCandidate.sku_code} quantity against the line, and the line marks direct-shipped (with the completing label's tracking) once the total covers the order.
             </p>
           )}
+          {/* same up-front email statement as the Ship modal — silence
+              here is what hid the Shippo email gap */}
+          {directCandidate && (
+            !String(directCandidate.contact_email || '').trim() ? (
+              <p className="text-[11px] text-amber-300">No customer email on this order line — no shipped notification can be sent.</p>
+            ) : !shipEmail.enabled ? (
+              <p className="text-[11px] text-amber-300">Shipped emails are OFF — add the Resend key and from-address in Settings to notify customers.</p>
+            ) : testMode ? (
+              <p className="text-[11px] text-amber-300">Shippo test mode — no shipped email will be sent.</p>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">Shipped email goes to {String(directCandidate.contact_email).trim()} when the label is bought or recorded.</p>
+            )
+          )}
           {fDest === '__custom__' && (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <Field label="Name" className="col-span-2 sm:col-span-1">
@@ -1198,6 +1256,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                 </Button>
               )}
               {purchaseMsg && <p className="text-xs text-rose-400 break-all">{purchaseMsg}</p>}
+              {emailOutcome?.note && <p className={`text-xs break-all ${emailOutcome.ok ? 'text-emerald-300' : 'text-rose-400'}`}>{emailOutcome.note}</p>}
             </div>
           )}
           {manualSuccess && (
@@ -1261,6 +1320,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                   {!pendingFinalize[t.id] && <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400" onClick={() => deleteDraft(t)}>Delete draft</Button>}
                 </div>
                 {draftMsg[t.id] && <p className="text-xs text-rose-400 break-all">{draftMsg[t.id]}</p>}
+                {rowEmailMsg[t.id]?.note && <p className={`text-xs break-all ${rowEmailMsg[t.id].ok ? 'text-emerald-300' : 'text-amber-300'}`}>{rowEmailMsg[t.id].note}</p>}
               </div>
             ))}
           </CardContent>
@@ -1325,7 +1385,30 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
                           : shippoKey
                             ? <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => refund(t)}>Request refund</Button>
                             : <span className="text-[11px] text-muted-foreground whitespace-nowrap" title="Add the Shippo API token in Settings to request refunds">refund needs key</span>}
+                      {/* customer email state — direct-ship transfers only */}
+                      {t.direct_order_item_id != null && t.tracking_email_sent_at && (
+                        <span className="ml-1 rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          title={`Shipped email sent ${fmtDateTime(t.tracking_email_sent_at)} to ${String(t.destination?.email || '')}`}>
+                          emailed
+                        </span>
+                      )}
+                      {t.direct_order_item_id != null && !t.tracking_email_sent_at && t.tracking_email_error && (
+                        <span className="ml-1 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          title={`${t.tracking_email_error}${t.refund_status ? ' — retry is unavailable while there is refund activity on this label.' : ''}`}>
+                          email failed
+                        </span>
+                      )}
+                      {shipEmail.enabled && !testMode && t.direct_order_item_id != null && !t.direct_link_reclaimed_at
+                        && !t.tracking_email_sent_at && !t.refund_status
+                        && !!String(t.destination?.email || '').trim() && !!t.tracking_number && (
+                        <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" disabled={emailSendingId != null}
+                          title={`Email the customer this box's tracking (${String(t.destination?.email || '').trim()})`}
+                          onClick={() => sendEmailRowT(t)}>
+                          {emailSendingId === t.id ? 'Sending…' : t.tracking_email_error ? 'Retry email' : 'Send email'}
+                        </Button>
+                      )}
                       {draftMsg[t.id] && <p className="text-[11px] text-rose-400">{draftMsg[t.id]}</p>}
+                      {rowEmailMsg[t.id]?.note && <p className={`text-[11px] ${rowEmailMsg[t.id].ok ? 'text-emerald-300' : 'text-amber-300'}`}>{rowEmailMsg[t.id].note}</p>}
                     </TableCell>
                   </TableRow>
                 ))}
