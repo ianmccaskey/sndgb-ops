@@ -1,9 +1,9 @@
 /**
  * Carrier tracking-page URL for a tracking number, or null when the
  * carrier has no known lookup page (custom carrier tokens stay plain
- * text — a wrong guess would be worse than no link). Shared by the
- * TrackingLink component and the shipment-notification email, so the
- * link a customer gets is the exact link the operators use.
+ * text — a wrong guess would be worse than no link). Lives in lib (not
+ * inside the TrackingLink component file) so non-component code can
+ * share it without tripping react-refresh's only-export-components.
  */
 export function trackingUrl(carrier: string | null | undefined, tracking: string | null | undefined): string | null {
   const t = String(tracking ?? '').trim();
