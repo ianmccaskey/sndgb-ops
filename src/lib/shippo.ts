@@ -358,18 +358,21 @@ type Txn = { object_id?: string; status?: string; tracking_number?: string; labe
  * Creates a Shippo ORDER for a label about to be bought — the object
  * Shippo's tracking notification emails hang off (their support,
  * 2026-09: raw API labels never email; a label linked to an order that
- * goes SHIPPED does). FAIL-SOFT BY CONTRACT: returns the order's
- * object_id or null, never throws — an unlinked label still ships the
- * box, and the customer merely gets no Shippo email (the UI says so).
+ * goes SHIPPED does). FAIL-SOFT BY CONTRACT: never throws — an
+ * unlinked label still ships the box, and the customer merely gets no
+ * Shippo email (the UI says so). The error is RETURNED, sanitized, so
+ * the purchase outcome can show Shippo's actual refusal instead of a
+ * bare "could not be linked" (first live failure was undiagnosable).
  * SINGLE attempt, no retry: the POST is not idempotent, and a lost
  * response would mean a retry creates a DUPLICATE open order at Shippo
  * — a manual-fulfillment trap in their dashboard. One miss just costs
  * the email, which the purchase outcome reports.
  */
+export type ShippoOrderResult = { id: string | null; error: string | null };
 export async function createShippoOrder(http: ShippoHttp, key: string, o: {
   to: ShippoAddress; orderNumber: string;
   lineItems?: { title: string; sku: string; quantity: number }[];
-}): Promise<string | null> {
+}): Promise<ShippoOrderResult> {
   const payload = {
     to_address: o.to,
     // blank order numbers are omitted, not sent as '' — a recovery path
@@ -382,11 +385,18 @@ export async function createShippoOrder(http: ShippoHttp, key: string, o: {
   try {
     const body = unwrap(await http.post(key.trim(), '/orders/', payload)) as { object_id?: unknown } | null;
     if (body && typeof body === 'object' && typeof body.object_id === 'string' && body.object_id) {
-      return body.object_id;
+      return { id: body.object_id, error: null };
     }
-    return null; // unrecognized success shape — don't link against a guess
-  } catch {
-    return null;
+    // unrecognized success shape — don't link against a guess, but keep
+    // a slice of what came back for the operator
+    let shape = '';
+    try { shape = JSON.stringify(body)?.slice(0, 140) || String(body); } catch { shape = String(body); }
+    return { id: null, error: `order created a response in an unrecognized shape: ${shape}` };
+  } catch (e: unknown) {
+    // normalizeError sanitizes token-shaped substrings before anything
+    // reaches the UI
+    const { message } = normalizeError(e);
+    return { id: null, error: message.slice(0, 240) };
   }
 }
 

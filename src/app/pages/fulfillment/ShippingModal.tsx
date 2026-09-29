@@ -835,14 +835,16 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       // would earn a permanent "shippo emails" chip for a label that
       // will never email anyone.
       let shippoOrderId: string | null = null;
+      let orderLinkError: string | null = null;
       if (shipTo.email && !testMode) {
-        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
+        const orderRes = await createShippoOrder(shippoHttp, shippoKey, {
           to: shipTo, orderNumber: order.order_number,
           lineItems: chosen.map(c => ({
             title: c.line.product_name || c.line.sku_code, sku: c.line.sku_code,
             quantity: Math.max(1, Math.round(Number(c.qty)) || 1),
           })),
         });
+        shippoOrderId = orderRes.id; orderLinkError = orderRes.error;
         if (shippoOrderId) await doSetShippoOrder({ shipment_id: draftId, shippo_order_id: shippoOrderId }).catch(() => null);
       }
       // 2. HEARTBEAT immediately before money moves
@@ -893,7 +895,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       // about — say it while the operator can still act, and name the
       // action (the bare fact alone leaves them guessing)
       if (!shippoOrderId && shipTo.email && !testMode) {
-        setPurchaseMsg(prev => [prev, UNLINKED_LABEL_NOTE].filter(Boolean).join(' '));
+        setPurchaseMsg(prev => [prev, UNLINKED_LABEL_NOTE,
+          orderLinkError ? `Shippo's response to the order create: ${orderLinkError}` : ''].filter(Boolean).join(' '));
       }
       // a just-created draft is born at push_epoch 0; a flip that raced
       // this purchase bumps it and the stamp CAS refuses
@@ -1036,14 +1039,16 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       // clutter, and the stored id gets reused next attempt). Test
       // mode never links (same rationale as the primary path).
       let shippoOrderId: string | null = s.shippo_order_id || null;
+      let orderLinkError: string | null = null;
       if (!shippoOrderId && shipTo?.email && !testMode) {
-        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
+        const orderRes = await createShippoOrder(shippoHttp, shippoKey, {
           to: shipTo, orderNumber: order.order_number,
           lineItems: (s.items || []).map(i => ({
             title: i.sku_code, sku: i.sku_code,
             quantity: Math.max(1, Math.round(Number(i.qty)) || 1),
           })),
         });
+        shippoOrderId = orderRes.id; orderLinkError = orderRes.error;
         if (shippoOrderId) await doSetShippoOrder({ shipment_id: s.id, shippo_order_id: shippoOrderId }).catch(() => null);
       }
       const claim = await doClaim({ shipment_id: s.id, prior_claimed_at: '', actor: userName }) as unknown[] | null;
@@ -1066,7 +1071,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       if (fin.ok) {
         // the retry path is where link failures are LIKELIEST (flaky
         // networks) — it must not go quiet about an unlinked label
-        const linkNote = !shippoOrderId && shipTo?.email && !testMode ? UNLINKED_LABEL_NOTE : '';
+        const linkNote = !shippoOrderId && shipTo?.email && !testMode
+          ? [UNLINKED_LABEL_NOTE, orderLinkError ? `Shippo's response to the order create: ${orderLinkError}` : ''].filter(Boolean).join(' ')
+          : '';
         setRowMsg(m => ({ ...m, [s.id]: [finWarnings(fin) || 'Purchased and saved.', linkNote].filter(Boolean).join(' ') }));
         await shipmentLanded(s, s.carrier || '', result.trackingNumber || '');
       }

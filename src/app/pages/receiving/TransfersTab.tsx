@@ -497,14 +497,16 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       // links — a test order would earn a permanent "shippo emails"
       // chip for a label that will never email anyone.
       let shippoOrderId: string | null = null;
+      let orderLinkError: string | null = null;
       if (isDirect && directCandidate && String(to.email || '').trim() && !testMode) {
-        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
+        const orderRes = await createShippoOrder(shippoHttp, shippoKey, {
           to, orderNumber: directCandidate.order_number,
           lineItems: lines.map(l => {
             const sku = products.find(p => String(p.id) === l.product)?.sku_code || '';
             return { title: sku || 'item', sku, quantity: Math.max(1, Math.round(Number(l.qty)) || 1) };
           }),
         });
+        shippoOrderId = orderRes.id; orderLinkError = orderRes.error;
         if (shippoOrderId) await doSetShippoOrder({ transfer_id: draftId, shippo_order_id: shippoOrderId }).catch(() => null);
       }
       // 2. HEARTBEAT immediately before money moves: if this tab slept
@@ -554,7 +556,8 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       // an unlinked direct-ship label is a box Shippo will silently never
       // email about — say it while the operator can still act
       if (isDirect && String(to.email || '').trim() && !shippoOrderId && !testMode) {
-        setPurchaseMsg(UNLINKED_LABEL_NOTE);
+        setPurchaseMsg([UNLINKED_LABEL_NOTE,
+          orderLinkError ? `Shippo's response to the order create: ${orderLinkError}` : ''].filter(Boolean).join(' '));
       }
       setRatesResult(null); setPickedRate(''); setFLines([{ product: '', qty: '' }]); setFNote('');
       setSelectedBoxIds([]);
@@ -753,8 +756,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       // links.
       const destEmailT = String(t.destination?.email || '').trim();
       let shippoOrderId: string | null = t.shippo_order_id || null;
+      let orderLinkError: string | null = null;
       if (!shippoOrderId && t.direct_order_item_id != null && !t.direct_link_reclaimed_at && destEmailT && !testMode) {
-        shippoOrderId = await createShippoOrder(shippoHttp, shippoKey, {
+        const orderRes = await createShippoOrder(shippoHttp, shippoKey, {
           to: {
             name: sT(t.destination?.name), street1: sT(t.destination?.street1),
             street2: sT(t.destination?.street2) || undefined as unknown as string,
@@ -769,6 +773,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
           orderNumber: (t.destination_label || '').match(/#(\S+)$/)?.[1] || '',
           lineItems: (t.items || []).map(i => ({ title: i.sku_code, sku: i.sku_code, quantity: Math.max(1, Math.round(Number(i.qty)) || 1) })),
         });
+        shippoOrderId = orderRes.id; orderLinkError = orderRes.error;
         if (shippoOrderId) await doSetShippoOrder({ transfer_id: t.id, shippo_order_id: shippoOrderId }).catch(() => null);
       }
       // claim the EXCLUSIVE purchase lease BEFORE money moves: zero rows
@@ -795,7 +800,9 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
       if (fin.ok) {
         // the retry path is where link failures are LIKELIEST — it must
         // not go quiet about an unlinked direct-ship label
-        const linkNote = t.direct_order_item_id != null && destEmailT && !shippoOrderId && !testMode ? UNLINKED_LABEL_NOTE : '';
+        const linkNote = t.direct_order_item_id != null && destEmailT && !shippoOrderId && !testMode
+          ? [UNLINKED_LABEL_NOTE, orderLinkError ? `Shippo's response to the order create: ${orderLinkError}` : ''].filter(Boolean).join(' ')
+          : '';
         setDraftMsg(m => ({ ...m, [t.id]: [directMissNote(fin), linkNote].filter(Boolean).join(' ') }));
         reloadTransfers();
       }
