@@ -23,6 +23,7 @@ import type { StashedPhoto } from '@/lib/photoStash';
 import { announceHold, coordAvailable, remoteCaptureActive, remoteLandingActive, subscribeCoord } from '@/lib/photoCoord';
 import { getRates, purchaseLabel, createShippoOrder, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError, usPhoneOrUndefined } from '@/lib/shippo';
 import setShipmentShippoOrder from '@/actions/fulfillment/setShipmentShippoOrder';
+import adjustShipmentItemRecorded from '@/actions/fulfillment/adjustShipmentItemRecorded';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
@@ -139,6 +140,20 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [doGetPhoto] = useMutateAction(getShipmentPhoto);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doSetShippoOrder] = useMutateAction(setShipmentShippoOrder);
+  const [doAdjustItem] = useMutateAction(adjustShipmentItemRecorded);
+  // "Fix items" editor for ONE finalized shipment at a time: which row is
+  // open, the shared audited reason, per-line qty edits, and the add-line
+  // pickers. All server-gated — these fields are conveniences, not truth.
+  const [fixItemsId, setFixItemsId] = useState<number | null>(null);
+  const [fixReason, setFixReason] = useState('');
+  const [fixQtys, setFixQtys] = useState<Record<number, string>>({});
+  const [fixAddItem, setFixAddItem] = useState('');
+  const [fixAddQty, setFixAddQty] = useState('');
+  const [fixBusy, setFixBusy] = useState(false);
+  // panel-scoped outcome with a tone: success (emerald) must not read
+  // like the refusals (rose), and fix feedback must not blur into the
+  // row's other amber messages
+  const [fixMsg, setFixMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [rawPhotos, , , reloadPhotos] = useLoadAction(listShipmentPhotos, [order.id], { order_id: order.id });
   const photos = rows<{ id: number; shipment_id: number; thumb_data: string; created_by: string | null; created_at: string }>(rawPhotos);
   // read action invoked imperatively (getOrderTxRefs precedent): the push's
@@ -1215,6 +1230,52 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       s.items.map(i => ({ order_item_id: i.order_item_id, qty: String(i.qty), sku: i.sku_code })));
   };
 
+  // "Fix items" (MB5-303 class): correct a finalized shipment whose
+  // recorded contents don't match what the box physically held. Server
+  // (adjust_shipment_item_recorded) re-proves every gate row-locked.
+  const openFixItems = (s: ShipmentRow) => {
+    if (fixItemsId === s.id) { setFixItemsId(null); setFixMsg(null); return; }
+    setFixItemsId(s.id); setFixReason(''); setFixMsg(null);
+    setFixQtys(Object.fromEntries((s.items || []).map(i => [i.order_item_id, String(Number(i.qty))])));
+    setFixAddItem(''); setFixAddQty('');
+    // a leftover push/refund message under the new panel would read as
+    // feedback about the fix — clear it
+    setRowMsg(m => { const n = { ...m }; delete n[s.id]; return n; });
+  };
+
+  const applyItemFix = async (s: ShipmentRow, orderItemId: number, newQty: string, label: string, currentQty: string) => {
+    if (fixBusy) return;
+    const q = newQty.trim();
+    if (!QTY_RE.test(q)) { setFixMsg({ ok: false, text: 'Quantity must be a number with at most 2 decimals.' }); return; }
+    if (Number(q) === Number(currentQty)) { setFixMsg({ ok: false, text: `Already records ${fmtNum(q)} — nothing to change.` }); return; }
+    if (!fixReason.trim()) { setFixMsg({ ok: false, text: 'Enter the correction reason first — it goes in the audit trail.' }); return; }
+    // the increase cap is client-computable — name it specifically here
+    // instead of hiding it in the multi-cause refusal (server re-proves)
+    const pl = packLines.find(l => Number(l.order_item_id) === orderItemId);
+    if (Number(q) > Number(currentQty) && pl && Number(q) - Number(currentQty) > Number(pl.remaining_qty)) {
+      setFixMsg({ ok: false, text: `Only +${fmtNum(pl.remaining_qty)} remaining-to-pack for ${pl.sku_code} — the recorded total can't exceed the order line.` });
+      return;
+    }
+    if (Number(q) === 0 && !window.confirm(`Remove ${label} from this shipment's record? The quantity returns to remaining-to-pack.`)) return;
+    setFixBusy(true);
+    try {
+      const res = await doAdjustItem({ shipment_id: s.id, order_item_id: orderItemId, new_qty: q, reason: fixReason.trim(), actor: userName }) as unknown[] | null;
+      const row = Array.isArray(res) && res.length > 0 ? res[0] as { old_qty: string; new_qty: string; sku_code: string; items_left: string | number } : null;
+      if (!row) {
+        setFixMsg({ ok: false, text: 'Not changed — the new quantity may exceed remaining-to-pack, equal the current value, target a removed or digital line, or the shipment was voided meanwhile. The numbers above have refreshed — check them and retry.' });
+      } else {
+        setFixMsg({ ok: true, text: `Recorded ${row.sku_code}: ${fmtNum(row.old_qty)} → ${fmtNum(row.new_qty)}.${Number(row.items_left) === 0 ? ' Every recorded line is gone — this box now counts as empty.' : ''} Push the correction upstream (the contents note updates). Upstream statuses are NEVER downgraded — if the ordering app already marked these shipped, fix it there by hand.` });
+        setFixAddItem(''); setFixAddQty('');
+      }
+    } catch {
+      // a thrown action is AMBIGUOUS — it may or may not have saved
+      setFixMsg({ ok: false, text: 'The correction did not confirm — it may or may not have saved. The numbers refresh now; check them before retrying.' });
+    } finally {
+      reloadPackable(); reloadShipments(); reload();
+      setFixBusy(false);
+    }
+  };
+
   const drafts = shipments.filter(s => !s.finalized_at);
   const finals = shipments.filter(s => !!s.finalized_at);
 
@@ -1708,7 +1769,76 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {s.shippo_transaction_id && s.refund_status && s.refund_status !== 'SUCCESS' && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => recheckRefund(s)}>Re-check refund</Button>
                     )}
+                    {s.refund_status !== 'SUCCESS' && (
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
+                        title="Correct this shipment's recorded contents (audited) — for items marked shipped that weren't, or shipped items that were never recorded"
+                        onClick={() => openFixItems(s)}>
+                        {fixItemsId === s.id ? 'Close fix' : 'Fix items'}
+                      </Button>
+                    )}
                   </div>
+                  {fixItemsId === s.id && (
+                    <div className="rounded border border-border/60 p-2 space-y-2">
+                      <p className="text-[11px] text-muted-foreground">
+                        Correct what this box actually contained. Freed quantities return to remaining-to-pack and the shipment re-offers "Push upstream" with the corrected contents. The ordering app is never downgraded — if it already shows these items or the order as shipped, correct it there by hand.
+                      </p>
+                      <Input placeholder="Correction reason (audited) — e.g. LOBSTER R30 never went in this box" value={fixReason} onChange={e => setFixReason(e.target.value)} className="h-8 text-xs" />
+                      {(s.items || []).map(i => {
+                        const pl = packLines.find(l => Number(l.order_item_id) === Number(i.order_item_id));
+                        return (
+                          <div key={i.order_item_id} className="flex items-center gap-2">
+                            <span className="text-xs font-medium truncate">{i.sku_code}</span>
+                            <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                              recorded {fmtNum(i.qty)}{pl && Number(pl.remaining_qty) > 0 ? ` · +${fmtNum(pl.remaining_qty)} available` : ''}
+                            </span>
+                            <Input value={fixQtys[i.order_item_id] ?? String(Number(i.qty))} inputMode="decimal"
+                              aria-label={`New quantity for ${i.sku_code}`}
+                              onChange={e => setFixQtys(q => ({ ...q, [i.order_item_id]: e.target.value }))}
+                              className="h-7 w-16 text-xs ml-auto" />
+                            <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]"
+                              disabled={fixBusy || Number(fixQtys[i.order_item_id] ?? i.qty) === Number(i.qty)}
+                              onClick={() => applyItemFix(s, Number(i.order_item_id), fixQtys[i.order_item_id] ?? String(Number(i.qty)), i.sku_code, String(i.qty))}>
+                              Set
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] text-rose-400" disabled={fixBusy}
+                              onClick={() => applyItemFix(s, Number(i.order_item_id), '0', `${i.sku_code} × ${fmtNum(i.qty)}`, String(i.qty))}>
+                              Remove
+                            </Button>
+                          </div>
+                        );
+                      })}
+                      {(s.items || []).length === 0 && (
+                        <p className="text-[11px] text-amber-300">Every recorded line is gone — this box now counts as empty.</p>
+                      )}
+                      {(() => {
+                        const onShipment = new Set((s.items || []).map(i => Number(i.order_item_id)));
+                        const addable = packLines.filter(l => !onShipment.has(Number(l.order_item_id)) && Number(l.remaining_qty) > 0);
+                        if (addable.length === 0) return null;
+                        return (
+                          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40">
+                            <Select value={fixAddItem} onValueChange={setFixAddItem}>
+                              <SelectTrigger className="h-7 w-52 text-xs"><SelectValue placeholder="Add a line that DID ship…" /></SelectTrigger>
+                              <SelectContent>
+                                {addable.map(l => (
+                                  <SelectItem key={l.order_item_id} value={String(l.order_item_id)}>
+                                    {l.sku_code} (remaining {fmtNum(l.remaining_qty)})
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Input placeholder="qty" value={fixAddQty} inputMode="decimal" aria-label="Quantity to add"
+                              onChange={e => setFixAddQty(e.target.value)} className="h-7 w-14 text-xs" />
+                            <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]"
+                              disabled={fixBusy || !fixAddItem || !(Number(fixAddQty) > 0)}
+                              onClick={() => applyItemFix(s, Number(fixAddItem), fixAddQty, packLines.find(l => String(l.order_item_id) === fixAddItem)?.sku_code || 'line', '0')}>
+                              Add
+                            </Button>
+                          </div>
+                        );
+                      })()}
+                      {fixMsg && <p className={`text-[11px] ${fixMsg.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{fixMsg.text}</p>}
+                    </div>
+                  )}
                   {rowMsg[s.id] && <p className="text-amber-200">{rowMsg[s.id]}</p>}                </div>
               ))}
             </div>
