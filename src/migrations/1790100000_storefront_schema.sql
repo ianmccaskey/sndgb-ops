@@ -341,6 +341,11 @@ CREATE TABLE IF NOT EXISTS storefront.payments (
   onchain JSONB,                         -- {token, amount, to, from, block_time, native}
   status storefront.payment_status NOT NULL DEFAULT 'pending',
   verify_error TEXT,
+  -- re-verification schedule for claims the chain hasn't confirmed yet:
+  -- the worker only picks rows whose next_verify_at has passed (exponential
+  -- backoff, 1 min → 1 h), so an outage costs dozens of provider calls, not thousands
+  verify_attempts INT NOT NULL DEFAULT 0,
+  next_verify_at TIMESTAMPTZ,
   verified_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
