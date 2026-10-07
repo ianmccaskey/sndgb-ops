@@ -168,6 +168,11 @@ CREATE TABLE IF NOT EXISTS storefront.orders (
   processor_fee_usd NUMERIC(12,2) NOT NULL DEFAULT 0,
   total_usd NUMERIC(12,2) NOT NULL DEFAULT 0,
   customer_note TEXT,
+  -- idempotency: the order form mints a token per load; a retried submission
+  -- (lost response, double tap) finds its order instead of minting another.
+  -- Members may hold several open orders in a buy on purpose (ordering for a
+  -- friend, splitting by vendor speed); the storefront asks before a second.
+  client_token UUID,
   placed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   paid_at TIMESTAMPTZ,
   cancelled_at TIMESTAMPTZ,
@@ -177,6 +182,8 @@ CREATE TABLE IF NOT EXISTS storefront.orders (
 );
 CREATE INDEX IF NOT EXISTS sf_orders_campaign_status_idx ON storefront.orders (group_buy_id, status);
 CREATE INDEX IF NOT EXISTS sf_orders_user_idx ON storefront.orders (auth_user_id, placed_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS sf_orders_client_token_uniq ON storefront.orders (auth_user_id, client_token)
+  WHERE client_token IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS storefront.order_items (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
