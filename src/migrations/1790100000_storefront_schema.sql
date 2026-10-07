@@ -343,8 +343,12 @@ CREATE TABLE IF NOT EXISTS storefront.payments (
 CREATE INDEX IF NOT EXISTS sf_payments_gb_order_idx ON storefront.payments (gb_order_id);
 CREATE INDEX IF NOT EXISTS sf_payments_store_order_idx ON storefront.payments (store_order_id);
 -- one live claim per on-chain tx (rejected rows free the hash, mirroring Ops)
-CREATE UNIQUE INDEX IF NOT EXISTS sf_payments_tx_live_uniq ON storefront.payments (tx_hash_canonical)
-  WHERE tx_hash_canonical IS NOT NULL AND status <> 'rejected';
+-- Deliberately NOT unique: campaign wallets are shared, so a tx hash carries no
+-- proof of which order it pays. Two orders may claim the same hash; Ops
+-- reconciliation keeps one and rejects the other. A unique index would let a
+-- wrong (or malicious) claim block the real payer.
+CREATE INDEX IF NOT EXISTS sf_payments_tx_hash_idx ON storefront.payments (tx_hash_canonical)
+  WHERE tx_hash_canonical IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS storefront.near_swaps (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
