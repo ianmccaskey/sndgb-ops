@@ -148,6 +148,12 @@ function importUpsertOrder() {
         customer_note = EXCLUDED.customer_note,
         raw_import = EXCLUDED.raw_import
       WHERE orders.group_buy_id = EXCLUDED.group_buy_id
+        -- and never let one upstream overwrite another's order: a storefront
+        -- row may only update a storefront row, an ordering-app/paste row
+        -- only an ordering-app/paste row (both describe the same upstream).
+        -- Same number from the other source = a numbering collision, refused.
+        AND (COALESCE(orders.raw_import->>'source', '') = 'storefront')
+            = (COALESCE(EXCLUDED.raw_import->>'source', '') = 'storefront')
       RETURNING id, total_usd
       ), targets AS (
         -- classify every existing row matched by the incoming item list

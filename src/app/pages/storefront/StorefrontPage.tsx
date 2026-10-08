@@ -38,7 +38,7 @@ type CampaignSettingsRow = {
   next_order_seq: number;
 };
 type OptionRow = { id: number; rail: string; token: string; address: string; label: string | null; active: boolean; sort: number; orders_using: string };
-type StatsRow = { unpaid: string; payment_submitted: string; paid: string; cancelled: string; not_imported: string; last_placed_at: string | null };
+type StatsRow = { unpaid: string; payment_submitted: string; paid: string; cancelled: string; not_imported: string; number_collisions: string; last_placed_at: string | null };
 
 const STOREFRONT_ORIGIN = 'https://p2collective.app';
 const RAIL_LABEL: Record<string, string> = { eth: 'Ethereum', sol: 'Solana', base: 'Base', cash: 'Cash' };
@@ -312,6 +312,11 @@ export function StorefrontPage() {
               <span className="font-mono">{stats.unpaid}</span> unpaid · <span className="font-mono">{stats.payment_submitted}</span> payment submitted · <span className="font-mono">{stats.paid}</span> paid · <span className="font-mono">{stats.cancelled}</span> cancelled
               {stats.last_placed_at && <span className="text-muted-foreground"> · last placed {new Date(stats.last_placed_at).toLocaleString()}</span>}
             </p>
+            {Number(stats.number_collisions) > 0 && (
+              <p className="text-rose-400">
+                {stats.number_collisions} storefront order number(s) coincide with ordering-app orders in this campaign — the import refuses them. This should be impossible (the sequence starts above every existing number); tell the organizers before importing.
+              </p>
+            )}
             {Number(stats.not_imported) > 0 ? (
               <p className="text-amber-300">
                 {stats.not_imported} not yet imported here — <Link to="/import" className="text-cyan-300 hover:underline">Import → Refresh from storefront</Link> brings them into demand and reconciliation.

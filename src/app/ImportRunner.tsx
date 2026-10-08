@@ -200,7 +200,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       raw_import: JSON.stringify(o.raw),
     })) as { id: number }[] | { id: number };
     const orderId = Array.isArray(upserted) ? upserted[0]?.id : upserted?.id;
-    if (!orderId) throw new Error('Refused: this order number already exists under a different campaign');
+    if (!orderId) throw new Error('Refused: this order number already exists under a different campaign or from a different source (ordering app vs storefront)');
 
     // Upsert every row FIRST and prove the whole replacement set is writable;
     // only then prune items removed upstream. A mid-loop failure leaves stale

@@ -1,10 +1,15 @@
 import { action } from '@uibakery/data';
 
 /**
- * Create or update a campaign's storefront publishing row. The order-number
- * sequence is never touched here (it is minted under the storefront's own
- * lock); the code is uppercased and, once an order exists, frozen — order
- * numbers already carry it.
+ * Create or update a campaign's storefront publishing row.
+ *
+ * Order numbers are `YYYY-<CODE>-NNN`, minted by the storefront from
+ * next_order_seq under its own lock. A campaign may already hold orders with
+ * that shape from the ordering app (base44 numbers look identical), so the
+ * sequence always starts ABOVE every existing local or storefront number
+ * carrying the code — on creation, and again if the code changes while no
+ * storefront order exists yet. Once a storefront order carries the code it is
+ * frozen. The code is uppercased; the sequence is never lowered.
  */
 function upsertStorefrontCampaign() {
   return action('upsertStorefrontCampaign', 'SQL', {
@@ -19,7 +24,7 @@ function upsertStorefrontCampaign() {
                NULLIF({{params.near_default_rail}}::text, '')::payment_rail AS near_default_rail,
                NULLIF({{params.insurance_rate_pct}}::text, '')::numeric AS insurance_rate_pct
       ), guard AS (
-        -- refuse a code change once an order number carries the old code
+        -- refuse a code change once a storefront order number carries the old code
         SELECT inp.*
         FROM inp
         WHERE inp.code ~ '^[A-Z0-9]{2,8}$'
@@ -28,19 +33,35 @@ function upsertStorefrontCampaign() {
             JOIN storefront.orders o ON o.group_buy_id = cs.group_buy_id
             WHERE cs.group_buy_id = inp.group_buy_id AND cs.code <> inp.code
           )
+      ), taken AS (
+        -- highest sequence already used with this code, in ANY year and from
+        -- EITHER source: the next storefront number must clear all of them
+        SELECT COALESCE(MAX(seq), 0) AS max_seq
+        FROM (
+          SELECT (regexp_match(o.order_number, '^[0-9]{4}-' || g.code || '-([0-9]+)$'))[1]::int AS seq
+          FROM guard g, orders o
+          WHERE o.order_number ~ ('^[0-9]{4}-' || g.code || '-[0-9]+$')
+          UNION ALL
+          SELECT (regexp_match(so.order_number, '^[0-9]{4}-' || g.code || '-([0-9]+)$'))[1]::int AS seq
+          FROM guard g, storefront.orders so
+          WHERE so.order_number ~ ('^[0-9]{4}-' || g.code || '-[0-9]+$')
+        ) s
       )
       INSERT INTO storefront.campaign_settings
-        (group_buy_id, code, published, description_md, payment_instructions_md, near_default_rail, insurance_rate_pct)
-      SELECT group_buy_id, code, published, description_md, payment_instructions_md, near_default_rail, COALESCE(insurance_rate_pct, 1.27)
-      FROM guard
+        (group_buy_id, code, published, description_md, payment_instructions_md, near_default_rail, insurance_rate_pct, next_order_seq)
+      SELECT g.group_buy_id, g.code, g.published, g.description_md, g.payment_instructions_md, g.near_default_rail,
+             COALESCE(g.insurance_rate_pct, 1.27), t.max_seq + 1
+      FROM guard g, taken t
       ON CONFLICT (group_buy_id) DO UPDATE SET
         code = EXCLUDED.code,
         published = EXCLUDED.published,
         description_md = EXCLUDED.description_md,
         payment_instructions_md = EXCLUDED.payment_instructions_md,
         near_default_rail = EXCLUDED.near_default_rail,
-        insurance_rate_pct = EXCLUDED.insurance_rate_pct
-      RETURNING group_buy_id, code, published
+        insurance_rate_pct = EXCLUDED.insurance_rate_pct,
+        -- never lowered; raised when the (new) code already has higher numbers out there
+        next_order_seq = GREATEST(storefront.campaign_settings.next_order_seq, EXCLUDED.next_order_seq)
+      RETURNING group_buy_id, code, published, next_order_seq
     `,
   });
 }
