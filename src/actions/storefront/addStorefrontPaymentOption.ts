@@ -22,7 +22,11 @@ function addStorefrontPaymentOption() {
       INSERT INTO storefront.campaign_payment_options (group_buy_id, rail, token, address, label, active, sort)
       SELECT group_buy_id, rail, token, address, label, true, sort
       FROM inp
-      WHERE token <> '' AND address <> ''
+      WHERE address <> ''
+        -- the token is what members are told to send: an allowlist, never free text
+        -- (the same rule is a CHECK on the table, migration 1790100800)
+        AND ((rail IN ('eth', 'sol', 'base') AND token IN ('USDC', 'USDT'))
+             OR (rail = 'cash' AND token IN ('ZELLE', 'VENMO', 'PAYPAL')))
         AND (rail <> 'eth' AND rail <> 'base' OR address ~ '^0x[0-9a-fA-F]{40}$')
         AND (rail <> 'sol' OR address ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$')
       RETURNING id

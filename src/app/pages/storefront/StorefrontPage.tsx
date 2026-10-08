@@ -127,7 +127,7 @@ export function StorefrontPage() {
       const res = await doAddOpt({ group_buy_id: groupBuyId, rail: optRail, token: optToken, address: optAddress, label: optLabel, sort: String(options.length) }) as unknown[] | null;
       const touched = Array.isArray(res) ? res.length > 0 : !!res;
       if (!touched) {
-        setOptMsg(optRail === 'cash' ? 'Refused: enter the handle members pay (email, phone or @username) and a method.' : `Refused: that is not a valid ${RAIL_LABEL[optRail]} address.`);
+        setOptMsg(optRail === 'cash' ? 'Refused: enter the handle members pay (email, phone or @username) and a method.' : `Refused: that is not a valid ${RAIL_LABEL[optRail]} address (and the token must be USDC or USDT).`);
         return;
       }
       setOptAddress(''); setOptLabel(''); setOptMsg('Added.');
@@ -287,7 +287,13 @@ export function StorefrontPage() {
                   </SelectContent>
                 </Select>
               ) : (
-                <Input id="opt-token" value={optToken} onChange={e => setOptToken(e.target.value.toUpperCase())} className="font-mono" placeholder="USDC" />
+                <Select value={optToken} onValueChange={setOptToken}>
+                  <SelectTrigger id="opt-token"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USDC">USDC</SelectItem>
+                    <SelectItem value="USDT">USDT</SelectItem>
+                  </SelectContent>
+                </Select>
               )}
             </div>
             <div className="space-y-1">

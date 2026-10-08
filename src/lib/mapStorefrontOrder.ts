@@ -186,14 +186,31 @@ export function mapStorefrontOrders(rowsIn: StorefrontOrderRow[]): MappedOrders 
   // rest at import. Make the duplicate visible: in the preview, and on each
   // involved order as an admin-note line the runner writes.
   const byHash = new Map<string, string[]>();
+  const canon = (h: string) => (/^0x[0-9a-fA-F]{64}$/.test(h) ? h.toLowerCase() : h);
   for (const o of result.orders) {
     for (const p of o.payments) {
       if (p.kind !== 'tx_hash') continue;
-      const key = /^0x[0-9a-fA-F]{64}$/.test(p.value) ? p.value.toLowerCase() : p.value;
-      byHash.set(key, [...(byHash.get(key) || []), o.orderNumber]);
+      byHash.set(canon(p.value), [...(byHash.get(canon(p.value)) || []), o.orderNumber]);
     }
   }
-  const conflicts = [...byHash.entries()].filter(([, nums]) => nums.length > 1).map(([txHash, orderNumbers]) => ({ txHash, orderNumbers }));
+  // A CANCELLED storefront order's live claims count too: an earlier import
+  // may have landed its hash here, where it blocks the live claimant while
+  // sitting on an order the views exclude. Name it, marked, so the conflict
+  // is seen from the live order.
+  for (const r of rowsIn) {
+    if (r.status !== 'cancelled') continue;
+    const num = String(r.order_number || '').trim();
+    for (const p of json(r.payments)) {
+      if (!p.tx_hash || p.status === 'rejected') continue;
+      const key = canon(String(p.tx_hash).trim());
+      byHash.set(key, [...(byHash.get(key) || []), `${num} (cancelled)`]);
+    }
+  }
+  // only conflicts that touch at least one LIVE order matter (two cancelled
+  // orders sharing a hash is history, not a reconciliation problem)
+  const conflicts = [...byHash.entries()]
+    .filter(([, nums]) => nums.length > 1 && nums.some(n => !n.endsWith('(cancelled)')))
+    .map(([txHash, orderNumbers]) => ({ txHash, orderNumbers }));
   if (conflicts.length > 0) {
     result.conflicts = conflicts;
     for (const o of result.orders) {
