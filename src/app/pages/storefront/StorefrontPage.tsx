@@ -100,7 +100,9 @@ export function StorefrontPage() {
       }) as unknown[] | null;
       const touched = Array.isArray(res) ? res.length > 0 : !!res;
       if (!touched) {
-        setSaveMsg(hasOrders ? 'Refused: the code cannot change once orders carry it.' : 'Refused: check the code (2–8 letters or digits).');
+        setSaveMsg(published && activeRails.size === 0
+          ? 'Refused: add at least one active payment option before publishing.'
+          : hasOrders ? 'Refused: the code cannot change once orders carry it.' : 'Refused: check the code (2–8 letters or digits).');
       } else {
         setSaveMsg(published ? 'Saved — the campaign is live on the storefront.' : 'Saved (not published).');
         reloadCs(); reloadGroupBuys(); reloadStats();
@@ -140,8 +142,11 @@ export function StorefrontPage() {
 
   const toggleOption = async (o: OptionRow) => {
     if (groupBuyId == null) return;
+    setOptMsg('');
     try {
-      await doSetActive({ id: o.id, group_buy_id: groupBuyId, active: String(!o.active) });
+      const res = await doSetActive({ id: o.id, group_buy_id: groupBuyId, active: String(!o.active) }) as unknown[] | null;
+      const touched = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!touched) setOptMsg('Refused: a published campaign must keep one active payment option — add the replacement first, or unpublish.');
       reloadOpts();
     } catch (e: unknown) {
       setOptMsg(e instanceof Error ? e.message : 'Failed to update');

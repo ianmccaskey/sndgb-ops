@@ -48,7 +48,7 @@ export type StorefrontOrderRow = {
   customer_note: string | null;
   updated_at: string | null;
   items: { sku: string | null; qty: string | number; direct_ship: boolean; name: string | null; unit_price_usd?: string | number | null; split_fee_usd?: string | number | null }[] | string;
-  payments: { rail: string; method: string; tx_hash: string | null; receipt_ref: string | null; status: string; verified_usd: string | null }[] | string;
+  payments: { rail: string; method: string; tx_hash: string | null; receipt_ref: string | null; status: string; verified_usd: string | null; verify_error?: string | null }[] | string;
 };
 
 const RAILS = new Set(['eth', 'sol', 'base', 'cash']);
@@ -107,9 +107,18 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
   // imported on THAT network, never the order header's. A hash that does not
   // fit its rail is an identity failure, not something to guess at.
   const payments: ParsedPayment[] = [];
+  // claims the storefront has since REJECTED (failed on-chain, wrong wallet,
+  // never found): not evidence — and a local payment imported while the
+  // claim was still pending must be rejected here too, or it keeps the
+  // hash slot and blocks reconciliation. Travels as raw.rejected_claims.
+  const rejected: { hash: string; reason: string }[] = [];
   for (const p of json(r.payments)) {
     const rail = String(p.rail || '');
     const method = String(p.method || '');
+    if (p.status === 'rejected') {
+      if (p.tx_hash) rejected.push({ hash: String(p.tx_hash).trim(), reason: String(p.verify_error || 'rejected by the storefront') });
+      continue;
+    }
     if (p.tx_hash) {
       const hash = String(p.tx_hash).trim();
       const fits = rail === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(hash) : (rail === 'eth' || rail === 'base') && /^0x[0-9a-fA-F]{64}$/.test(hash);
@@ -162,6 +171,7 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
       telegram_username: String(r.telegram_username || ''),
       split_fees_usd: String(r.split_fees_usd ?? ''),
       updated_at: String(r.updated_at || ''),
+      ...(rejected.length > 0 ? { rejected_claims: JSON.stringify(rejected) } : {}),
     },
   };
 }

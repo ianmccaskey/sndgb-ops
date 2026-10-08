@@ -34,18 +34,19 @@ function listStorefrontOrders() {
              COALESCE((
                SELECT json_agg(json_build_object(
                         'rail', pay.rail::text, 'method', pay.method::text, 'tx_hash', pay.tx_hash,
-                        'receipt_ref', pay.receipt_ref, 'status', pay.status::text, 'verified_usd', pay.verified_usd)
+                        'receipt_ref', pay.receipt_ref, 'status', pay.status::text, 'verified_usd', pay.verified_usd,
+                        'verify_error', pay.verify_error)
                       ORDER BY pay.id)
                FROM storefront.payments pay
                WHERE pay.gb_order_id = o.id
-                 -- claim states and what they mean for THIS app:
+                 -- EVERY claim, with its state; the mapper decides:
                  --   pending  — the storefront could not reach/index it yet: evidence to verify here
                  --   verified — confirmed transfer to our wallet covering the total
                  --   mismatch — confirmed transfer to our wallet, amount differs: real money,
                  --              recon must see the shortfall/overpayment
                  --   rejected — failed on-chain, paid someone else's wallet, or never found
-                 --              in a week: NOT a payment, never imported
-                 AND pay.status IN ('pending', 'verified', 'mismatch')
+                 --              in a week: NOT a payment — never imported, and a local
+                 --              payment imported while it was still pending is rejected too
              ), '[]'::json) AS payments
       FROM storefront.orders o
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint

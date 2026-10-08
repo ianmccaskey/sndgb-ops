@@ -33,6 +33,11 @@ function upsertStorefrontCampaign() {
             JOIN storefront.orders o ON o.group_buy_id = cs.group_buy_id
             WHERE cs.group_buy_id = inp.group_buy_id AND cs.code <> inp.code
           )
+          -- never publish a campaign members could not pay: at least one active option
+          AND (NOT inp.published OR EXISTS (
+            SELECT 1 FROM storefront.campaign_payment_options po
+            WHERE po.group_buy_id = inp.group_buy_id AND po.active
+          ))
       ), taken AS (
         -- highest sequence already used with this code, in ANY year and from
         -- EITHER source: the next storefront number must clear all of them

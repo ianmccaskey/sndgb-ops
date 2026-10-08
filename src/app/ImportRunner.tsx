@@ -6,6 +6,7 @@ import upsertOrderItem from '@/actions/orders/upsertOrderItem';
 import deleteOrderItemsNotIn from '@/actions/orders/deleteOrderItemsNotIn';
 import importPayments from '@/actions/orders/importPayments';
 import noteStorefrontClaimConflict from '@/actions/storefront/noteStorefrontClaimConflict';
+import syncStorefrontRejectedClaims from '@/actions/storefront/syncStorefrontRejectedClaims';
 import syncOrderStatus from '@/actions/orders/syncOrderStatus';
 import { useApp } from '@/app/AppContext';
 import { ParsedOrder } from '@/lib/parseOrderImport';
@@ -122,6 +123,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   const [doPruneItems] = useMutateAction(deleteOrderItemsNotIn);
   const [doPayments] = useMutateAction(importPayments);
   const [doClaimConflict] = useMutateAction(noteStorefrontClaimConflict);
+  const [doRejectedClaims] = useMutateAction(syncStorefrontRejectedClaims);
   const [doSyncStatus] = useMutateAction(syncOrderStatus);
 
   const [job, setJob] = useState<ImportJob>(IDLE);
@@ -132,11 +134,11 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   // startImport is a stable callback, so the long-running loop must read the
   // CURRENT user and mutate functions at execution time — a first-render
   // closure would freeze 'Admin' (useUser resolves late) into audit rows.
-  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doSyncStatus });
-  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doSyncStatus };
+  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doSyncStatus });
+  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doSyncStatus };
 
   const importOne = async (o: ParsedOrder, gbId: number): Promise<ImportRowResult> => {
-    const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict } = envRef.current;
+    const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims } = envRef.current;
     // An empty item set would erase a previously imported order's items on
     // prune. Refuse it here for every source (pull and paste).
     if (o.items.length === 0) {
@@ -278,9 +280,22 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       }
     }
 
+    // Claims the storefront rejected after we imported them pending: reject
+    // the local copies too (idempotent; verified ones are never touched).
+    let rejectedSynced = 0;
+    if (o.raw.rejected_claims) {
+      try {
+        const res = await withRetry(() => doRejectedClaims({ order_id: orderId, rejected: o.raw.rejected_claims, actor: userName })) as unknown[] | null;
+        rejectedSynced = Array.isArray(res) ? res.length : (res ? 1 : 0);
+      } catch {
+        // a malformed marker must not fail the import of a valid order
+      }
+    }
+
     const extras = [
       skippedHashes > 0 ? `${skippedHashes} hash(es) already held elsewhere` : '',
       conflictNoted > 0 ? `${conflictNoted} claim conflict(s) noted on the order` : '',
+      rejectedSynced > 0 ? `${rejectedSynced} local payment(s) rejected to match the storefront` : '',
     ].filter(Boolean);
     return { orderNumber: o.orderNumber, ok: true, message: `${mergedItems.length} items, ${o.payments.length} payment refs${extras.length ? ` · ${extras.join(' · ')}` : ''}` };
   };
