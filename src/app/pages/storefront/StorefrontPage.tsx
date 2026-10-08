@@ -161,10 +161,10 @@ export function StorefrontPage() {
     <div className="p-4 sm:p-6 space-y-4 max-w-5xl">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
-          <Globe className="h-6 w-6 text-cyan-300" /> Storefront
+          <Globe className="h-6 w-6 text-cyan-300" /> Campaign Setup
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          How <span className="font-medium">{groupBuy?.name}</span> appears on p2collective.app. Members order there; their orders come back in through Import → Refresh from storefront.
+          How <span className="font-medium">{groupBuy?.name}</span> is offered on p2collective.app: its order-number code, the wallets members pay, and whether it is published. Members order there; their orders come back in through Import → Refresh from storefront. (The P² store itself is set up in the P2 Collective Orders app.)
           {groupBuy && groupBuy.status !== 'open' && (
             <span className="block text-amber-300 mt-0.5">Campaign status is <span className="font-mono">{groupBuy.status}</span> — members can see a published campaign, but only an <span className="font-mono">open</span> one takes orders.</span>
           )}
@@ -317,7 +317,7 @@ export function StorefrontPage() {
 
       {cs && stats && (
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-base">Storefront orders</CardTitle></CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-base">Orders placed on p2collective.app</CardTitle></CardHeader>
           <CardContent className="text-sm space-y-1">
             <p>
               <span className="font-mono">{stats.unpaid}</span> unpaid · <span className="font-mono">{stats.payment_submitted}</span> payment submitted · <span className="font-mono">{stats.paid}</span> paid · <span className="font-mono">{stats.cancelled}</span> cancelled

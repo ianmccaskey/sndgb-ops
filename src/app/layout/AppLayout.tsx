@@ -43,7 +43,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', href: '/', icon: Home },
   { label: 'Orders', href: '/orders', icon: ShoppingCart },
   { label: 'Import', href: '/import', icon: ClipboardPaste },
-  { label: 'Storefront', href: '/storefront', icon: Globe },
+  { label: 'Campaign Setup', href: '/storefront', icon: Globe },
   { label: 'Reconciliation', href: '/recon', icon: Scale },
   { label: 'Vendors', href: '/vendors', icon: Store },
   { label: 'Products', href: '/products', icon: Package },

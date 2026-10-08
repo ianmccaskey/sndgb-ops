@@ -38,6 +38,15 @@ where the code fails to honour one; do not propose replacing the decision.
 - **Rejected claims are released before any payment imports**, for every
   pulled row (live, cancelled, or skipped by validation); a release that fails
   aborts the run before anything is written.
+- **This app sets up CAMPAIGNS for p2collective.app; it never runs the P² store.**
+  The nav entry is "Campaign Setup" (route `/storefront`, files under
+  `src/app/pages/storefront/` — names kept, label changed): order-number code,
+  payment options, published flag, import stats. Campaign-side admin that
+  follows (COA reports for campaign products, polls) belongs here too. Store
+  admin — house listings, seller applications and approval, store orders,
+  member verification status — belongs in the **P2 Collective Orders** app,
+  even though some of those tables live in this database. Settled with the
+  owner 2026-10-08; do not add store pages here.
 - **Direct ship is routing only** (no customer surcharge); **split-kit fees are
   per-line snapshots**; **cash processor fee is a true gross-up** defined by
   the storefront and imported as stated.
