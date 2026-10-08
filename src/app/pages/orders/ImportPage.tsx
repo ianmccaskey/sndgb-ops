@@ -11,6 +11,8 @@ import { fmtUSD } from '@/lib/fmt';
 import { parseOrderPaste, ParseResult } from '@/lib/parseOrderImport';
 import { B44_DEFAULT_APP_ID, B44Order, b44OrderExists, listB44Orders } from '@/lib/base44';
 import { mapB44Orders, MappedOrders } from '@/lib/mapB44Order';
+import listStorefrontOrders from '@/actions/storefront/listStorefrontOrders';
+import { mapStorefrontOrders, StorefrontOrderRow } from '@/lib/mapStorefrontOrder';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -36,6 +38,16 @@ export function ImportPage() {
   const importing = job.running;
 
   const enabled = groupBuyId != null;
+  // A campaign set up on the storefront (p2collective.app) pulls its orders
+  // from our own database instead of the ordering app. Preview and import
+  // below are identical; only the source differs — and the base44-only
+  // machinery (token, external ids, deleted-upstream diff) stays off.
+  const sfMode = !!groupBuy?.storefront_code;
+  const [rawSf, sfLoading, , reloadSf] = useLoadAction(listStorefrontOrders, [groupBuyId, sfMode], { group_buy_id: groupBuyId }, { enabled: enabled && sfMode });
+  const sfMapped = useMemo<MappedOrders | null>(
+    () => (sfMode ? mapStorefrontOrders(rows<StorefrontOrderRow>(rawSf)) : null),
+    [sfMode, rawSf],
+  );
   const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const campaignSkus = useMemo(
     () => new Set(rows<CampaignProduct>(rawProducts).map(p => p.sku_code)),
@@ -63,7 +75,7 @@ export function ImportPage() {
     appId: settings.base44_app_id || B44_DEFAULT_APP_ID,
     token: settings.base44_token || '',
   }), [settings.base44_app_id, settings.base44_token]);
-  const canPull = !!cfg.token && !!groupBuy?.external_id;
+  const canPull = !sfMode && !!cfg.token && !!groupBuy?.external_id;
   // Raw pulled orders stay bound to their FULL source identity — the local
   // campaign AND the ordering-app source that produced them (app id, external
   // campaign id, token). The snapshot goes inert the moment any of those
@@ -114,8 +126,8 @@ export function ImportPage() {
   }, [canPull, catalogLoading, groupBuyId, cfg, groupBuy?.external_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pulledMapped = useMemo<MappedOrders | null>(
-    () => (pulledFresh ? mapB44Orders(pulledFresh.orders, skuByExternalId) : null),
-    [pulledFresh, skuByExternalId],
+    () => (sfMode ? sfMapped : pulledFresh ? mapB44Orders(pulledFresh.orders, skuByExternalId) : null),
+    [sfMode, sfMapped, pulledFresh, skuByExternalId],
   );
 
   const parsed = useMemo(
@@ -221,26 +233,38 @@ export function ImportPage() {
           <ClipboardPaste className="h-6 w-6 text-cyan-300" /> Import Orders
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Orders for <span className="font-medium">{groupBuy?.name}</span> pull straight from the ordering app;
-          the paste box below stays as a fallback. Re-importing the same orders is safe — they update in place, they don't duplicate.
+          {sfMode ? (
+            <>Orders for <span className="font-medium">{groupBuy?.name}</span> come from the storefront (p2collective.app, code <span className="font-mono">{groupBuy?.storefront_code}</span>);
+            the paste box below stays as a fallback. Re-importing the same orders is safe — they update in place, they don't duplicate.</>
+          ) : (
+            <>Orders for <span className="font-medium">{groupBuy?.name}</span> pull straight from the ordering app;
+            the paste box below stays as a fallback. Re-importing the same orders is safe — they update in place, they don't duplicate.</>
+          )}
         </p>
       </div>
 
       <Card>
         <CardContent className="pt-4 space-y-2">
           <div className="flex items-center gap-3 flex-wrap">
-            <Button size="sm" onClick={pull} disabled={!canPull || pulling}>
-              <CloudDownload className="w-4 h-4 mr-1" />
-              {pulling ? 'Pulling…' : 'Pull from ordering app'}
-            </Button>
-            {!canPull && (
+            {sfMode ? (
+              <Button size="sm" onClick={() => reloadSf()} disabled={sfLoading}>
+                <CloudDownload className="w-4 h-4 mr-1" />
+                {sfLoading ? 'Loading…' : 'Refresh from storefront'}
+              </Button>
+            ) : (
+              <Button size="sm" onClick={pull} disabled={!canPull || pulling}>
+                <CloudDownload className="w-4 h-4 mr-1" />
+                {pulling ? 'Pulling…' : 'Pull from ordering app'}
+              </Button>
+            )}
+            {!sfMode && !canPull && (
               <p className="text-sm text-muted-foreground">
                 Needs the ordering-app JWT (Settings) and a linked campaign (Products → Ordering app).
               </p>
             )}
-            {pulledMapped && text.trim() === '' && !pulling && (
+            {pulledMapped && text.trim() === '' && !pulling && !sfLoading && (
               <p className="text-sm text-muted-foreground">
-                {pulledMapped.orders.length} orders pulled from the ordering app
+                {pulledMapped.orders.length} orders {sfMode ? 'on the storefront' : 'pulled from the ordering app'}
                 {pulledMapped.cancellations.length > 0 ? `, ${pulledMapped.cancellations.length} upstream cancellation(s)` : ''}
                 {pulledMapped.errors.length > 0 ? `, ${pulledMapped.errors.length} skipped` : ''}.
                 {statusCounts.length > 0 && (
@@ -281,7 +305,7 @@ export function ImportPage() {
             )}
             {cancellations.length > 0 && (
               <div className="rounded border border-orange-400/40 bg-orange-400/10 p-2 text-sm text-orange-300 space-y-1">
-                <p className="font-semibold">Cancelled/refunded upstream — importing will update their local status (views already exclude them from demand and revenue):</p>
+                <p className="font-semibold">Cancelled{sfMode ? ' on the storefront' : '/refunded upstream'} — importing will update their local status (views already exclude them from demand and revenue):</p>
                 {cancellations.map(c => {
                   const res = results.find(r => r.orderNumber === c.orderNumber);
                   return (

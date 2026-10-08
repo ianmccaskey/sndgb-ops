@@ -17,6 +17,7 @@ import { FinancialsPage } from '@/app/pages/financials/FinancialsPage';
 import { PlannerPage } from '@/app/pages/planner/PlannerPage';
 import { ReceivingPage } from '@/app/pages/receiving/ReceivingPage';
 import { SettingsPage } from '@/app/pages/settings/SettingsPage';
+import { StorefrontPage } from '@/app/pages/storefront/StorefrontPage';
 
 function App() {
   return (
@@ -36,6 +37,7 @@ function App() {
             <Route path="/planner" element={<PlannerPage />} />
             <Route path="/receiving" element={<ReceivingPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/storefront" element={<StorefrontPage />} />
           </Routes>
           <ImportProgressWidget />
         </AppLayout>

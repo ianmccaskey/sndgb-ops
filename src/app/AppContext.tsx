@@ -17,6 +17,9 @@ export type GroupBuyRow = {
   cash_processor_fee_pct: string;
   reconcile_tolerance_usd: string;
   notes: string | null;
+  /** storefront.campaign_settings — null until the campaign is set up for p2collective.app */
+  storefront_code: string | null;
+  storefront_published: boolean | null;
 };
 
 export interface AppState {

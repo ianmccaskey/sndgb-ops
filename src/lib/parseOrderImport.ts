@@ -51,6 +51,9 @@ export type ParsedOrder = {
    * (paste layout has no insurance column) — the DB keeps its current value
    * so a paste re-import can never erase pulled insurance. */
   shippingInsurance: number | null;
+  /** cash-rail processor gross-up when the source states it (storefront);
+   * undefined/null = derive it from the total residual (base44, paste). */
+  processorFee?: number | null;
   total: number;
   placedAt: string | null; // ISO
   items: ParsedItem[];

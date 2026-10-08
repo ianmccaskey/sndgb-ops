@@ -144,7 +144,11 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // explicit. Insurance is part of the known fees — without it the
     // derivation would mislabel insurance dollars as processor gross-up.
     const base = o.subtotal + o.tip + o.adminFee + o.shippingFee + (o.shippingInsurance ?? 0);
-    const processorFee = o.paymentRail === 'cash' && o.total > base ? +(o.total - base).toFixed(2) : 0;
+    // A source that states the gross-up (storefront) wins: its totals also
+    // carry split-kit fees, which the residual would otherwise mislabel.
+    const processorFee = o.processorFee != null
+      ? o.processorFee
+      : (o.paymentRail === 'cash' && o.total > base ? +(o.total - base).toFixed(2) : 0);
 
     // Items are written one row per product: UI Bakery's action layer rejects
     // multi-row inserts with repeated key columns, which is what silently

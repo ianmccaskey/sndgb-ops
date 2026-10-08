@@ -4,11 +4,14 @@ function listGroupBuys() {
   return action('listGroupBuys', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT id, external_id, name, status, starts_on, ends_on,
-             admin_fee_usd, shipping_fee_usd, cash_processor_fee_pct,
-             reconcile_tolerance_usd, notes, created_at
-      FROM group_buys
-      ORDER BY created_at DESC
+      SELECT gb.id, gb.external_id, gb.name, gb.status, gb.starts_on, gb.ends_on,
+             gb.admin_fee_usd, gb.shipping_fee_usd, gb.cash_processor_fee_pct,
+             gb.reconcile_tolerance_usd, gb.notes, gb.created_at,
+             -- storefront (p2collective.app) publishing state; NULL = never set up
+             cs.code AS storefront_code, cs.published AS storefront_published
+      FROM group_buys gb
+      LEFT JOIN storefront.campaign_settings cs ON cs.group_buy_id = gb.id
+      ORDER BY gb.created_at DESC
     `,
   });
 }
