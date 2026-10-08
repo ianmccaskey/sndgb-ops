@@ -5,7 +5,7 @@ import importUpsertOrder from '@/actions/orders/importUpsertOrder';
 import upsertOrderItem from '@/actions/orders/upsertOrderItem';
 import deleteOrderItemsNotIn from '@/actions/orders/deleteOrderItemsNotIn';
 import importPayments from '@/actions/orders/importPayments';
-import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
+import noteStorefrontClaimConflict from '@/actions/storefront/noteStorefrontClaimConflict';
 import syncOrderStatus from '@/actions/orders/syncOrderStatus';
 import { useApp } from '@/app/AppContext';
 import { ParsedOrder } from '@/lib/parseOrderImport';
@@ -121,7 +121,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   const [doUpsertItem] = useMutateAction(upsertOrderItem);
   const [doPruneItems] = useMutateAction(deleteOrderItemsNotIn);
   const [doPayments] = useMutateAction(importPayments);
-  const [doAdminNote] = useMutateAction(appendOrderAdminNote);
+  const [doClaimConflict] = useMutateAction(noteStorefrontClaimConflict);
   const [doSyncStatus] = useMutateAction(syncOrderStatus);
 
   const [job, setJob] = useState<ImportJob>(IDLE);
@@ -132,11 +132,11 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   // startImport is a stable callback, so the long-running loop must read the
   // CURRENT user and mutate functions at execution time — a first-render
   // closure would freeze 'Admin' (useUser resolves late) into audit rows.
-  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doAdminNote, doSyncStatus });
-  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doAdminNote, doSyncStatus };
+  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doSyncStatus });
+  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doSyncStatus };
 
   const importOne = async (o: ParsedOrder, gbId: number): Promise<ImportRowResult> => {
-    const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doAdminNote } = envRef.current;
+    const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict } = envRef.current;
     // An empty item set would erase a previously imported order's items on
     // prune. Refuse it here for every source (pull and paste).
     if (o.items.length === 0) {
@@ -249,6 +249,8 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // storefront) hands the duplicate here as raw.claim_conflicts: leave a
     // dated line on THIS order's admin notes so whoever reconciles sees both
     // claimants, instead of one order looking short for no visible reason.
+    // The action is idempotent per (order, hash) — a retried request or the
+    // next re-import of the same conflict writes nothing — so withRetry is safe.
     let conflictNoted = 0;
     if (o.raw.claim_conflicts) {
       try {
@@ -256,8 +258,8 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
         for (const c of mine) {
           const line = `${ts} storefront: tx ${c.txHash.slice(0, 10)}…${c.txHash.slice(-6)} is also claimed by ${c.others.join(', ')} — one order holds it here; reject the wrong claim.`;
-          await withRetry(() => doAdminNote({ order_id: orderId, note: line, actor: userName, detail: JSON.stringify({ storefront_claim_conflict: c }) }));
-          conflictNoted++;
+          const res = await withRetry(() => doClaimConflict({ order_id: orderId, tx_hash: c.txHash, others: JSON.stringify(c.others), note: line, actor: userName })) as unknown[] | null;
+          if (Array.isArray(res) ? res.length > 0 : !!res) conflictNoted++;
         }
       } catch {
         // a malformed marker must not fail the import of a valid order
