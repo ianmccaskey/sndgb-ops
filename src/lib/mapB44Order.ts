@@ -39,6 +39,10 @@ export type B44Cancellation = {
   /** which upstream reported it: 'storefront', or undefined for the ordering
    * app / paste. syncOrderStatus only cancels rows from the same source. */
   source?: 'storefront';
+  /** payment claims the storefront has rejected on this (cancelled) order —
+   * a local copy imported while pending must be rejected too, or its hash
+   * stays occupied and blocks a live claimant */
+  rejectedClaims?: { hash: string; reason: string }[];
 };
 
 export type MappedOrders = ParseResult & {

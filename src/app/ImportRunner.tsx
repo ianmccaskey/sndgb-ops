@@ -285,7 +285,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     let rejectedSynced = 0;
     if (o.raw.rejected_claims) {
       try {
-        const res = await withRetry(() => doRejectedClaims({ order_id: orderId, rejected: o.raw.rejected_claims, actor: userName })) as unknown[] | null;
+        const res = await withRetry(() => doRejectedClaims({ order_number: o.orderNumber, group_buy_id: gbId, rejected: o.raw.rejected_claims, actor: userName })) as unknown[] | null;
         rejectedSynced = Array.isArray(res) ? res.length : (res ? 1 : 0);
       } catch {
         // a malformed marker must not fail the import of a valid order
@@ -302,6 +302,22 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
 
   const run = async ({ groupBuyId, orders, cancellations }: StartArgs) => {
     const out: ImportRowResult[] = [];
+    // FIRST: claims the storefront rejected on orders that are no longer
+    // importable (cancelled). Their local pending copies must be released
+    // before any live order below tries to import the same hash — otherwise
+    // the stale hash blocks the real claimant. Idempotent, so it is safe to
+    // run on every pull.
+    for (const c of cancellations) {
+      if (!c.rejectedClaims || c.rejectedClaims.length === 0) continue;
+      try {
+        const res = await withRetry(() => envRef.current.doRejectedClaims({ order_number: c.orderNumber, group_buy_id: groupBuyId, rejected: JSON.stringify(c.rejectedClaims), actor: envRef.current.userName })) as unknown[] | null;
+        const n = Array.isArray(res) ? res.length : (res ? 1 : 0);
+        if (n > 0) out.push({ orderNumber: c.orderNumber, ok: true, message: `${n} stale local payment(s) rejected to match the storefront` });
+      } catch (e: unknown) {
+        out.push({ orderNumber: c.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Failed to release rejected claims' });
+      }
+      setJob(j => ({ ...j, results: [...out] }));
+    }
     for (const o of orders) {
       try {
         out.push(await importOne(o, groupBuyId));
@@ -333,7 +349,8 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       running: true,
       forGroupBuyId: args.groupBuyId,
       sourceKey: importSourceKey(args),
-      total: args.orders.length + args.cancellations.length,
+      // + one row per cancellation that releases rejected claims (pre-pass)
+      total: args.orders.length + args.cancellations.length + args.cancellations.filter(c => (c.rejectedClaims?.length ?? 0) > 0).length,
       results: [],
       finished: false,
     });

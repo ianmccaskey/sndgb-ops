@@ -182,7 +182,16 @@ export function mapStorefrontOrders(rowsIn: StorefrontOrderRow[]): MappedOrders 
     if (r.status === 'cancelled') {
       const orderNumber = String(r.order_number || '').trim();
       if (orderNumber) {
-        const c: B44Cancellation = { orderNumber, status: 'cancelled', sourceStatus: r.cancel_reason ? `cancelled — ${r.cancel_reason}` : 'cancelled', source: 'storefront' };
+        // rejected claims ride along: the runner releases their local copies
+        // before any live order tries to import the same hash
+        const rejectedClaims = json(r.payments)
+          .filter(p => p.status === 'rejected' && p.tx_hash)
+          .map(p => ({ hash: String(p.tx_hash).trim(), reason: String(p.verify_error || 'rejected by the storefront') }));
+        const c: B44Cancellation = {
+          orderNumber, status: 'cancelled', source: 'storefront',
+          sourceStatus: r.cancel_reason ? `cancelled — ${r.cancel_reason}` : 'cancelled',
+          ...(rejectedClaims.length > 0 ? { rejectedClaims } : {}),
+        };
         result.cancellations.push(c);
       }
       return;
