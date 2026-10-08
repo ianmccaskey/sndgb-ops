@@ -36,9 +36,18 @@ export type B44Cancellation = {
   /** Local order_status to apply. */
   status: 'cancelled' | 'refunded';
   sourceStatus: string;
+  /** which upstream reported it: 'storefront', or undefined for the ordering
+   * app / paste. syncOrderStatus only cancels rows from the same source. */
+  source?: 'storefront';
 };
 
-export type MappedOrders = ParseResult & { cancellations: B44Cancellation[] };
+export type MappedOrders = ParseResult & {
+  cancellations: B44Cancellation[];
+  /** one tx hash claimed by several orders in the source (storefront allows
+   * it; this app holds a hash on ONE order) — surfaced so the duplicate is
+   * seen and resolved, never silently dropped */
+  conflicts?: { txHash: string; orderNumbers: string[] }[];
+};
 
 function mapOne(o: B44Order, index: number, skuByExternalId: Map<string, string>, errors: ParseResult['errors']): ParsedOrder | null {
   const orderNumber = String(o.order_number || '').trim();

@@ -5,6 +5,7 @@ import importUpsertOrder from '@/actions/orders/importUpsertOrder';
 import upsertOrderItem from '@/actions/orders/upsertOrderItem';
 import deleteOrderItemsNotIn from '@/actions/orders/deleteOrderItemsNotIn';
 import importPayments from '@/actions/orders/importPayments';
+import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import syncOrderStatus from '@/actions/orders/syncOrderStatus';
 import { useApp } from '@/app/AppContext';
 import { ParsedOrder } from '@/lib/parseOrderImport';
@@ -120,6 +121,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   const [doUpsertItem] = useMutateAction(upsertOrderItem);
   const [doPruneItems] = useMutateAction(deleteOrderItemsNotIn);
   const [doPayments] = useMutateAction(importPayments);
+  const [doAdminNote] = useMutateAction(appendOrderAdminNote);
   const [doSyncStatus] = useMutateAction(syncOrderStatus);
 
   const [job, setJob] = useState<ImportJob>(IDLE);
@@ -130,11 +132,11 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   // startImport is a stable callback, so the long-running loop must read the
   // CURRENT user and mutate functions at execution time — a first-render
   // closure would freeze 'Admin' (useUser resolves late) into audit rows.
-  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doSyncStatus });
-  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doSyncStatus };
+  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doAdminNote, doSyncStatus });
+  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doAdminNote, doSyncStatus };
 
   const importOne = async (o: ParsedOrder, gbId: number): Promise<ImportRowResult> => {
-    const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments } = envRef.current;
+    const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doAdminNote } = envRef.current;
     // An empty item set would erase a previously imported order's items on
     // prune. Refuse it here for every source (pull and paste).
     if (o.items.length === 0) {
@@ -220,6 +222,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     }
     await withRetry(() => doPruneItems({ order_id: orderId, group_buy_id: gbId, items: JSON.stringify(mergedItems) }));
 
+    let skippedHashes = 0;
     if (o.payments.length > 0) {
       const method = o.paymentRail === 'cash' ? 'other' : o.paymentRail;
       // Hashes go one per call (multi-row inserts trip the same platform
@@ -231,14 +234,41 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       const hashes = o.payments.filter(p => p.kind === 'tx_hash');
       const receipts = o.payments.filter(p => p.kind === 'receipt');
       for (const p of hashes) {
-        await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method: p.method ?? method }]) }));
+        const res = await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method: p.method ?? method }]) })) as { hashes_added?: number | string }[] | null;
+        // 0 added = the hash already sits on a non-rejected payment (this or
+        // another order) or was rejected here — not a new payment, but not
+        // silent either: counted and shown in the row result
+        if (Array.isArray(res) && res[0] && Number(res[0].hashes_added ?? 0) === 0) skippedHashes++;
       }
       if (receipts.length > 0) {
         await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify(receipts.map(p => ({ kind: p.kind, value: p.value, method: p.method ?? 'other' }))) }));
       }
     }
 
-    return { orderNumber: o.orderNumber, ok: true, message: `${mergedItems.length} items, ${o.payments.length} payment refs` };
+    // A source that reports the same hash on several of its orders (the
+    // storefront) hands the duplicate here as raw.claim_conflicts: leave a
+    // dated line on THIS order's admin notes so whoever reconciles sees both
+    // claimants, instead of one order looking short for no visible reason.
+    let conflictNoted = 0;
+    if (o.raw.claim_conflicts) {
+      try {
+        const mine = JSON.parse(o.raw.claim_conflicts) as { txHash: string; others: string[] }[];
+        const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
+        for (const c of mine) {
+          const line = `${ts} storefront: tx ${c.txHash.slice(0, 10)}…${c.txHash.slice(-6)} is also claimed by ${c.others.join(', ')} — one order holds it here; reject the wrong claim.`;
+          await withRetry(() => doAdminNote({ order_id: orderId, note: line, actor: userName, detail: JSON.stringify({ storefront_claim_conflict: c }) }));
+          conflictNoted++;
+        }
+      } catch {
+        // a malformed marker must not fail the import of a valid order
+      }
+    }
+
+    const extras = [
+      skippedHashes > 0 ? `${skippedHashes} hash(es) already held elsewhere` : '',
+      conflictNoted > 0 ? `${conflictNoted} claim conflict(s) noted on the order` : '',
+    ].filter(Boolean);
+    return { orderNumber: o.orderNumber, ok: true, message: `${mergedItems.length} items, ${o.payments.length} payment refs${extras.length ? ` · ${extras.join(' · ')}` : ''}` };
   };
 
   const run = async ({ groupBuyId, orders, cancellations }: StartArgs) => {
@@ -253,7 +283,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     }
     for (const c of cancellations) {
       try {
-        const res = await withRetry(() => envRef.current.doSyncStatus({ order_number: c.orderNumber, group_buy_id: groupBuyId, status: c.status })) as { id: number }[] | { id: number } | null;
+        const res = await withRetry(() => envRef.current.doSyncStatus({ order_number: c.orderNumber, group_buy_id: groupBuyId, status: c.status, source: c.source ?? '' })) as { id: number }[] | { id: number } | null;
         const touched = Array.isArray(res) ? res.length > 0 : !!res;
         out.push({
           orderNumber: c.orderNumber,

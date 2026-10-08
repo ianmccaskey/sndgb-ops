@@ -14,6 +14,12 @@ function syncOrderStatus() {
       WHERE order_number = {{params.order_number}}::text
         AND group_buy_id = {{params.group_buy_id}}::bigint
         AND status <> {{params.status}}::order_status
+        -- source isolation, same rule as the upsert: a storefront cancellation
+        -- only ever touches a storefront-imported row, an ordering-app one
+        -- only an ordering-app/paste row — a number shared across upstreams
+        -- must never cancel the other side's order
+        AND (COALESCE(raw_import->>'source', '') = 'storefront')
+            = ({{params.source}}::text = 'storefront')
       RETURNING id
     `,
   });

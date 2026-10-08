@@ -164,7 +164,7 @@ export function mapStorefrontOrders(rowsIn: StorefrontOrderRow[]): MappedOrders 
     if (r.status === 'cancelled') {
       const orderNumber = String(r.order_number || '').trim();
       if (orderNumber) {
-        const c: B44Cancellation = { orderNumber, status: 'cancelled', sourceStatus: r.cancel_reason ? `cancelled — ${r.cancel_reason}` : 'cancelled' };
+        const c: B44Cancellation = { orderNumber, status: 'cancelled', sourceStatus: r.cancel_reason ? `cancelled — ${r.cancel_reason}` : 'cancelled', source: 'storefront' };
         result.cancellations.push(c);
       }
       return;
@@ -172,5 +172,26 @@ export function mapStorefrontOrders(rowsIn: StorefrontOrderRow[]): MappedOrders 
     const mapped = mapOne(r, i, result.errors);
     if (mapped) result.orders.push(mapped);
   });
+
+  // The storefront lets two orders claim one tx hash (a shared wallet gives
+  // neither member proof); this app holds a hash on ONE order and skips the
+  // rest at import. Make the duplicate visible: in the preview, and on each
+  // involved order as an admin-note line the runner writes.
+  const byHash = new Map<string, string[]>();
+  for (const o of result.orders) {
+    for (const p of o.payments) {
+      if (p.kind !== 'tx_hash') continue;
+      const key = /^0x[0-9a-fA-F]{64}$/.test(p.value) ? p.value.toLowerCase() : p.value;
+      byHash.set(key, [...(byHash.get(key) || []), o.orderNumber]);
+    }
+  }
+  const conflicts = [...byHash.entries()].filter(([, nums]) => nums.length > 1).map(([txHash, orderNumbers]) => ({ txHash, orderNumbers }));
+  if (conflicts.length > 0) {
+    result.conflicts = conflicts;
+    for (const o of result.orders) {
+      const mine = conflicts.filter(c => c.orderNumbers.includes(o.orderNumber)).map(c => ({ txHash: c.txHash, others: c.orderNumbers.filter(n => n !== o.orderNumber) }));
+      if (mine.length > 0) o.raw.claim_conflicts = JSON.stringify(mine);
+    }
+  }
   return result;
 }
