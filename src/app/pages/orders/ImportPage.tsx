@@ -5,7 +5,7 @@ import listProducts from '@/actions/products/listProducts';
 import listActiveExternalOrders from '@/actions/orders/listActiveExternalOrders';
 import cancelDeletedUpstream from '@/actions/orders/cancelDeletedUpstream';
 import { useApp } from '@/app/AppContext';
-import { useImportRunner, importSourceKey } from '@/app/ImportRunner';
+import { useImportRunner, importSourceKey, lastResultFor } from '@/app/ImportRunner';
 import { rows } from '@/lib/rows';
 import { fmtUSD } from '@/lib/fmt';
 import { parseOrderPaste, ParseResult } from '@/lib/parseOrderImport';
@@ -307,7 +307,7 @@ export function ImportPage() {
               <div className="rounded border border-orange-400/40 bg-orange-400/10 p-2 text-sm text-orange-300 space-y-1">
                 <p className="font-semibold">Cancelled{sfMode ? ' on the storefront' : '/refunded upstream'} — importing will update their local status (views already exclude them from demand and revenue):</p>
                 {cancellations.map(c => {
-                  const res = results.find(r => r.orderNumber === c.orderNumber);
+                  const res = lastResultFor(results, c.orderNumber);
                   return (
                     <div key={c.orderNumber}>
                       <span className="font-mono">{c.orderNumber}</span> → {c.status} <span className="text-xs">({c.sourceStatus})</span>
@@ -370,7 +370,7 @@ export function ImportPage() {
                 </TableHeader>
                 <TableBody>
                   {parsed.orders.map(o => {
-                    const res = results.find(r => r.orderNumber === o.orderNumber);
+                    const res = lastResultFor(results, o.orderNumber);
                     return (
                       <TableRow key={o.orderNumber}>
                         <TableCell className="font-medium">{o.orderNumber}</TableCell>
@@ -394,7 +394,7 @@ export function ImportPage() {
             </div>
             <Button onClick={runImport} disabled={!canImport}>
               {importing
-                ? `Importing… (${results.length}/${parsed.orders.length + cancellations.length})`
+                ? `Importing… (${results.length}/${job.total})`
                 : `Import ${parsed.orders.length} orders${cancellations.length > 0 ? ` + apply ${cancellations.length} cancellation(s)` : ''}`}
             </Button>
           </CardContent>

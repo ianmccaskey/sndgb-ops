@@ -27,6 +27,16 @@ import { Loader2, CheckCircle2, XCircle, X } from 'lucide-react';
 
 export type ImportRowResult = { orderNumber: string; ok: boolean; message: string };
 
+/**
+ * The row to show for an order: its LATEST result. An order can collect
+ * several in one run (a pre-pass note that stale claims were released, then
+ * its import result, or an abort marker) and the last one is the verdict.
+ */
+export function lastResultFor(results: ImportRowResult[], orderNumber: string): ImportRowResult | undefined {
+  for (let i = results.length - 1; i >= 0; i--) if (results[i].orderNumber === orderNumber) return results[i];
+  return undefined;
+}
+
 export type ImportJob = {
   running: boolean;
   forGroupBuyId: number | null;
@@ -308,10 +318,21 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         const res = await withRetry(() => envRef.current.doRejectedClaims({ order_number: r.orderNumber, group_buy_id: groupBuyId, rejected: r.rejected, actor: envRef.current.userName })) as unknown[] | null;
         const n = Array.isArray(res) ? res.length : (res ? 1 : 0);
         if (n > 0) out.push({ orderNumber: r.orderNumber, ok: true, message: `${n} stale local payment(s) rejected to match the storefront` });
+        setJob(j => ({ ...j, results: [...out] }));
       } catch (e: unknown) {
-        out.push({ orderNumber: r.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Failed to release rejected claims' });
+        // FAIL CLOSED. A release that did not provably succeed may have left
+        // a stale pending hash in place, and a non-rejected hash blocks every
+        // other claimant — importing anything now could attach a payment to
+        // the wrong order or drop it from the right one. Nothing is imported;
+        // every row says so, and the next pull retries from scratch.
+        const why = e instanceof Error ? e.message : 'Failed to release rejected claims';
+        out.push({ orderNumber: r.orderNumber, ok: false, message: `${why} — import aborted before any order or payment was touched` });
+        const aborted = 'Not imported: releasing a storefront-rejected claim failed earlier in this run, so no order or payment was touched. Fix the cause and pull again.';
+        for (const o of orders) if (o.orderNumber !== r.orderNumber) out.push({ orderNumber: o.orderNumber, ok: false, message: aborted });
+        for (const c of cancellations) if (c.orderNumber !== r.orderNumber) out.push({ orderNumber: c.orderNumber, ok: false, message: aborted });
+        setJob(j => ({ ...j, results: [...out] }));
+        return;
       }
-      setJob(j => ({ ...j, results: [...out] }));
     }
     for (const o of orders) {
       try {
