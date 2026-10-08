@@ -71,11 +71,15 @@ function upsertOrderItem() {
           -- stops — the upstream header total carries the money from here)
           item_source = 'import',
           comp_qty = LEAST(order_items.comp_qty, EXCLUDED.qty),
-          -- the snapshot refreshes ONLY when the upstream qty actually
-          -- changed (a new charging event); an unchanged line keeps the fee
-          -- it was charged at, whatever the config says today
+          -- the snapshot refreshes when the upstream qty actually changed (a
+          -- new charging event) — or whenever the source STATES the fee it
+          -- charged (storefront), since that is the snapshot itself and a
+          -- corrected fee on an unchanged qty must land. A source that sends
+          -- no fee (ordering app, paste) keeps the old rule: an unchanged
+          -- line keeps the fee it was charged at, whatever config says today
           split_fee_usd = CASE
-            WHEN order_items.qty IS DISTINCT FROM EXCLUDED.qty THEN EXCLUDED.split_fee_usd
+            WHEN order_items.qty IS DISTINCT FROM EXCLUDED.qty
+                 OR NULLIF({{params.split_fee_usd}}::text, '') IS NOT NULL THEN EXCLUDED.split_fee_usd
             ELSE order_items.split_fee_usd
           END,
           -- direct-ship refreshes from the source only when the source

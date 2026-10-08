@@ -166,6 +166,10 @@ function importUpsertOrder() {
                (oi.qty_override IS NOT NULL AND x.qty = oi.qty_override
                 AND (SELECT prev.total_usd FROM prev) IS DISTINCT FROM (SELECT up.total_usd FROM up)) AS retire_override,
                (oi.qty IS DISTINCT FROM x.qty) AS qty_changing,
+               -- a source that states the fee it charged (storefront) also
+               -- re-snapshots when that fee differs on an unchanged qty
+               (x.split_fee IS NOT NULL
+                AND oi.split_fee_usd IS DISTINCT FROM (CASE WHEN x.qty % 1 <> 0 THEN x.split_fee ELSE 0 END)) AS fee_changing,
                CASE WHEN x.qty % 1 <> 0 THEN COALESCE(x.split_fee, gbp.split_fee_usd) ELSE 0 END AS new_split_fee
         FROM up,
              -- split_fee is optional: a source that snapshots it at order time
@@ -194,10 +198,10 @@ function importUpsertOrder() {
         UPDATE order_items oi SET
           item_source = CASE WHEN t.was_local THEN 'import' ELSE oi.item_source END,
           qty_override = CASE WHEN t.retire_override THEN NULL ELSE oi.qty_override END,
-          split_fee_usd = CASE WHEN t.qty_changing THEN t.new_split_fee ELSE oi.split_fee_usd END
+          split_fee_usd = CASE WHEN t.qty_changing OR t.fee_changing THEN t.new_split_fee ELSE oi.split_fee_usd END
         FROM targets t
         WHERE oi.id = t.id
-          AND (t.was_local OR t.retire_override OR t.qty_changing)
+          AND (t.was_local OR t.retire_override OR t.qty_changing OR t.fee_changing)
         RETURNING oi.id
       ), adopt AS (
         SELECT t.id FROM targets t JOIN item_sync s ON s.id = t.id WHERE t.was_local
