@@ -32,6 +32,14 @@ Key invariants:
 - Payment overrides require a reason and are written to `audit_log`.
 - Zip codes are text (leading zeros survive); states normalize to 2-letter codes at import.
 
+### Storefront source (p2collective.app)
+
+The P² Collective storefront owns schema `storefront` in this database and is imported like any other upstream (Import → "Refresh from storefront"): `listStorefrontOrders` → `mapStorefrontOrder` → the same `importUpsertOrder` / items / `importPayments` / cancellation actions base44 orders use. Settled rules, so reviewers don't re-open them:
+- Storefront orders carry **no external id**; every base44-only control (push changes, rail push, deleted-upstream diff) stays hidden by the existing `external_id` gates.
+- Storefront **payment claims** import on the rail they were made on (`ParsedPayment.method`), never the order header's. Claims in `pending`, `verified` and `mismatch` import — `mismatch` is a confirmed transfer to our wallet of a different amount, i.e. real money reconciliation must see; only `rejected` (failed on-chain, paid another wallet, never found) is not a payment and never imports. This app verifies every imported hash itself; the storefront's verdict is advisory.
+- Cross-campaign invariants are database-enforced: an order pays only on an option of its own campaign on its own rail (`1790100100`), and carries only lines of its own campaign (`1790100200`).
+- "Paid" on the storefront is this app's reconciliation (`v_order_reconciliation.recon_status` matched/over); the storefront never marks an order paid from a shared-wallet hash on its own.
+
 ## Import format
 
 Paste tab-separated rows from the ordering app export (header row optional — columns are matched by name). Handles the `SKU (qty); …` items blob, pipe-delimited tx hashes / explorer URLs / PayPal receipts, and flags unknown SKUs before anything is written.
