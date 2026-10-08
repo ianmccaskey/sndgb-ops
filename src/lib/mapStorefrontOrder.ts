@@ -230,28 +230,27 @@ export function mapStorefrontOrders(rowsIn: StorefrontOrderRow[]): MappedOrders 
   // neither member proof); this app holds a hash on ONE order and skips the
   // rest at import. Make the duplicate visible: in the preview, and on each
   // involved order as an admin-note line the runner writes.
+  // The index is built from EVERY pulled row's live claims, never from the
+  // orders mapOne produced: a live row the validator skipped (bad SKU, bad
+  // qty) still claims its hash, and a CANCELLED order's live claim may
+  // already sit here from an earlier pull, blocking the live claimant from
+  // an order the views exclude. Each is named, marked, so the conflict is
+  // seen from the order that imports.
   const byHash = new Map<string, string[]>();
   const canon = (h: string) => (/^0x[0-9a-fA-F]{64}$/.test(h) ? h.toLowerCase() : h);
-  for (const o of result.orders) {
-    for (const p of o.payments) {
-      if (p.kind !== 'tx_hash') continue;
-      byHash.set(canon(p.value), [...(byHash.get(canon(p.value)) || []), o.orderNumber]);
-    }
-  }
-  // A CANCELLED storefront order's live claims count too: an earlier import
-  // may have landed its hash here, where it blocks the live claimant while
-  // sitting on an order the views exclude. Name it, marked, so the conflict
-  // is seen from the live order.
+  const importable = new Set(result.orders.map(o => o.orderNumber));
   for (const r of rowsIn) {
-    if (r.status !== 'cancelled') continue;
     const num = String(r.order_number || '').trim();
+    if (!num) continue;
+    const tag = r.status === 'cancelled' ? ' (cancelled)' : importable.has(num) ? '' : ' (skipped by validation)';
     for (const p of json(r.payments)) {
       if (!p.tx_hash || p.status === 'rejected') continue;
       const key = canon(String(p.tx_hash).trim());
-      byHash.set(key, [...(byHash.get(key) || []), `${num} (cancelled)`]);
+      const claimants = byHash.get(key) || [];
+      if (!claimants.includes(`${num}${tag}`)) byHash.set(key, [...claimants, `${num}${tag}`]);
     }
   }
-  // only conflicts that touch at least one LIVE order matter (two cancelled
+  // only conflicts that touch at least one LIVE row matter (two cancelled
   // orders sharing a hash is history, not a reconciliation problem)
   const conflicts = [...byHash.entries()]
     .filter(([, nums]) => nums.length > 1 && nums.some(n => !n.endsWith('(cancelled)')))
