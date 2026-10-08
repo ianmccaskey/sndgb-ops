@@ -42,7 +42,7 @@ export type B44Cancellation = {
   /** payment claims the storefront has rejected on this (cancelled) order —
    * a local copy imported while pending must be rejected too, or its hash
    * stays occupied and blocks a live claimant */
-  rejectedClaims?: { hash: string; reason: string }[];
+  rejectedClaims?: { kind: 'tx_hash' | 'receipt'; value: string; reason: string }[];
 };
 
 export type MappedOrders = ParseResult & {

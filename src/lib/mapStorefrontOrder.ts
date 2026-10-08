@@ -53,6 +53,22 @@ export type StorefrontOrderRow = {
 
 const RAILS = new Set(['eth', 'sol', 'base', 'cash']);
 
+/**
+ * A claim the storefront has rejected, in the shape
+ * syncStorefrontRejectedClaims consumes: a tx hash (crypto rails) or a
+ * receipt reference (cash rails). Both kinds import as pending local
+ * payments while live, so both must be released locally once rejected —
+ * a receipt is not a global blocker like a hash, but a stale pending one
+ * keeps the order looking paid-in-progress and holds the write-off guard.
+ */
+export type RejectedClaim = { kind: 'tx_hash' | 'receipt'; value: string; reason: string };
+function rejectedClaim(p: { tx_hash?: string | null; receipt_ref?: string | null; verify_error?: string | null }): RejectedClaim | null {
+  const reason = String(p.verify_error || 'rejected by the storefront');
+  if (p.tx_hash) return { kind: 'tx_hash', value: String(p.tx_hash).trim(), reason };
+  if (p.receipt_ref) return { kind: 'receipt', value: String(p.receipt_ref).trim(), reason };
+  return null;
+}
+
 function json<T>(v: T[] | string): T[] {
   if (Array.isArray(v)) return v;
   try { return JSON.parse(v) as T[]; } catch { return []; }
@@ -111,12 +127,13 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
   // never found): not evidence — and a local payment imported while the
   // claim was still pending must be rejected here too, or it keeps the
   // hash slot and blocks reconciliation. Travels as raw.rejected_claims.
-  const rejected: { hash: string; reason: string }[] = [];
+  const rejected: RejectedClaim[] = [];
   for (const p of json(r.payments)) {
     const rail = String(p.rail || '');
     const method = String(p.method || '');
     if (p.status === 'rejected') {
-      if (p.tx_hash) rejected.push({ hash: String(p.tx_hash).trim(), reason: String(p.verify_error || 'rejected by the storefront') });
+      const claim = rejectedClaim(p);
+      if (claim) rejected.push(claim);
       continue;
     }
     if (p.tx_hash) {
@@ -185,8 +202,9 @@ export function mapStorefrontOrders(rowsIn: StorefrontOrderRow[]): MappedOrders 
         // rejected claims ride along: the runner releases their local copies
         // before any live order tries to import the same hash
         const rejectedClaims = json(r.payments)
-          .filter(p => p.status === 'rejected' && p.tx_hash)
-          .map(p => ({ hash: String(p.tx_hash).trim(), reason: String(p.verify_error || 'rejected by the storefront') }));
+          .filter(p => p.status === 'rejected')
+          .map(rejectedClaim)
+          .filter((c): c is RejectedClaim => c !== null);
         const c: B44Cancellation = {
           orderNumber, status: 'cancelled', source: 'storefront',
           sourceStatus: r.cancel_reason ? `cancelled — ${r.cancel_reason}` : 'cancelled',
