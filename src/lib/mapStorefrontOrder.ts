@@ -205,10 +205,16 @@ export function mapStorefrontOrders(rowsIn: StorefrontOrderRow[]): MappedOrders 
           .filter(p => p.status === 'rejected')
           .map(rejectedClaim)
           .filter((c): c is RejectedClaim => c !== null);
+        // claims still LIVE on the cancelled order ride along too: an earlier
+        // import may have landed one here, where it blocks a live claimant
+        const liveClaims = json(r.payments)
+          .filter(p => p.status !== 'rejected' && p.tx_hash)
+          .map(p => ({ hash: String(p.tx_hash).trim() }));
         const c: B44Cancellation = {
           orderNumber, status: 'cancelled', source: 'storefront',
           sourceStatus: r.cancel_reason ? `cancelled — ${r.cancel_reason}` : 'cancelled',
           ...(rejectedClaims.length > 0 ? { rejectedClaims } : {}),
+          ...(liveClaims.length > 0 ? { liveClaims } : {}),
         };
         result.cancellations.push(c);
       }

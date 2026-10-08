@@ -43,6 +43,10 @@ export type B44Cancellation = {
    * a local copy imported while pending must be rejected too, or its hash
    * stays occupied and blocks a live claimant */
   rejectedClaims?: { kind: 'tx_hash' | 'receipt'; value: string; reason: string }[];
+  /** tx hashes still claimed (not rejected) on this cancelled storefront
+   * order — a local copy imported while it was live blocks a live claimant;
+   * the runner releases a pending copy and flags a verified one */
+  liveClaims?: { hash: string }[];
 };
 
 export type MappedOrders = ParseResult & {

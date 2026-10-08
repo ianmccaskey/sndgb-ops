@@ -7,6 +7,7 @@ import deleteOrderItemsNotIn from '@/actions/orders/deleteOrderItemsNotIn';
 import importPayments from '@/actions/orders/importPayments';
 import noteStorefrontClaimConflict from '@/actions/storefront/noteStorefrontClaimConflict';
 import syncStorefrontRejectedClaims from '@/actions/storefront/syncStorefrontRejectedClaims';
+import releaseCancelledStorefrontClaims from '@/actions/storefront/releaseCancelledStorefrontClaims';
 import syncOrderStatus from '@/actions/orders/syncOrderStatus';
 import { useApp } from '@/app/AppContext';
 import { ParsedOrder } from '@/lib/parseOrderImport';
@@ -111,6 +112,28 @@ export function importSourceKey({ groupBuyId, orders, cancellations }: StartArgs
   ]);
 }
 
+const canonHash = (h: string) => (/^0x[0-9a-fA-F]{64}$/.test(h) ? h.toLowerCase() : h);
+
+/**
+ * Cancelled storefront orders whose still-live claims collide with a hash a
+ * LIVE order in this pull claims — the only cancelled copies worth touching
+ * (a cancelled order's hash nobody else wants is history, left for the
+ * operator). Shared by the runner's pre-pass and the progress total.
+ */
+function cancelledReleases(orders: ParsedOrder[], cancellations: B44Cancellation[]): { orderNumber: string; hashes: { hash: string; claimant: string }[] }[] {
+  const claimant = new Map<string, string>();
+  for (const o of orders) for (const p of o.payments) if (p.kind === 'tx_hash') claimant.set(canonHash(p.value), o.orderNumber);
+  const out: { orderNumber: string; hashes: { hash: string; claimant: string }[] }[] = [];
+  for (const c of cancellations) {
+    const hashes = (c.liveClaims ?? [])
+      .map(l => canonHash(l.hash))
+      .filter(h => claimant.has(h))
+      .map(h => ({ hash: h, claimant: claimant.get(h) as string }));
+    if (hashes.length > 0) out.push({ orderNumber: c.orderNumber, hashes });
+  }
+  return out;
+}
+
 type RunnerApi = {
   job: ImportJob;
   /** Returns false when a run is already active. */
@@ -134,6 +157,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   const [doPayments] = useMutateAction(importPayments);
   const [doClaimConflict] = useMutateAction(noteStorefrontClaimConflict);
   const [doRejectedClaims] = useMutateAction(syncStorefrontRejectedClaims);
+  const [doReleaseCancelled] = useMutateAction(releaseCancelledStorefrontClaims);
   const [doSyncStatus] = useMutateAction(syncOrderStatus);
 
   const [job, setJob] = useState<ImportJob>(IDLE);
@@ -144,10 +168,10 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   // startImport is a stable callback, so the long-running loop must read the
   // CURRENT user and mutate functions at execution time — a first-render
   // closure would freeze 'Admin' (useUser resolves late) into audit rows.
-  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doSyncStatus });
-  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doSyncStatus };
+  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus });
+  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus };
 
-  const importOne = async (o: ParsedOrder, gbId: number): Promise<ImportRowResult> => {
+  const importOne = async (o: ParsedOrder, gbId: number, heldByCancelled: Map<string, { orderNumber: string; status: string }>): Promise<ImportRowResult> => {
     const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict } = envRef.current;
     // An empty item set would erase a previously imported order's items on
     // prune. Refuse it here for every source (pull and paste).
@@ -247,6 +271,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     await withRetry(() => doPruneItems({ order_id: orderId, group_buy_id: gbId, items: JSON.stringify(mergedItems) }));
 
     let skippedHashes = 0;
+    const blocked: string[] = [];
     if (o.payments.length > 0) {
       const method = o.paymentRail === 'cash' ? 'other' : o.paymentRail;
       // Hashes go one per call (multi-row inserts trip the same platform
@@ -262,7 +287,14 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         // 0 added = the hash already sits on a non-rejected payment (this or
         // another order) or was rejected here — not a new payment, but not
         // silent either: counted and shown in the row result
-        if (Array.isArray(res) && res[0] && Number(res[0].hashes_added ?? 0) === 0) skippedHashes++;
+        if (Array.isArray(res) && res[0] && Number(res[0].hashes_added ?? 0) === 0) {
+          skippedHashes++;
+          // held by a CANCELLED storefront order's verified copy: the pre-pass
+          // could not release it (money this app saw land), so this order
+          // imports short until an operator moves that payment by hand
+          const held = heldByCancelled.get(canonHash(p.value));
+          if (held) blocked.push(`tx ${p.value.slice(0, 10)}…${p.value.slice(-6)} is ${held.status} on cancelled ${held.orderNumber}`);
+        }
       }
       if (receipts.length > 0) {
         await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify(receipts.map(p => ({ kind: p.kind, value: p.value, method: p.method ?? 'other' }))) }));
@@ -298,7 +330,11 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       skippedHashes > 0 ? `${skippedHashes} hash(es) already held elsewhere` : '',
       conflictNoted > 0 ? `${conflictNoted} claim conflict(s) noted on the order` : '',
     ].filter(Boolean);
-    return { orderNumber: o.orderNumber, ok: true, message: `${mergedItems.length} items, ${o.payments.length} payment refs${extras.length ? ` · ${extras.join(' · ')}` : ''}` };
+    const summary = `${mergedItems.length} items, ${o.payments.length} payment refs${extras.length ? ` · ${extras.join(' · ')}` : ''}`;
+    if (blocked.length > 0) {
+      return { orderNumber: o.orderNumber, ok: false, message: `${summary} — payment NOT attached: ${blocked.join('; ')}. Reject or reassign it on the cancelled order, then pull again.` };
+    }
+    return { orderNumber: o.orderNumber, ok: true, message: summary };
   };
 
   const run = async ({ groupBuyId, orders, cancellations }: StartArgs) => {
@@ -313,6 +349,18 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       ...orders.filter(o => !!o.raw.rejected_claims).map(o => ({ orderNumber: o.orderNumber, rejected: o.raw.rejected_claims })),
       ...cancellations.filter(c => (c.rejectedClaims?.length ?? 0) > 0).map(c => ({ orderNumber: c.orderNumber, rejected: JSON.stringify(c.rejectedClaims) })),
     ];
+    // FAIL CLOSED. A release that did not provably succeed may have left a
+    // stale non-rejected hash in place, and such a hash blocks every other
+    // claimant — importing anything now could attach a payment to the wrong
+    // order or drop it from the right one. Nothing is imported; every row
+    // says so, and the next pull retries from scratch.
+    const abort = (at: string, why: string) => {
+      out.push({ orderNumber: at, ok: false, message: `${why} — import aborted before any order or payment was touched` });
+      const aborted = 'Not imported: releasing a stale storefront claim failed earlier in this run, so no order or payment was touched. Fix the cause and pull again.';
+      for (const o of orders) if (o.orderNumber !== at) out.push({ orderNumber: o.orderNumber, ok: false, message: aborted });
+      for (const c of cancellations) if (c.orderNumber !== at) out.push({ orderNumber: c.orderNumber, ok: false, message: aborted });
+      setJob(j => ({ ...j, results: [...out] }));
+    };
     for (const r of releases) {
       try {
         const res = await withRetry(() => envRef.current.doRejectedClaims({ order_number: r.orderNumber, group_buy_id: groupBuyId, rejected: r.rejected, actor: envRef.current.userName })) as unknown[] | null;
@@ -320,23 +368,43 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         if (n > 0) out.push({ orderNumber: r.orderNumber, ok: true, message: `${n} stale local payment(s) rejected to match the storefront` });
         setJob(j => ({ ...j, results: [...out] }));
       } catch (e: unknown) {
-        // FAIL CLOSED. A release that did not provably succeed may have left
-        // a stale pending hash in place, and a non-rejected hash blocks every
-        // other claimant — importing anything now could attach a payment to
-        // the wrong order or drop it from the right one. Nothing is imported;
-        // every row says so, and the next pull retries from scratch.
-        const why = e instanceof Error ? e.message : 'Failed to release rejected claims';
-        out.push({ orderNumber: r.orderNumber, ok: false, message: `${why} — import aborted before any order or payment was touched` });
-        const aborted = 'Not imported: releasing a storefront-rejected claim failed earlier in this run, so no order or payment was touched. Fix the cause and pull again.';
-        for (const o of orders) if (o.orderNumber !== r.orderNumber) out.push({ orderNumber: o.orderNumber, ok: false, message: aborted });
-        for (const c of cancellations) if (c.orderNumber !== r.orderNumber) out.push({ orderNumber: c.orderNumber, ok: false, message: aborted });
+        abort(r.orderNumber, e instanceof Error ? e.message : 'Failed to release rejected claims');
+        return;
+      }
+    }
+    // SECOND: a CANCELLED storefront order may still hold, here, a hash that
+    // a live order in this pull claims (its claim was imported while the
+    // order was live; this app keeps a hash on one order). A PENDING copy is
+    // released to the live claimant; a VERIFIED/MISMATCH copy is money this
+    // app saw land and is never moved by a pull — it is remembered so the
+    // live order's row turns red instead of quietly importing short.
+    const heldByCancelled = new Map<string, { orderNumber: string; status: string }>();
+    for (const rel of cancelledReleases(orders, cancellations)) {
+      try {
+        const res = await withRetry(() => envRef.current.doReleaseCancelled({ order_number: rel.orderNumber, group_buy_id: groupBuyId, hashes: JSON.stringify(rel.hashes), actor: envRef.current.userName })) as { hash: string; outcome: string; status: string }[] | null;
+        const rows = Array.isArray(res) ? res : [];
+        const released = rows.filter(x => x.outcome === 'released').length;
+        const held = rows.filter(x => x.outcome === 'held');
+        for (const h of held) heldByCancelled.set(canonHash(String(h.hash)), { orderNumber: rel.orderNumber, status: String(h.status) });
+        if (released > 0 || held.length > 0) {
+          out.push({
+            orderNumber: rel.orderNumber,
+            ok: held.length === 0,
+            message: [
+              released > 0 ? `${released} pending hash(es) released to the live claimant` : '',
+              held.length > 0 ? `${held.length} verified hash(es) still held on this cancelled order — reject or reassign by hand` : '',
+            ].filter(Boolean).join(' · '),
+          });
+        }
         setJob(j => ({ ...j, results: [...out] }));
+      } catch (e: unknown) {
+        abort(rel.orderNumber, e instanceof Error ? e.message : "Failed to release a cancelled order's claims");
         return;
       }
     }
     for (const o of orders) {
       try {
-        out.push(await importOne(o, groupBuyId));
+        out.push(await importOne(o, groupBuyId, heldByCancelled));
       } catch (e: unknown) {
         out.push({ orderNumber: o.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Import failed' });
       }
@@ -368,7 +436,8 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       // + one row per order/cancellation that releases rejected claims (pre-pass)
       total: args.orders.length + args.cancellations.length
         + args.orders.filter(o => !!o.raw.rejected_claims).length
-        + args.cancellations.filter(c => (c.rejectedClaims?.length ?? 0) > 0).length,
+        + args.cancellations.filter(c => (c.rejectedClaims?.length ?? 0) > 0).length
+        + cancelledReleases(args.orders, args.cancellations).length,
       results: [],
       finished: false,
     });
