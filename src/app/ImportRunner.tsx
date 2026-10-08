@@ -122,6 +122,18 @@ export function importSourceKey({ groupBuyId, orders, cancellations, releases }:
 
 const canonHash = (h: string) => (/^0x[0-9a-fA-F]{64}$/.test(h) ? h.toLowerCase() : h);
 
+type SkippedHolder = { hash: string; order_number: string; status: string; same_order: boolean };
+/** importPayments' `skipped` column: jsonb, which the gateway may hand back parsed or as text. */
+function parseSkipped(v: unknown): SkippedHolder[] {
+  try {
+    const arr = typeof v === 'string' ? JSON.parse(v) : v;
+    if (!Array.isArray(arr)) return [];
+    return arr.map(x => ({ hash: String(x?.hash ?? ''), order_number: String(x?.order_number ?? ''), status: String(x?.status ?? ''), same_order: x?.same_order === true || x?.same_order === 'true' }));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Cancelled storefront orders whose still-live claims collide with a hash a
  * LIVE order in this pull claims — the only cancelled copies worth touching
@@ -179,7 +191,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus });
   envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus };
 
-  const importOne = async (o: ParsedOrder, gbId: number, heldByCancelled: Map<string, { orderNumber: string; status: string }>): Promise<ImportRowResult> => {
+  const importOne = async (o: ParsedOrder, gbId: number, cancelledOnStorefront: Set<string>): Promise<ImportRowResult> => {
     const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict } = envRef.current;
     // An empty item set would erase a previously imported order's items on
     // prune. Refuse it here for every source (pull and paste).
@@ -278,8 +290,12 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     }
     await withRetry(() => doPruneItems({ order_id: orderId, group_buy_id: gbId, items: JSON.stringify(mergedItems) }));
 
-    let skippedHashes = 0;
-    const blocked: string[] = [];
+    // A hash the action did not insert is NOT silently fine: the action
+    // names the holder, and only "already on THIS order, not rejected" is
+    // an idempotent re-import. Any other holder — another order (live or
+    // cancelled), or a rejection on this order — leaves this order short
+    // of a payment, and its row must say so in red.
+    const short: string[] = [];
     if (o.payments.length > 0) {
       const method = o.paymentRail === 'cash' ? 'other' : o.paymentRail;
       // Hashes go one per call (multi-row inserts trip the same platform
@@ -291,17 +307,16 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       const hashes = o.payments.filter(p => p.kind === 'tx_hash');
       const receipts = o.payments.filter(p => p.kind === 'receipt');
       for (const p of hashes) {
-        const res = await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method: p.method ?? method }]) })) as { hashes_added?: number | string }[] | null;
-        // 0 added = the hash already sits on a non-rejected payment (this or
-        // another order) or was rejected here — not a new payment, but not
-        // silent either: counted and shown in the row result
-        if (Array.isArray(res) && res[0] && Number(res[0].hashes_added ?? 0) === 0) {
-          skippedHashes++;
-          // held by a CANCELLED storefront order's verified copy: the pre-pass
-          // could not release it (money this app saw land), so this order
-          // imports short until an operator moves that payment by hand
-          const held = heldByCancelled.get(canonHash(p.value));
-          if (held) blocked.push(`tx ${p.value.slice(0, 10)}…${p.value.slice(-6)} is ${held.status} on cancelled ${held.orderNumber}`);
+        const res = await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method: p.method ?? method }]) })) as { hashes_added?: number | string; skipped?: unknown }[] | null;
+        const row = Array.isArray(res) ? res[0] : null;
+        if (!row || Number(row.hashes_added ?? 0) > 0) continue;
+        const holders = parseSkipped(row.skipped).filter(h => h.hash === canonHash(p.value));
+        if (holders.some(h => h.same_order && h.status !== 'rejected')) continue; // already attached here: idempotent
+        const label = `tx ${p.value.slice(0, 10)}…${p.value.slice(-6)}`;
+        if (holders.length === 0) short.push(`${label} was not attached and no holder was reported`);
+        for (const h of holders) {
+          if (h.same_order) short.push(`${label} was rejected on this order here, yet the storefront still claims it — un-reject it, or have the member correct the claim`);
+          else short.push(`${label} is ${h.status} on ${h.order_number}${cancelledOnStorefront.has(h.order_number) ? ' (cancelled on the storefront)' : ''} — one order holds a hash here; reject the wrong claim, then pull again`);
         }
       }
       if (receipts.length > 0) {
@@ -335,12 +350,11 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // an earlier order's stale hash could still block this one)
 
     const extras = [
-      skippedHashes > 0 ? `${skippedHashes} hash(es) already held elsewhere` : '',
       conflictNoted > 0 ? `${conflictNoted} claim conflict(s) noted on the order` : '',
     ].filter(Boolean);
     const summary = `${mergedItems.length} items, ${o.payments.length} payment refs${extras.length ? ` · ${extras.join(' · ')}` : ''}`;
-    if (blocked.length > 0) {
-      return { orderNumber: o.orderNumber, ok: false, message: `${summary} — payment NOT attached: ${blocked.join('; ')}. Reject or reassign it on the cancelled order, then pull again.` };
+    if (short.length > 0) {
+      return { orderNumber: o.orderNumber, ok: false, message: `${summary} — payment NOT attached: ${short.join('; ')}` };
     }
     return { orderNumber: o.orderNumber, ok: true, message: summary };
   };
@@ -382,16 +396,14 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // a live order in this pull claims (its claim was imported while the
     // order was live; this app keeps a hash on one order). A PENDING copy is
     // released to the live claimant; a VERIFIED/MISMATCH copy is money this
-    // app saw land and is never moved by a pull — it is remembered so the
-    // live order's row turns red instead of quietly importing short.
-    const heldByCancelled = new Map<string, { orderNumber: string; status: string }>();
+    // app saw land and is never moved by a pull — importPayments then names
+    // it as the holder and the live order's row turns red.
     for (const rel of cancelledReleases(orders, cancellations)) {
       try {
         const res = await withRetry(() => envRef.current.doReleaseCancelled({ order_number: rel.orderNumber, group_buy_id: groupBuyId, hashes: JSON.stringify(rel.hashes), actor: envRef.current.userName })) as { hash: string; outcome: string; status: string }[] | null;
         const rows = Array.isArray(res) ? res : [];
         const released = rows.filter(x => x.outcome === 'released').length;
         const held = rows.filter(x => x.outcome === 'held');
-        for (const h of held) heldByCancelled.set(canonHash(String(h.hash)), { orderNumber: rel.orderNumber, status: String(h.status) });
         if (released > 0 || held.length > 0) {
           out.push({
             orderNumber: rel.orderNumber,
@@ -408,9 +420,10 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         return;
       }
     }
+    const cancelledOnStorefront = new Set(cancellations.map(c => c.orderNumber));
     for (const o of orders) {
       try {
-        out.push(await importOne(o, groupBuyId, heldByCancelled));
+        out.push(await importOne(o, groupBuyId, cancelledOnStorefront));
       } catch (e: unknown) {
         out.push({ orderNumber: o.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Import failed' });
       }

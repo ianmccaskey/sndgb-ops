@@ -323,7 +323,7 @@ export function ImportPage() {
             )}
             {pulledMapped?.conflicts && pulledMapped.conflicts.length > 0 && text.trim() === '' && (
               <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-sm text-amber-200 space-y-1">
-                <p className="font-semibold">One transaction claimed by several orders — this app keeps it on one; the others get a dated admin-note line so reconciliation can reject the wrong claim:</p>
+                <p className="font-semibold">One transaction claimed by several orders — this app keeps it on one; the others import short (red row naming the holder) and get a dated admin-note line so reconciliation can reject the wrong claim:</p>
                 {pulledMapped.conflicts.map(c => (
                   <div key={c.txHash}><span className="font-mono text-xs">{c.txHash.slice(0, 10)}…{c.txHash.slice(-6)}</span> — {c.orderNumbers.join(', ')}</div>
                 ))}

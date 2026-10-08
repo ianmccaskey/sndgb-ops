@@ -10,6 +10,11 @@ import { action } from '@uibakery/data';
  *   wrong-order correction completes on the next pull.
  * - pending receipt refs (no hash) are replaced wholesale on re-import;
  *   verified ones are left untouched.
+ * Returns hashes_added, receipts_added and `skipped`: every hash that was
+ * not inserted, with the holder's order number, the holder payment's status
+ * and whether the holder is this same order — the caller decides whether
+ * that is an idempotent re-import (same order, not rejected) or a short
+ * order that must show red.
  */
 function importPayments() {
   return action('importPayments', 'SQL', {
@@ -63,8 +68,24 @@ function importPayments() {
         FROM wo_clear
         RETURNING row_pk
       )
+      -- Hashes NOT inserted, with their holder, so the caller can judge:
+      -- already on THIS order and not rejected = an idempotent re-import;
+      -- anything else (another order, live or cancelled; rejected here) =
+      -- this order is short of a payment and must not read as a success.
+      -- Reads the pre-statement snapshot, so a hash inserted above (which
+      -- had no holder) never appears here.
       SELECT (SELECT COUNT(*) FROM ins_hashes) AS hashes_added,
-             (SELECT COUNT(*) FROM ins_receipts) AS receipts_added
+             (SELECT COUNT(*) FROM ins_receipts) AS receipts_added,
+             (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                       'hash', s.value,
+                       'order_number', o.order_number,
+                       'status', p.status::text,
+                       'same_order', (p.order_id = {{params.order_id}}::bigint))), '[]'::jsonb)
+              FROM src s
+              JOIN payments p ON (CASE WHEN p.tx_hash ~ '^0x[0-9a-fA-F]{64}$' THEN lower(p.tx_hash) ELSE p.tx_hash END) = s.value
+              JOIN orders o ON o.id = p.order_id
+              WHERE s.kind = 'tx_hash'
+                AND (p.status <> 'rejected' OR p.order_id = {{params.order_id}}::bigint)) AS skipped
     `,
   });
 }
