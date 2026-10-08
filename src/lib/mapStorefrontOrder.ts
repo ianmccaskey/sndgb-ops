@@ -145,6 +145,29 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
     }
   }
 
+  // The order's RAIL here is a reconciliation key: v_rail_reconciliation
+  // groups billed AND received money by it, and the rail cards compare that
+  // to the wallet on that chain. The storefront header rail is only the
+  // option the member picked at checkout; a claim can sit on another rail
+  // (the EVM address paid on Base, a NEAR settlement, a corrected claim).
+  // So the header follows the money: confirmed claims (verified / mismatch)
+  // decide, else the pending ones. One rail → it becomes the order rail
+  // (noted in raw for the import row); several → this order cannot be
+  // allocated to one wallet, and the runner shows it red.
+  const headerRail = String(r.payment_rail || '');
+  const live = json(r.payments).filter(p => p.status !== 'rejected' && (p.tx_hash || p.receipt_ref));
+  const confirmed = live.filter(p => p.status === 'verified' || p.status === 'mismatch');
+  const claimRails = [...new Set((confirmed.length > 0 ? confirmed : live).map(p => String(p.rail || '')).filter(x => RAILS.has(x)))];
+  let paymentRail = headerRail as ParsedOrder['paymentRail'];
+  const railNotes: Record<string, string> = {};
+  if (claimRails.length === 1 && claimRails[0] !== headerRail) {
+    paymentRail = claimRails[0] as ParsedOrder['paymentRail'];
+    railNotes.header_rail = headerRail;
+    railNotes.rail_from_claims = claimRails[0];
+  } else if (claimRails.length > 1) {
+    railNotes.rail_conflict = claimRails.join(', ');
+  }
+
   const placedMs = r.placed_at ? Date.parse(r.placed_at) : NaN;
   const n = (v: string | null | undefined) => Number(v ?? 0) || 0;
 
@@ -157,7 +180,7 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
     phone: String(r.contact_phone || '').trim() || null,
     discord: String(r.discord_username || '').trim() || null,
     groupBuyName: null,
-    paymentRail: r.payment_rail as ParsedOrder['paymentRail'],
+    paymentRail,
     addressLine1: String(r.address_line1 || '').trim() || null,
     addressLine2: String(r.address_line2 || '').trim() || null,
     city: String(r.city || '').trim() || null,
@@ -183,6 +206,7 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
       telegram_username: String(r.telegram_username || ''),
       split_fees_usd: String(r.split_fees_usd ?? ''),
       updated_at: String(r.updated_at || ''),
+      ...railNotes,
     },
   };
 }

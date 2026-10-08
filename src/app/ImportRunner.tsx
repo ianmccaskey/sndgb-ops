@@ -351,10 +351,19 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
 
     const extras = [
       conflictNoted > 0 ? `${conflictNoted} claim conflict(s) noted on the order` : '',
+      // the storefront mapper moves the order onto the rail its claims sit on
+      // (rail cards reconcile by the order rail): say so, it is visible state
+      o.raw.rail_from_claims ? `rail ${o.raw.header_rail} → ${o.raw.rail_from_claims}, where its claims sit` : '',
     ].filter(Boolean);
     const summary = `${mergedItems.length} items, ${o.payments.length} payment refs${extras.length ? ` · ${extras.join(' · ')}` : ''}`;
-    if (short.length > 0) {
-      return { orderNumber: o.orderNumber, ok: false, message: `${summary} — payment NOT attached: ${short.join('; ')}` };
+    const problems = [
+      short.length > 0 ? `payment NOT attached: ${short.join('; ')}` : '',
+      o.raw.rail_conflict
+        ? `claims sit on several rails (${o.raw.rail_conflict}) — an order reconciles on ONE rail, so the ${o.paymentRail} card will carry money that is on another wallet until you settle this by hand`
+        : '',
+    ].filter(Boolean);
+    if (problems.length > 0) {
+      return { orderNumber: o.orderNumber, ok: false, message: `${summary} — ${problems.join('; ')}` };
     }
     return { orderNumber: o.orderNumber, ok: true, message: summary };
   };

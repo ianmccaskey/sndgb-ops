@@ -31,6 +31,10 @@ where the code fails to honour one; do not propose replacing the decision.
   across every pulled row; the order that attaches the hash gets a conflict
   note, every other claimant's import row turns red naming the holder, and a
   pull never moves money this app has verified (`verified` / `mismatch`).
+- **An order reconciles on the rail its money sits on.** For storefront
+  orders the mapper sets `payment_rail` from the live claims (confirmed first);
+  a single claim rail wins over the checkout header, several rails turn the
+  import row red. Rail cards key on `orders.payment_rail` by design.
 - **Rejected claims are released before any payment imports**, for every
   pulled row (live, cancelled, or skipped by validation); a release that fails
   aborts the run before anything is written.
