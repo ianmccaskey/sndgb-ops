@@ -138,7 +138,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doSyncStatus };
 
   const importOne = async (o: ParsedOrder, gbId: number): Promise<ImportRowResult> => {
-    const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims } = envRef.current;
+    const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict } = envRef.current;
     // An empty item set would erase a previously imported order's items on
     // prune. Refuse it here for every source (pull and paste).
     if (o.items.length === 0) {
@@ -280,41 +280,36 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       }
     }
 
-    // Claims the storefront rejected after we imported them pending: reject
-    // the local copies too (idempotent; verified ones are never touched).
-    let rejectedSynced = 0;
-    if (o.raw.rejected_claims) {
-      try {
-        const res = await withRetry(() => doRejectedClaims({ order_number: o.orderNumber, group_buy_id: gbId, rejected: o.raw.rejected_claims, actor: userName })) as unknown[] | null;
-        rejectedSynced = Array.isArray(res) ? res.length : (res ? 1 : 0);
-      } catch {
-        // a malformed marker must not fail the import of a valid order
-      }
-    }
+    // (claims the storefront rejected are released in run()'s pre-pass, for
+    // every order in the pull, BEFORE any payment import — never here, where
+    // an earlier order's stale hash could still block this one)
 
     const extras = [
       skippedHashes > 0 ? `${skippedHashes} hash(es) already held elsewhere` : '',
       conflictNoted > 0 ? `${conflictNoted} claim conflict(s) noted on the order` : '',
-      rejectedSynced > 0 ? `${rejectedSynced} local payment(s) rejected to match the storefront` : '',
     ].filter(Boolean);
     return { orderNumber: o.orderNumber, ok: true, message: `${mergedItems.length} items, ${o.payments.length} payment refs${extras.length ? ` · ${extras.join(' · ')}` : ''}` };
   };
 
   const run = async ({ groupBuyId, orders, cancellations }: StartArgs) => {
     const out: ImportRowResult[] = [];
-    // FIRST: claims the storefront rejected on orders that are no longer
-    // importable (cancelled). Their local pending copies must be released
-    // before any live order below tries to import the same hash — otherwise
-    // the stale hash blocks the real claimant. Idempotent, so it is safe to
-    // run on every pull.
-    for (const c of cancellations) {
-      if (!c.rejectedClaims || c.rejectedClaims.length === 0) continue;
+    // FIRST: every claim the storefront has rejected — on live orders and on
+    // cancelled ones alike. Their local pending copies must be released
+    // before ANY order below imports a payment: orders import in source
+    // order, so a later order's stale hash would otherwise block an earlier
+    // order's legitimate claim within the same run. Idempotent, so it is
+    // safe on every pull.
+    const releases: { orderNumber: string; rejected: string }[] = [
+      ...orders.filter(o => !!o.raw.rejected_claims).map(o => ({ orderNumber: o.orderNumber, rejected: o.raw.rejected_claims })),
+      ...cancellations.filter(c => (c.rejectedClaims?.length ?? 0) > 0).map(c => ({ orderNumber: c.orderNumber, rejected: JSON.stringify(c.rejectedClaims) })),
+    ];
+    for (const r of releases) {
       try {
-        const res = await withRetry(() => envRef.current.doRejectedClaims({ order_number: c.orderNumber, group_buy_id: groupBuyId, rejected: JSON.stringify(c.rejectedClaims), actor: envRef.current.userName })) as unknown[] | null;
+        const res = await withRetry(() => envRef.current.doRejectedClaims({ order_number: r.orderNumber, group_buy_id: groupBuyId, rejected: r.rejected, actor: envRef.current.userName })) as unknown[] | null;
         const n = Array.isArray(res) ? res.length : (res ? 1 : 0);
-        if (n > 0) out.push({ orderNumber: c.orderNumber, ok: true, message: `${n} stale local payment(s) rejected to match the storefront` });
+        if (n > 0) out.push({ orderNumber: r.orderNumber, ok: true, message: `${n} stale local payment(s) rejected to match the storefront` });
       } catch (e: unknown) {
-        out.push({ orderNumber: c.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Failed to release rejected claims' });
+        out.push({ orderNumber: r.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Failed to release rejected claims' });
       }
       setJob(j => ({ ...j, results: [...out] }));
     }
@@ -349,8 +344,10 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       running: true,
       forGroupBuyId: args.groupBuyId,
       sourceKey: importSourceKey(args),
-      // + one row per cancellation that releases rejected claims (pre-pass)
-      total: args.orders.length + args.cancellations.length + args.cancellations.filter(c => (c.rejectedClaims?.length ?? 0) > 0).length,
+      // + one row per order/cancellation that releases rejected claims (pre-pass)
+      total: args.orders.length + args.cancellations.length
+        + args.orders.filter(o => !!o.raw.rejected_claims).length
+        + args.cancellations.filter(c => (c.rejectedClaims?.length ?? 0) > 0).length,
       results: [],
       finished: false,
     });
