@@ -41,13 +41,21 @@ function upsertOrderItem() {
         FOR UPDATE OF oi
       ), ins AS (
         INSERT INTO order_items (order_id, group_buy_product_id, qty, unit_price_usd, direct_ship, split_fee_usd)
-        SELECT {{params.order_id}}::bigint, gbp.id, {{params.qty}}::numeric, gbp.gb_price_usd,
+        SELECT {{params.order_id}}::bigint, gbp.id, {{params.qty}}::numeric,
+               -- a source that snapshots the unit price at order time (the
+               -- storefront) sends it; the ordering app / paste send '' and
+               -- the campaign price applies as before. NULLIF-before-cast:
+               -- a raw ''::numeric cast fails at plan time regardless of COALESCE
+               COALESCE(NULLIF({{params.unit_price_usd}}::text, '')::numeric, gbp.gb_price_usd),
                COALESCE(NULLIF({{params.direct_ship}}::text, '')::boolean, false),
                -- ORDER-TIME split-fee snapshot: a fractional upstream qty
                -- means the ordering app charged the split fee at the current
-               -- rate; frozen on the line so later config edits can't
-               -- rewrite this order's money
-               CASE WHEN {{params.qty}}::numeric % 1 <> 0 THEN gbp.split_fee_usd ELSE 0 END
+               -- rate (or the source's own snapshot when it sends one);
+               -- frozen on the line so later config edits can't rewrite
+               -- this order's money
+               CASE WHEN {{params.qty}}::numeric % 1 <> 0
+                    THEN COALESCE(NULLIF({{params.split_fee_usd}}::text, '')::numeric, gbp.split_fee_usd)
+                    ELSE 0 END
         FROM products p
         JOIN group_buy_products gbp ON gbp.product_id = p.id
           AND gbp.group_buy_id = {{params.group_buy_id}}::bigint

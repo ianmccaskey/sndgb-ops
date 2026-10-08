@@ -21,7 +21,10 @@ function listStorefrontOrders() {
              o.placed_at, o.cancelled_at, o.cancel_reason, o.customer_note, o.updated_at,
              COALESCE((
                SELECT json_agg(json_build_object(
-                        'sku', p.sku_code, 'qty', i.qty, 'direct_ship', i.direct_ship, 'name', i.product_name_snapshot)
+                        'sku', p.sku_code, 'qty', i.qty, 'direct_ship', i.direct_ship, 'name', i.product_name_snapshot,
+                        -- order-time snapshots: what the member was actually charged per unit and
+                        -- as split fee, which must survive a later campaign price edit
+                        'unit_price_usd', i.unit_price_usd, 'split_fee_usd', i.split_fee_usd)
                       ORDER BY i.id)
                FROM storefront.order_items i
                JOIN group_buy_products gbp ON gbp.id = i.group_buy_product_id

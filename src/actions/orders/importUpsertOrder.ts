@@ -166,9 +166,12 @@ function importUpsertOrder() {
                (oi.qty_override IS NOT NULL AND x.qty = oi.qty_override
                 AND (SELECT prev.total_usd FROM prev) IS DISTINCT FROM (SELECT up.total_usd FROM up)) AS retire_override,
                (oi.qty IS DISTINCT FROM x.qty) AS qty_changing,
-               CASE WHEN x.qty % 1 <> 0 THEN gbp.split_fee_usd ELSE 0 END AS new_split_fee
+               CASE WHEN x.qty % 1 <> 0 THEN COALESCE(x.split_fee, gbp.split_fee_usd) ELSE 0 END AS new_split_fee
         FROM up,
-             jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric)
+             -- split_fee is optional: a source that snapshots it at order time
+             -- (storefront) sends it; the ordering app / paste send none and
+             -- the current campaign rate applies as before
+             jsonb_to_recordset({{params.items}}::jsonb) AS x(sku text, qty numeric, split_fee numeric)
              JOIN products p ON p.sku_code = x.sku
              JOIN group_buy_products gbp ON gbp.product_id = p.id
                AND gbp.group_buy_id = {{params.group_buy_id}}::bigint,

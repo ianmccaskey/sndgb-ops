@@ -20,6 +20,10 @@ export type ParsedItem = {
   /** vendor ships this line to the customer directly. undefined = the source
    * doesn't know (paste imports) — the DB keeps whatever it already has. */
   directShip?: boolean;
+  /** order-time price snapshots when the source records them (storefront).
+   * undefined = price the line from the campaign product (base44, paste). */
+  unitPriceUsd?: number;
+  splitFeeUsd?: number;
 };
 
 export type ParsedPayment = {

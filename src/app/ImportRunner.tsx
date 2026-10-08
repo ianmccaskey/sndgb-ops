@@ -159,7 +159,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // Summed in integer hundredths: quantities are 2-decimal values and the
     // write boundary rejects finer precision, so float addition (0.1 + 0.2 =
     // 0.30000000000000004) must never reach the qty param.
-    const qtyBySku = new Map<string, { cents: number; directShip: boolean | undefined }>();
+    const qtyBySku = new Map<string, { cents: number; directShip: boolean | undefined; unitPriceUsd: number | undefined; splitFeeUsd: number | undefined }>();
     for (const it of o.items) {
       const cur = qtyBySku.get(it.sku);
       qtyBySku.set(it.sku, {
@@ -168,9 +168,18 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         // direct-shipped the merged row is; undefined only when no line knows
         directShip: cur?.directShip === undefined && it.directShip === undefined
           ? undefined : (cur?.directShip || it.directShip || false),
+        // order-time price snapshots (storefront): first line's values win;
+        // a source never prices one SKU two ways on one order
+        unitPriceUsd: cur?.unitPriceUsd ?? it.unitPriceUsd,
+        splitFeeUsd: cur?.splitFeeUsd ?? it.splitFeeUsd,
       });
     }
-    const mergedItems = [...qtyBySku.entries()].map(([sku, v]) => ({ sku, qty: v.cents / 100, directShip: v.directShip }));
+    const mergedItems = [...qtyBySku.entries()].map(([sku, v]) => ({
+      sku, qty: v.cents / 100, directShip: v.directShip,
+      // split_fee rides along for the header upsert's per-line snapshot
+      ...(v.splitFeeUsd !== undefined ? { split_fee: v.splitFeeUsd } : {}),
+      unitPriceUsd: v.unitPriceUsd, splitFeeUsd: v.splitFeeUsd,
+    }));
 
     const upserted = await withRetry(() => doUpsert({
       // the header upsert adopts any locally-added row whose SKU is in this
@@ -213,6 +222,9 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       const res = await withRetry(() => doUpsertItem({
         order_id: orderId, group_buy_id: gbId, sku: it.sku, qty: it.qty,
         direct_ship: it.directShip === undefined ? '' : String(it.directShip),
+        // blank = price from the campaign product (ordering app, paste)
+        unit_price_usd: it.unitPriceUsd === undefined ? '' : String(it.unitPriceUsd),
+        split_fee_usd: it.splitFeeUsd === undefined ? '' : String(it.splitFeeUsd),
         actor: userName,
       })) as unknown[] | null;
       if (Array.isArray(res) ? res.length > 0 : !!res) itemsWritten++;

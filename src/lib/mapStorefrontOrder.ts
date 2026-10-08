@@ -47,7 +47,7 @@ export type StorefrontOrderRow = {
   cancel_reason: string | null;
   customer_note: string | null;
   updated_at: string | null;
-  items: { sku: string | null; qty: string | number; direct_ship: boolean; name: string | null }[] | string;
+  items: { sku: string | null; qty: string | number; direct_ship: boolean; name: string | null; unit_price_usd?: string | number | null; split_fee_usd?: string | number | null }[] | string;
   payments: { rail: string; method: string; tx_hash: string | null; receipt_ref: string | null; status: string; verified_usd: string | null }[] | string;
 };
 
@@ -87,7 +87,15 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
       errors.push({ line: index + 1, text: orderNumber, reason: `Unusable quantity ${qtyText} for '${sku}'` });
       return null;
     }
-    items.push({ sku, qty, directShip: !!it.direct_ship });
+    // the member's order-time prices travel with the line so a later campaign
+    // price or split-fee edit never rewrites what they were charged
+    const unitPriceUsd = Number(it.unit_price_usd);
+    const splitFeeUsd = Number(it.split_fee_usd);
+    items.push({
+      sku, qty, directShip: !!it.direct_ship,
+      unitPriceUsd: Number.isFinite(unitPriceUsd) && it.unit_price_usd != null ? unitPriceUsd : undefined,
+      splitFeeUsd: Number.isFinite(splitFeeUsd) && it.split_fee_usd != null ? splitFeeUsd : undefined,
+    });
   }
   if (items.length === 0) {
     errors.push({ line: index + 1, text: orderNumber, reason: 'No line items — skipped (importing would erase any existing items for this order)' });
