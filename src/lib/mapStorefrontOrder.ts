@@ -17,7 +17,7 @@
  *    'cancelled'), never as an importable order.
  */
 import type { ParsedItem, ParsedOrder, ParsedPayment, ParseResult } from '@/lib/parseOrderImport';
-import type { B44Cancellation, MappedOrders } from '@/lib/mapB44Order';
+import type { B44Cancellation, ClaimRelease, MappedOrders } from '@/lib/mapB44Order';
 
 export type StorefrontOrderRow = {
   id: number | string;
@@ -123,19 +123,14 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
   // imported on THAT network, never the order header's. A hash that does not
   // fit its rail is an identity failure, not something to guess at.
   const payments: ParsedPayment[] = [];
-  // claims the storefront has since REJECTED (failed on-chain, wrong wallet,
-  // never found): not evidence — and a local payment imported while the
-  // claim was still pending must be rejected here too, or it keeps the
-  // hash slot and blocks reconciliation. Travels as raw.rejected_claims.
-  const rejected: RejectedClaim[] = [];
   for (const p of json(r.payments)) {
     const rail = String(p.rail || '');
     const method = String(p.method || '');
-    if (p.status === 'rejected') {
-      const claim = rejectedClaim(p);
-      if (claim) rejected.push(claim);
-      continue;
-    }
+    // a claim the storefront has since REJECTED (failed on-chain, wrong
+    // wallet, never found) is not evidence. Its local copy is released by
+    // the pull's pre-pass from MappedOrders.releases, collected for every
+    // row — including rows this validator skips — never from here.
+    if (p.status === 'rejected') continue;
     if (p.tx_hash) {
       const hash = String(p.tx_hash).trim();
       const fits = rail === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(hash) : (rail === 'eth' || rail === 'base') && /^0x[0-9a-fA-F]{64}$/.test(hash);
@@ -188,24 +183,32 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
       telegram_username: String(r.telegram_username || ''),
       split_fees_usd: String(r.split_fees_usd ?? ''),
       updated_at: String(r.updated_at || ''),
-      ...(rejected.length > 0 ? { rejected_claims: JSON.stringify(rejected) } : {}),
     },
   };
 }
 
 export function mapStorefrontOrders(rowsIn: StorefrontOrderRow[]): MappedOrders {
   const result: MappedOrders = { orders: [], errors: [], cancellations: [] };
+  // Claims the storefront has REJECTED, from EVERY row — live, cancelled, or
+  // about to be skipped by validation below (a row with a bad SKU today may
+  // have had its hash imported on an earlier pull). The runner releases the
+  // local copies BEFORE any payment imports; collecting them here, outside
+  // mapOne, is what makes a skipped row's stale hash still get released.
+  const releases: ClaimRelease[] = [];
+  for (const r of rowsIn) {
+    const orderNumber = String(r.order_number || '').trim();
+    const rejected = json(r.payments)
+      .filter(p => p.status === 'rejected')
+      .map(rejectedClaim)
+      .filter((c): c is RejectedClaim => c !== null);
+    if (orderNumber && rejected.length > 0) releases.push({ orderNumber, rejected });
+  }
+  if (releases.length > 0) result.releases = releases;
   rowsIn.forEach((r, i) => {
     if (r.status === 'cancelled') {
       const orderNumber = String(r.order_number || '').trim();
       if (orderNumber) {
-        // rejected claims ride along: the runner releases their local copies
-        // before any live order tries to import the same hash
-        const rejectedClaims = json(r.payments)
-          .filter(p => p.status === 'rejected')
-          .map(rejectedClaim)
-          .filter((c): c is RejectedClaim => c !== null);
-        // claims still LIVE on the cancelled order ride along too: an earlier
+        // claims still LIVE on the cancelled order ride along: an earlier
         // import may have landed one here, where it blocks a live claimant
         const liveClaims = json(r.payments)
           .filter(p => p.status !== 'rejected' && p.tx_hash)
@@ -213,7 +216,6 @@ export function mapStorefrontOrders(rowsIn: StorefrontOrderRow[]): MappedOrders 
         const c: B44Cancellation = {
           orderNumber, status: 'cancelled', source: 'storefront',
           sourceStatus: r.cancel_reason ? `cancelled — ${r.cancel_reason}` : 'cancelled',
-          ...(rejectedClaims.length > 0 ? { rejectedClaims } : {}),
           ...(liveClaims.length > 0 ? { liveClaims } : {}),
         };
         result.cancellations.push(c);

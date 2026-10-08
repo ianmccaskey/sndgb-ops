@@ -11,7 +11,7 @@ import releaseCancelledStorefrontClaims from '@/actions/storefront/releaseCancel
 import syncOrderStatus from '@/actions/orders/syncOrderStatus';
 import { useApp } from '@/app/AppContext';
 import { ParsedOrder } from '@/lib/parseOrderImport';
-import { B44Cancellation } from '@/lib/mapB44Order';
+import { B44Cancellation, ClaimRelease } from '@/lib/mapB44Order';
 import { Loader2, CheckCircle2, XCircle, X } from 'lucide-react';
 
 /**
@@ -76,7 +76,14 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-type StartArgs = { groupBuyId: number; orders: ParsedOrder[]; cancellations: B44Cancellation[] };
+type StartArgs = {
+  groupBuyId: number;
+  orders: ParsedOrder[];
+  cancellations: B44Cancellation[];
+  /** claims the source has rejected, from EVERY source row (also rows that
+   * failed validation and are not in `orders`) — released before any import */
+  releases?: ClaimRelease[];
+};
 
 /**
  * Compact deterministic fingerprint for bulky raw payloads: two independent
@@ -104,11 +111,12 @@ function hashStr(s: string): string {
  * changes only unmapped source fields still needs a fresh run — but the full
  * JSON of every order would make the key needlessly huge.
  */
-export function importSourceKey({ groupBuyId, orders, cancellations }: StartArgs): string {
+export function importSourceKey({ groupBuyId, orders, cancellations, releases }: StartArgs): string {
   return JSON.stringify([
     groupBuyId,
     orders.map(({ raw, ...rest }) => ({ ...rest, rawHash: hashStr(JSON.stringify(raw)) })),
     cancellations,
+    releases ?? [],
   ]);
 }
 
@@ -337,18 +345,16 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     return { orderNumber: o.orderNumber, ok: true, message: summary };
   };
 
-  const run = async ({ groupBuyId, orders, cancellations }: StartArgs) => {
+  const run = async ({ groupBuyId, orders, cancellations, releases = [] }: StartArgs) => {
     const out: ImportRowResult[] = [];
-    // FIRST: every claim the storefront has rejected — on live orders and on
-    // cancelled ones alike. Their local pending copies must be released
-    // before ANY order below imports a payment: orders import in source
-    // order, so a later order's stale hash would otherwise block an earlier
-    // order's legitimate claim within the same run. Idempotent, so it is
-    // safe on every pull.
-    const releases: { orderNumber: string; rejected: string }[] = [
-      ...orders.filter(o => !!o.raw.rejected_claims).map(o => ({ orderNumber: o.orderNumber, rejected: o.raw.rejected_claims })),
-      ...cancellations.filter(c => (c.rejectedClaims?.length ?? 0) > 0).map(c => ({ orderNumber: c.orderNumber, rejected: JSON.stringify(c.rejectedClaims) })),
-    ];
+    // FIRST: every claim the storefront has rejected — on live orders, on
+    // cancelled ones, and on rows the validator skipped (the mapper collects
+    // `releases` from every source row, not from the orders it produced).
+    // Their local pending copies must be released before ANY order below
+    // imports a payment: orders import in source order, so a later (or
+    // skipped) row's stale hash would otherwise block an earlier order's
+    // legitimate claim within the same run. Idempotent, so it is safe on
+    // every pull.
     // FAIL CLOSED. A release that did not provably succeed may have left a
     // stale non-rejected hash in place, and such a hash blocks every other
     // claimant — importing anything now could attach a payment to the wrong
@@ -363,7 +369,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     };
     for (const r of releases) {
       try {
-        const res = await withRetry(() => envRef.current.doRejectedClaims({ order_number: r.orderNumber, group_buy_id: groupBuyId, rejected: r.rejected, actor: envRef.current.userName })) as unknown[] | null;
+        const res = await withRetry(() => envRef.current.doRejectedClaims({ order_number: r.orderNumber, group_buy_id: groupBuyId, rejected: JSON.stringify(r.rejected), actor: envRef.current.userName })) as unknown[] | null;
         const n = Array.isArray(res) ? res.length : (res ? 1 : 0);
         if (n > 0) out.push({ orderNumber: r.orderNumber, ok: true, message: `${n} stale local payment(s) rejected to match the storefront` });
         setJob(j => ({ ...j, results: [...out] }));
@@ -433,10 +439,9 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       running: true,
       forGroupBuyId: args.groupBuyId,
       sourceKey: importSourceKey(args),
-      // + one row per order/cancellation that releases rejected claims (pre-pass)
+      // + one row per pre-pass release (rejected claims; cancelled-order hashes)
       total: args.orders.length + args.cancellations.length
-        + args.orders.filter(o => !!o.raw.rejected_claims).length
-        + args.cancellations.filter(c => (c.rejectedClaims?.length ?? 0) > 0).length
+        + (args.releases?.length ?? 0)
         + cancelledReleases(args.orders, args.cancellations).length,
       results: [],
       finished: false,

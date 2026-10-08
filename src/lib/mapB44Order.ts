@@ -39,18 +39,28 @@ export type B44Cancellation = {
   /** which upstream reported it: 'storefront', or undefined for the ordering
    * app / paste. syncOrderStatus only cancels rows from the same source. */
   source?: 'storefront';
-  /** payment claims the storefront has rejected on this (cancelled) order —
-   * a local copy imported while pending must be rejected too, or its hash
-   * stays occupied and blocks a live claimant */
-  rejectedClaims?: { kind: 'tx_hash' | 'receipt'; value: string; reason: string }[];
   /** tx hashes still claimed (not rejected) on this cancelled storefront
    * order — a local copy imported while it was live blocks a live claimant;
    * the runner releases a pending copy and flags a verified one */
   liveClaims?: { hash: string }[];
 };
 
+/**
+ * Payment claims a source has REJECTED on one of its orders — live,
+ * cancelled, or skipped by validation — whose local copies (imported while
+ * the claim was still pending) must be released before any payment imports.
+ */
+export type ClaimRelease = {
+  orderNumber: string;
+  rejected: { kind: 'tx_hash' | 'receipt'; value: string; reason: string }[];
+};
+
 export type MappedOrders = ParseResult & {
   cancellations: B44Cancellation[];
+  /** rejected claims from EVERY source row, including rows that failed
+   * validation and produced no order — the runner's pre-pass consumes this,
+   * never the orders list, so a skipped row's stale hash is still released */
+  releases?: ClaimRelease[];
   /** one tx hash claimed by several orders in the source (storefront allows
    * it; this app holds a hash on ONE order) — surfaced so the duplicate is
    * seen and resolved, never silently dropped */

@@ -151,6 +151,10 @@ export function ImportPage() {
 
   // Upstream cancellations only apply when the pulled set is the active source.
   const cancellations = text.trim() === '' && pulledMapped ? pulledMapped.cancellations : [];
+  // Rejected claims to release first — from every pulled row, including the
+  // ones the validator skipped (they still produced no order, but their
+  // stale local hash must not block the orders that do import).
+  const releases = text.trim() === '' && pulledMapped ? (pulledMapped.releases ?? []) : [];
 
   // Orders DELETED upstream never appear in the pull at all (deletion has no
   // status), so they'd linger locally in demand/revenue forever. Diff the
@@ -212,18 +216,18 @@ export function ImportPage() {
   }, [parsed]);
 
   const sourceKey = useMemo(
-    () => (groupBuyId == null ? null : importSourceKey({ groupBuyId, orders: parsed.orders, cancellations })),
-    [groupBuyId, parsed.orders, cancellations],
+    () => (groupBuyId == null ? null : importSourceKey({ groupBuyId, orders: parsed.orders, cancellations, releases })),
+    [groupBuyId, parsed.orders, cancellations, releases],
   );
   const results = sourceKey != null && job.sourceKey === sourceKey ? job.results : [];
 
-  const canImport = enabled && (parsed.orders.length > 0 || cancellations.length > 0) && skuProblems.size === 0 && !importing;
+  const canImport = enabled && (parsed.orders.length > 0 || cancellations.length > 0 || releases.length > 0) && skuProblems.size === 0 && !importing;
 
   const runImport = () => {
     if (!canImport || groupBuyId == null) return;
     // Hands the validated set to the app-level runner and returns
     // immediately — progress renders below and in the floating widget.
-    startImport({ groupBuyId, orders: parsed.orders, cancellations });
+    startImport({ groupBuyId, orders: parsed.orders, cancellations, releases });
   };
 
   return (
