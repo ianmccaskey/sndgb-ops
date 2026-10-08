@@ -26,6 +26,10 @@ export type ParsedPayment = {
   /** 'eth' | 'sol' | 'base' rail hashes, or a receipt reference for P2P rails */
   kind: 'tx_hash' | 'receipt';
   value: string;
+  /** payment_method the claim was made on, when the source states it per
+   * payment (storefront). undefined = derive from the order's rail
+   * (base44, paste), which is all those sources know. */
+  method?: 'eth' | 'sol' | 'base' | 'zelle' | 'venmo' | 'paypal' | 'cash' | 'other';
 };
 
 export type ParsedOrder = {

@@ -226,13 +226,15 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       // validation); receipts go together in one call because the action
       // clears pending receipts per invocation — per-receipt calls would
       // each wipe the previous one.
+      // A source that states each claim's method (storefront) wins over the
+      // order header's rail: a claim is imported on the network it was made on.
       const hashes = o.payments.filter(p => p.kind === 'tx_hash');
       const receipts = o.payments.filter(p => p.kind === 'receipt');
       for (const p of hashes) {
-        await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method }]) }));
+        await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify([{ kind: p.kind, value: p.value, method: p.method ?? method }]) }));
       }
       if (receipts.length > 0) {
-        await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify(receipts.map(p => ({ kind: p.kind, value: p.value, method: 'other' }))) }));
+        await withRetry(() => doPayments({ order_id: orderId, payments: JSON.stringify(receipts.map(p => ({ kind: p.kind, value: p.value, method: p.method ?? 'other' }))) }));
       }
     }
 

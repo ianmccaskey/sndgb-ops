@@ -94,10 +94,26 @@ function mapOne(r: StorefrontOrderRow, index: number, errors: ParseResult['error
     return null;
   }
 
+  // Each claim carries its own rail/method (a member may have paid on a rail
+  // other than the order's — a corrected claim, a NEAR settlement): it is
+  // imported on THAT network, never the order header's. A hash that does not
+  // fit its rail is an identity failure, not something to guess at.
   const payments: ParsedPayment[] = [];
   for (const p of json(r.payments)) {
-    if (p.tx_hash) payments.push({ kind: 'tx_hash', value: String(p.tx_hash).trim() });
-    else if (p.receipt_ref) payments.push({ kind: 'receipt', value: String(p.receipt_ref).trim() });
+    const rail = String(p.rail || '');
+    const method = String(p.method || '');
+    if (p.tx_hash) {
+      const hash = String(p.tx_hash).trim();
+      const fits = rail === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(hash) : (rail === 'eth' || rail === 'base') && /^0x[0-9a-fA-F]{64}$/.test(hash);
+      if (!fits) {
+        errors.push({ line: index + 1, text: orderNumber, reason: `Payment claim ${hash.slice(0, 12)}… does not fit its rail '${rail || '?'}'` });
+        return null;
+      }
+      payments.push({ kind: 'tx_hash', value: hash, method: rail as ParsedPayment['method'] });
+    } else if (p.receipt_ref) {
+      const m = (['zelle', 'venmo', 'paypal'].includes(method) ? method : 'other') as ParsedPayment['method'];
+      payments.push({ kind: 'receipt', value: String(p.receipt_ref).trim(), method: m });
+    }
   }
 
   const placedMs = r.placed_at ? Date.parse(r.placed_at) : NaN;
