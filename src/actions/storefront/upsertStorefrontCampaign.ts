@@ -10,6 +10,14 @@ import { action } from '@uibakery/data';
  * carrying the code — on creation, and again if the code changes while no
  * storefront order exists yet. Once a storefront order carries the code it is
  * frozen. The code is uppercased; the sequence is never lowered.
+ *
+ * This action never touches `published`: a new row starts unpublished and an
+ * update keeps whatever the flag is, so a stale page cannot unpublish (or
+ * publish) by saving copy. setStorefrontCampaignPublished is the flag's only
+ * writer. An update is version-checked: `expected_version` is the row's
+ * updated_at as the page loaded it (getStorefrontCampaign's `version`); when
+ * the row has moved on since, nothing is written and the page says to
+ * reload. A page that saw no row (empty version) can only insert.
  */
 function upsertStorefrontCampaign() {
   return action('upsertStorefrontCampaign', 'SQL', {
@@ -18,7 +26,7 @@ function upsertStorefrontCampaign() {
       WITH inp AS (
         SELECT {{params.group_buy_id}}::bigint AS group_buy_id,
                upper(btrim({{params.code}}::text)) AS code,
-               ({{params.published}}::text = 'true') AS published,
+               NULLIF({{params.expected_version}}::text, '') AS expected_version,
                NULLIF({{params.description_md}}::text, '') AS description_md,
                NULLIF({{params.payment_instructions_md}}::text, '') AS payment_instructions_md,
                NULLIF({{params.near_default_rail}}::text, '')::payment_rail AS near_default_rail,
@@ -46,11 +54,6 @@ function upsertStorefrontCampaign() {
             JOIN storefront.orders o ON o.group_buy_id = cs.group_buy_id
             WHERE cs.group_buy_id = inp.group_buy_id AND cs.code <> inp.code
           )
-          -- never publish a campaign members could not pay: at least one active option
-          AND (NOT inp.published OR EXISTS (
-            SELECT 1 FROM storefront.campaign_payment_options po
-            WHERE po.group_buy_id = inp.group_buy_id AND po.active
-          ))
       ), taken AS (
         -- highest sequence already used with this code, in ANY year and from
         -- EITHER source: the next storefront number must clear all of them
@@ -67,19 +70,23 @@ function upsertStorefrontCampaign() {
       )
       INSERT INTO storefront.campaign_settings
         (group_buy_id, code, published, description_md, payment_instructions_md, near_default_rail, insurance_rate_pct, next_order_seq)
-      SELECT g.group_buy_id, g.code, g.published, g.description_md, g.payment_instructions_md, g.near_default_rail,
+      SELECT g.group_buy_id, g.code, false, g.description_md, g.payment_instructions_md, g.near_default_rail,
              COALESCE(g.insurance_rate_pct, 1.27), t.max_seq + 1
       FROM guard g, taken t
       ON CONFLICT (group_buy_id) DO UPDATE SET
         code = EXCLUDED.code,
-        published = EXCLUDED.published,
+        -- published is NOT in this list: setStorefrontCampaignPublished owns it
         description_md = EXCLUDED.description_md,
         payment_instructions_md = EXCLUDED.payment_instructions_md,
         near_default_rail = EXCLUDED.near_default_rail,
         insurance_rate_pct = EXCLUDED.insurance_rate_pct,
         -- never lowered; raised when the (new) code already has higher numbers out there
         next_order_seq = GREATEST(storefront.campaign_settings.next_order_seq, EXCLUDED.next_order_seq)
-      RETURNING group_buy_id, code, published, next_order_seq
+      -- optimistic concurrency: only the version the page loaded may be
+      -- overwritten; a page that saw no row (NULL version) never updates one
+      WHERE extract(epoch from storefront.campaign_settings.updated_at)::text
+            = (SELECT expected_version FROM inp)
+      RETURNING group_buy_id, code, published, next_order_seq, extract(epoch from updated_at)::text AS version
     `,
   });
 }

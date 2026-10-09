@@ -6,6 +6,7 @@ import upsertStorefrontCampaign from '@/actions/storefront/upsertStorefrontCampa
 import listStorefrontPaymentOptions from '@/actions/storefront/listStorefrontPaymentOptions';
 import addStorefrontPaymentOption from '@/actions/storefront/addStorefrontPaymentOption';
 import setStorefrontPaymentOptionActive from '@/actions/storefront/setStorefrontPaymentOptionActive';
+import setStorefrontCampaignPublished from '@/actions/storefront/setStorefrontCampaignPublished';
 import getStorefrontOrderStats from '@/actions/storefront/getStorefrontOrderStats';
 import { useApp, platformOf } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
@@ -36,6 +37,8 @@ type CampaignSettingsRow = {
   near_default_rail: string | null;
   insurance_rate_pct: string;
   next_order_seq: number;
+  /** opaque version token (updated_at) handed back on save — a stale page refuses instead of overwriting */
+  version: string;
 };
 type OptionRow = { id: number; rail: string; token: string; address: string; label: string | null; active: boolean; sort: number; orders_using: string };
 type StatsRow = { unpaid: string; payment_submitted: string; paid: string; cancelled: string; not_imported: string; number_collisions: string; last_placed_at: string | null };
@@ -58,6 +61,7 @@ export function StorefrontPage() {
   const [doUpsert] = useMutateAction(upsertStorefrontCampaign);
   const [doAddOpt] = useMutateAction(addStorefrontPaymentOption);
   const [doSetActive] = useMutateAction(setStorefrontPaymentOptionActive);
+  const [doSetPublished] = useMutateAction(setStorefrontCampaignPublished);
 
   // form mirrors the stored row; re-seeded when the campaign or its row changes
   const [code, setCode] = useState('');
@@ -93,11 +97,13 @@ export function StorefrontPage() {
     if (!codeOk) { setSaveMsg('Code must be 2–8 letters or digits (it prefixes every order number, e.g. 2026-MB6-014).'); return; }
     setSaving(true);
     try {
-      // Save never changes the published flag: publishing is its own step below.
+      // Save never changes the published flag (the action has no such input);
+      // it carries the version the page loaded, so a row that moved on since
+      // — another admin, another tab — is refused instead of overwritten.
       const res = await doUpsert({
         group_buy_id: groupBuyId,
         code: code.trim().toUpperCase(),
-        published: String(cs?.published ?? false),
+        expected_version: cs?.version ?? '',
         description_md: descriptionMd,
         payment_instructions_md: paymentInstructionsMd,
         near_default_rail: nearDefaultRail === 'none' ? '' : nearDefaultRail,
@@ -107,7 +113,11 @@ export function StorefrontPage() {
       if (!touched) {
         setSaveMsg(base44Linked
           ? 'Refused: this campaign runs through the base44 ordering app. The storefront is for new campaigns — create the next buy under Settings → New campaign and select it in the header.'
-          : hasOrders ? 'Refused: the code cannot change once orders carry it.' : 'Refused: check the code (2–8 letters or digits).');
+          : hasOrders && cs && cs.code !== code.trim().toUpperCase()
+            ? 'Refused: the code cannot change once orders carry it.'
+            : cs
+              ? 'Refused: this campaign\'s setup changed since you loaded it (another admin or tab). Reload the page and reapply your edits.'
+              : 'Refused: check the code (2–8 letters or digits), or reload — the campaign may have been set up elsewhere.');
       } else {
         setSaveMsg(cs ? 'Saved.' : 'Saved. Add a payment option below, then publish when ready.');
         reloadCs(); reloadGroupBuys(); reloadStats();
@@ -119,9 +129,9 @@ export function StorefrontPage() {
     }
   };
 
-  // Publishing is a distinct, confirmed step. It writes the stored row with
-  // the flag flipped — never unsaved form edits — so "Save" and "Publish"
-  // cannot be confused for each other.
+  // Publishing is a distinct, confirmed step with its own action that writes
+  // ONLY the flag — no copy, no settings — so neither a stale page nor "Save"
+  // can carry the other's state across.
   const [publishConfirm, setPublishConfirm] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const setPublishedTo = async (next: boolean) => {
@@ -130,15 +140,7 @@ export function StorefrontPage() {
     if (next && activeRails.size === 0) { setSaveMsg('Add at least one active payment option before publishing — members would have nothing to pay on.'); setPublishConfirm(false); return; }
     setPublishing(true);
     try {
-      const res = await doUpsert({
-        group_buy_id: groupBuyId,
-        code: cs.code,
-        published: String(next),
-        description_md: cs.description_md ?? '',
-        payment_instructions_md: cs.payment_instructions_md ?? '',
-        near_default_rail: cs.near_default_rail ?? '',
-        insurance_rate_pct: String(Number(cs.insurance_rate_pct)),
-      }) as unknown[] | null;
+      const res = await doSetPublished({ group_buy_id: groupBuyId, published: String(next) }) as unknown[] | null;
       const touched = Array.isArray(res) ? res.length > 0 : !!res;
       if (!touched) setSaveMsg(next ? 'Refused: add at least one active payment option before publishing.' : 'Refused: could not unpublish.');
       else {

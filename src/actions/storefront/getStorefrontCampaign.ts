@@ -7,7 +7,9 @@ function getStorefrontCampaign() {
     query: `
       SELECT cs.group_buy_id, cs.code, cs.published, cs.description_md, cs.payment_instructions_md,
              cs.near_default_rail::text AS near_default_rail, cs.insurance_rate_pct, cs.next_order_seq,
-             cs.hero_media_id, cs.created_at, cs.updated_at
+             cs.hero_media_id, cs.created_at, cs.updated_at,
+             -- opaque version token the page hands back on save (optimistic concurrency)
+             extract(epoch from cs.updated_at)::text AS version
       FROM storefront.campaign_settings cs
       WHERE cs.group_buy_id = {{params.group_buy_id}}::bigint
     `,
