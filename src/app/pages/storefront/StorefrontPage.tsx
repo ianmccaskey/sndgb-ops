@@ -108,7 +108,7 @@ export function StorefrontPage() {
       const touched = Array.isArray(res) ? res.length > 0 : !!res;
       if (!touched) {
         setSaveMsg(base44Linked
-          ? 'Refused: this campaign runs through the base44 ordering app. The storefront is for new campaigns — create the next buy on the Products page and select it in the header.'
+          ? 'Refused: this campaign runs through the base44 ordering app. The storefront is for new campaigns — create the next buy under Settings → New campaign and select it in the header.'
           : published && activeRails.size === 0
             ? 'Refused: add at least one active payment option before publishing.'
             : hasOrders ? 'Refused: the code cannot change once orders carry it.' : 'Refused: check the code (2–8 letters or digits).');
@@ -177,7 +177,7 @@ export function StorefrontPage() {
         </p>
         <p className="text-sm mt-2">
           Setting up: <span className="font-semibold">{groupBuy?.name ?? '— no campaign selected —'}</span>
-          <span className="text-muted-foreground"> · the campaign comes from the switcher in the header. For a new buy, create it on the Products page first, then select it there.</span>
+          <span className="text-muted-foreground"> · the campaign comes from the switcher in the header. For a new buy, create it under Settings → New campaign first, then select it there.</span>
           {groupBuy && groupBuy.status !== 'open' && (
             <span className="block text-amber-300 mt-0.5">Campaign status is <span className="font-mono">{groupBuy.status}</span> — members can see a published campaign, but only an <span className="font-mono">open</span> one takes orders.</span>
           )}
@@ -188,7 +188,7 @@ export function StorefrontPage() {
         <Card className="border-amber-400/40 bg-amber-400/5">
           <CardContent className="pt-4 text-sm text-amber-200 space-y-1">
             <p className="font-semibold">{groupBuy?.name} is not a storefront campaign.</p>
-            <p>It runs through the base44 ordering app, and a campaign is run on one platform only: setting it up here would switch its Import page to the storefront pull while it is still being fulfilled from base44. The storefront is for new campaigns — create the next buy on the Products page, select it in the header, and set it up here.</p>
+            <p>It runs through the base44 ordering app, and a campaign is run on one platform only: setting it up here would switch its Import page to the storefront pull while it is still being fulfilled from base44. The storefront is for new campaigns — create the next buy under Settings → New campaign, select it in the header, and set it up here.</p>
           </CardContent>
         </Card>
       )}
