@@ -283,13 +283,19 @@ export function ImportPage() {
         </CardContent>
       </Card>
 
-      <Textarea
-        placeholder="Or paste order rows here (overrides the pulled set while non-empty)…"
-        value={text}
-        onChange={e => setText(e.target.value)}
-        rows={6}
-        className="font-mono text-xs"
-      />
+      {sfMode ? (
+        // a storefront campaign takes orders from the storefront only: a pasted
+        // row would carry another source, which the database refuses (1790101100)
+        <p className="text-xs text-muted-foreground">Paste import is off for a storefront campaign — its orders come only from p2collective.app.</p>
+      ) : (
+        <Textarea
+          placeholder="Or paste order rows here (overrides the pulled set while non-empty)…"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          rows={6}
+          className="font-mono text-xs"
+        />
+      )}
 
       {(text.trim() !== '' || pulledMapped) && (
         <Card>

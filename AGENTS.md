@@ -47,9 +47,12 @@ where the code fails to honour one; do not propose replacing the decision.
   member verification status — belongs in the **P2 Collective Orders** app,
   even though some of those tables live in this database. Settled with the
   owner 2026-10-08; do not add store pages here.
-- **A campaign runs on ONE ordering platform.** Campaign Setup refuses a
-  campaign linked to base44 (`group_buys.external_id`) or holding orders from
-  another source, in SQL and on the page; the storefront is for NEW campaigns.
+- **A campaign runs on ONE ordering platform** (`1790101100`): the database
+  refuses storefront settings on a base44-linked campaign or one with other-
+  source orders, refuses linking a storefront campaign to base44, and refuses
+  a non-storefront order in a storefront campaign; Campaign Setup and
+  `linkGroupBuyExternal` refuse first and say why. The storefront is for NEW
+  campaigns.
 - **Direct ship is routing only** (no customer surcharge); **split-kit fees are
   per-line snapshots**; **cash processor fee is a true gross-up** defined by
   the storefront and imported as stated.

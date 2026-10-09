@@ -78,7 +78,14 @@ export function OrderingAppSync({ products, onImported }: {
     if (!groupBuy || !pickedB44Id) return;
     setBusy(true); setError('');
     try {
-      await doLinkGb({ id: groupBuy.id, external_id: pickedB44Id });
+      const res = await doLinkGb({ id: groupBuy.id, external_id: pickedB44Id }) as unknown[] | null;
+      const touched = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!touched) {
+        // a campaign runs on ONE ordering platform (1790101100): one set up
+        // for the storefront is never linked to base44
+        setError('Refused: this campaign is set up for the storefront (Campaign Setup), so it cannot also be linked to the ordering app.');
+        return;
+      }
       reloadGroupBuys();
       setB44Buys(null);
     } catch (e: unknown) {
