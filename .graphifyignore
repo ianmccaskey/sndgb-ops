@@ -1,0 +1,3 @@
+# graphify: stale graph outputs inside src are not source
+**/graphify-out/**
+src/node_modules/**

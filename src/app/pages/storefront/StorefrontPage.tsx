@@ -79,6 +79,13 @@ export function StorefrontPage() {
   }, [groupBuyId, cs?.group_buy_id, cs?.code, cs?.published, cs?.description_md, cs?.payment_instructions_md, cs?.near_default_rail, cs?.insurance_rate_pct]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasOrders = useMemo(() => !!stats && Number(stats.unpaid) + Number(stats.payment_submitted) + Number(stats.paid) + Number(stats.cancelled) > 0, [stats]);
+  // A campaign is run on ONE ordering platform. One linked to the base44
+  // ordering app (external_id) imports from there; setting it up here would
+  // flip the Import page to the storefront pull and hide the base44 one for
+  // a campaign still being fulfilled. The action refuses too; this keeps the
+  // page honest about why. Never true for a campaign already set up here.
+  const base44Linked = !!groupBuy?.external_id;
+  const blocked = base44Linked && !cs;
   const codeOk = CODE_RE.test(code.trim().toUpperCase());
   const activeRails = useMemo(() => new Set(options.filter(o => o.active).map(o => o.rail)), [options]);
 
@@ -100,9 +107,11 @@ export function StorefrontPage() {
       }) as unknown[] | null;
       const touched = Array.isArray(res) ? res.length > 0 : !!res;
       if (!touched) {
-        setSaveMsg(published && activeRails.size === 0
-          ? 'Refused: add at least one active payment option before publishing.'
-          : hasOrders ? 'Refused: the code cannot change once orders carry it.' : 'Refused: check the code (2–8 letters or digits).');
+        setSaveMsg(base44Linked
+          ? 'Refused: this campaign runs through the base44 ordering app. The storefront is for new campaigns — create the next buy on the Products page and select it in the header.'
+          : published && activeRails.size === 0
+            ? 'Refused: add at least one active payment option before publishing.'
+            : hasOrders ? 'Refused: the code cannot change once orders carry it.' : 'Refused: check the code (2–8 letters or digits).');
       } else {
         setSaveMsg(published ? 'Saved — the campaign is live on the storefront.' : 'Saved (not published).');
         reloadCs(); reloadGroupBuys(); reloadStats();
@@ -164,14 +173,27 @@ export function StorefrontPage() {
           <Globe className="h-6 w-6 text-cyan-300" /> Campaign Setup
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          How <span className="font-medium">{groupBuy?.name}</span> is offered on p2collective.app: its order-number code, the wallets members pay, and whether it is published. Members order there; their orders come back in through Import → Refresh from storefront. (The P² store itself is set up in the P2 Collective Orders app.)
+          Offers a campaign on p2collective.app: its order-number code, the wallets members pay, and whether it is published. Members order there; their orders come back in through Import → Refresh from storefront. The P² store itself is set up in the P2 Collective Orders app.
+        </p>
+        <p className="text-sm mt-2">
+          Setting up: <span className="font-semibold">{groupBuy?.name ?? '— no campaign selected —'}</span>
+          <span className="text-muted-foreground"> · the campaign comes from the switcher in the header. For a new buy, create it on the Products page first, then select it there.</span>
           {groupBuy && groupBuy.status !== 'open' && (
             <span className="block text-amber-300 mt-0.5">Campaign status is <span className="font-mono">{groupBuy.status}</span> — members can see a published campaign, but only an <span className="font-mono">open</span> one takes orders.</span>
           )}
         </p>
       </div>
 
-      <Card>
+      {blocked && (
+        <Card className="border-amber-400/40 bg-amber-400/5">
+          <CardContent className="pt-4 text-sm text-amber-200 space-y-1">
+            <p className="font-semibold">{groupBuy?.name} is not a storefront campaign.</p>
+            <p>It runs through the base44 ordering app, and a campaign is run on one platform only: setting it up here would switch its Import page to the storefront pull while it is still being fulfilled from base44. The storefront is for new campaigns — create the next buy on the Products page, select it in the header, and set it up here.</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {!blocked && <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center justify-between gap-3">
             <span>Publishing</span>
@@ -187,7 +209,7 @@ export function StorefrontPage() {
           <div className="grid gap-4 sm:grid-cols-[10rem_1fr]">
             <div className="space-y-1">
               <Label htmlFor="sf-code">Code</Label>
-              <Input id="sf-code" value={code} onChange={e => setCode(e.target.value.toUpperCase())} maxLength={8} placeholder="MB6" className="font-mono" disabled={hasOrders} />
+              <Input id="sf-code" value={code} onChange={e => setCode(e.target.value.toUpperCase())} maxLength={8} placeholder="e.g. MB6" className="font-mono" disabled={hasOrders} />
               <p className="text-xs text-muted-foreground">{hasOrders ? 'Frozen — orders carry it.' : 'Prefixes order numbers: 2026-CODE-001.'}</p>
             </div>
             <div className="space-y-1">
@@ -226,13 +248,13 @@ export function StorefrontPage() {
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
-            <Button onClick={save} disabled={saving || !codeOk}>{saving ? 'Saving…' : cs ? 'Save' : 'Set up storefront'}</Button>
+            <Button onClick={save} disabled={saving || !codeOk}>{saving ? 'Saving…' : cs ? 'Save' : 'Save campaign setup'}</Button>
             {saveMsg && <span className={`text-sm ${/refused|failed|must|add at least/i.test(saveMsg) ? 'text-rose-400' : 'text-emerald-300'}`}>{saveMsg}</span>}
           </div>
         </CardContent>
-      </Card>
+      </Card>}
 
-      <Card>
+      {!blocked && <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Payment options</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
@@ -313,7 +335,7 @@ export function StorefrontPage() {
           </div>
           {optMsg && <p className={`text-sm ${/refused|failed|already/i.test(optMsg) ? 'text-rose-400' : 'text-emerald-300'}`}>{optMsg}</p>}
         </CardContent>
-      </Card>
+      </Card>}
 
       {cs && stats && (
         <Card>

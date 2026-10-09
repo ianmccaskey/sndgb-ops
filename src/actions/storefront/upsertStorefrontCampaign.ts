@@ -28,6 +28,19 @@ function upsertStorefrontCampaign() {
         SELECT inp.*
         FROM inp
         WHERE inp.code ~ '^[A-Z0-9]{2,8}$'
+          -- a campaign is run on ONE ordering platform: one linked to the base44
+          -- ordering app, or already holding orders from any other source, is
+          -- never set up here (the Import page would switch to the storefront
+          -- pull and hide the base44 one for a campaign still being fulfilled)
+          AND NOT EXISTS (
+            SELECT 1 FROM group_buys gb
+            WHERE gb.id = inp.group_buy_id AND gb.external_id IS NOT NULL
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM orders o
+            WHERE o.group_buy_id = inp.group_buy_id
+              AND COALESCE(o.raw_import->>'source', '') <> 'storefront'
+          )
           AND NOT EXISTS (
             SELECT 1 FROM storefront.campaign_settings cs
             JOIN storefront.orders o ON o.group_buy_id = cs.group_buy_id
