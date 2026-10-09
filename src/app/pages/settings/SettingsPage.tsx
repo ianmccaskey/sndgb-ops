@@ -273,7 +273,11 @@ export function SettingsPage() {
   const createCampaign = async () => {
     const name = newName.trim();
     if (!name) { setNewMsg('Name required.'); return; }
-    const admin = Number(newAdminFee), ship = Number(newShipFee), cash = Number(newCashPct);
+    // Number('') is 0: a cleared fee field must be an error, never a silent
+    // zero-fee campaign. Explicit "0" is allowed when a fee really is zero.
+    const raw = [newAdminFee, newShipFee, newCashPct].map(v => v.trim());
+    if (raw.some(v => v === '')) { setNewMsg('Enter all three fees — type 0 only if a fee really is zero.'); return; }
+    const [admin, ship, cash] = raw.map(Number);
     if (![admin, ship, cash].every(n => Number.isFinite(n) && n >= 0)) { setNewMsg('Fees must be numbers (0 or more).'); return; }
     setNewMsg(''); setCreatedName('');
     try {
@@ -352,7 +356,7 @@ export function SettingsPage() {
             <Field label="Admin fee $ / order" value={newAdminFee} onChange={setNewAdminFee} />
             <Field label="Shipping fee $ / order" value={newShipFee} onChange={setNewShipFee} />
             <Field label="Cash processor fee %" value={newCashPct} onChange={setNewCashPct} />
-            <Button size="sm" className="h-9" onClick={createCampaign} disabled={!newName.trim()}>Create campaign</Button>
+            <Button size="sm" className="h-9" onClick={createCampaign} disabled={!newName.trim() || !newAdminFee.trim() || !newShipFee.trim() || !newCashPct.trim()}>Create campaign</Button>
           </div>
           {createdName && (
             <p className="text-sm text-emerald-300">
