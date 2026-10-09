@@ -7,7 +7,7 @@ import listStorefrontPaymentOptions from '@/actions/storefront/listStorefrontPay
 import addStorefrontPaymentOption from '@/actions/storefront/addStorefrontPaymentOption';
 import setStorefrontPaymentOptionActive from '@/actions/storefront/setStorefrontPaymentOptionActive';
 import getStorefrontOrderStats from '@/actions/storefront/getStorefrontOrderStats';
-import { useApp } from '@/app/AppContext';
+import { useApp, platformOf } from '@/app/AppContext';
 import { rows } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -61,7 +61,6 @@ export function StorefrontPage() {
 
   // form mirrors the stored row; re-seeded when the campaign or its row changes
   const [code, setCode] = useState('');
-  const [published, setPublished] = useState(false);
   const [descriptionMd, setDescriptionMd] = useState('');
   const [paymentInstructionsMd, setPaymentInstructionsMd] = useState('');
   const [nearDefaultRail, setNearDefaultRail] = useState('base');
@@ -71,7 +70,6 @@ export function StorefrontPage() {
   useEffect(() => {
     setSaveMsg('');
     setCode(cs?.code ?? '');
-    setPublished(cs?.published ?? false);
     setDescriptionMd(cs?.description_md ?? '');
     setPaymentInstructionsMd(cs?.payment_instructions_md ?? '');
     setNearDefaultRail(cs?.near_default_rail ?? 'base');
@@ -93,13 +91,13 @@ export function StorefrontPage() {
     if (groupBuyId == null) return;
     setSaveMsg('');
     if (!codeOk) { setSaveMsg('Code must be 2–8 letters or digits (it prefixes every order number, e.g. 2026-MB6-014).'); return; }
-    if (published && activeRails.size === 0) { setSaveMsg('Add at least one active payment option before publishing — members would have nothing to pay on.'); return; }
     setSaving(true);
     try {
+      // Save never changes the published flag: publishing is its own step below.
       const res = await doUpsert({
         group_buy_id: groupBuyId,
         code: code.trim().toUpperCase(),
-        published: String(published),
+        published: String(cs?.published ?? false),
         description_md: descriptionMd,
         payment_instructions_md: paymentInstructionsMd,
         near_default_rail: nearDefaultRail === 'none' ? '' : nearDefaultRail,
@@ -109,11 +107,9 @@ export function StorefrontPage() {
       if (!touched) {
         setSaveMsg(base44Linked
           ? 'Refused: this campaign runs through the base44 ordering app. The storefront is for new campaigns — create the next buy under Settings → New campaign and select it in the header.'
-          : published && activeRails.size === 0
-            ? 'Refused: add at least one active payment option before publishing.'
-            : hasOrders ? 'Refused: the code cannot change once orders carry it.' : 'Refused: check the code (2–8 letters or digits).');
+          : hasOrders ? 'Refused: the code cannot change once orders carry it.' : 'Refused: check the code (2–8 letters or digits).');
       } else {
-        setSaveMsg(published ? 'Saved — the campaign is live on the storefront.' : 'Saved (not published).');
+        setSaveMsg(cs ? 'Saved.' : 'Saved. Add a payment option below, then publish when ready.');
         reloadCs(); reloadGroupBuys(); reloadStats();
       }
     } catch (e: unknown) {
@@ -122,6 +118,43 @@ export function StorefrontPage() {
       setSaving(false);
     }
   };
+
+  // Publishing is a distinct, confirmed step. It writes the stored row with
+  // the flag flipped — never unsaved form edits — so "Save" and "Publish"
+  // cannot be confused for each other.
+  const [publishConfirm, setPublishConfirm] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const setPublishedTo = async (next: boolean) => {
+    if (groupBuyId == null || !cs) return;
+    setSaveMsg('');
+    if (next && activeRails.size === 0) { setSaveMsg('Add at least one active payment option before publishing — members would have nothing to pay on.'); setPublishConfirm(false); return; }
+    setPublishing(true);
+    try {
+      const res = await doUpsert({
+        group_buy_id: groupBuyId,
+        code: cs.code,
+        published: String(next),
+        description_md: cs.description_md ?? '',
+        payment_instructions_md: cs.payment_instructions_md ?? '',
+        near_default_rail: cs.near_default_rail ?? '',
+        insurance_rate_pct: String(Number(cs.insurance_rate_pct)),
+      }) as unknown[] | null;
+      const touched = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!touched) setSaveMsg(next ? 'Refused: add at least one active payment option before publishing.' : 'Refused: could not unpublish.');
+      else {
+        setSaveMsg(next ? 'Published — signed-in members can see it now.' : 'Unpublished — hidden from members.');
+        reloadCs(); reloadGroupBuys(); reloadStats();
+      }
+    } catch (e: unknown) {
+      setSaveMsg(e instanceof Error ? e.message : 'Failed to update publishing');
+    } finally {
+      setPublishing(false);
+      setPublishConfirm(false);
+    }
+  };
+
+  // retiring an option members were told to pay is confirmed, not a bare switch
+  const [retireConfirm, setRetireConfirm] = useState<OptionRow | null>(null);
 
   // new payment option
   const [optRail, setOptRail] = useState('eth');
@@ -172,12 +205,12 @@ export function StorefrontPage() {
         <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
           <Globe className="h-6 w-6 text-cyan-300" /> Campaign Setup
         </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Offers a campaign on p2collective.app: its order-number code, the wallets members pay, and whether it is published. Members order there; their orders come back in through Import → Refresh from storefront. The P² store itself is set up in the P2 Collective Orders app.
-        </p>
-        <p className="text-sm mt-2">
+        <p className="text-base mt-2">
           Setting up: <span className="font-semibold">{groupBuy?.name ?? '— no campaign selected —'}</span>
-          <span className="text-muted-foreground"> · the campaign comes from the switcher in the header. For a new buy, create it under Settings → New campaign first, then select it there.</span>
+          {groupBuy && <span className="ml-2 align-middle text-xs rounded border px-1.5 py-0.5 text-muted-foreground">{platformOf(groupBuy)}</span>}
+        </p>
+        <p className="text-sm text-muted-foreground mt-1">
+          Offers this campaign on p2collective.app: its order-number code, the wallets members pay, and publishing. The campaign comes from the header switcher; a new buy is created under Settings → New campaign. Orders come back through Import → Refresh from storefront. The P² store itself is set up in the P2 Collective Orders app.
           {groupBuy && groupBuy.status !== 'open' && (
             <span className="block text-amber-300 mt-0.5">Campaign status is <span className="font-mono">{groupBuy.status}</span> — members can see a published campaign, but only an <span className="font-mono">open</span> one takes orders.</span>
           )}
@@ -221,7 +254,7 @@ export function StorefrontPage() {
             <Label htmlFor="sf-pay">Payment instructions (shown on the campaign page above the lines)</Label>
             <Textarea id="sf-pay" value={paymentInstructionsMd} onChange={e => setPaymentInstructionsMd(e.target.value)} rows={3} placeholder="USDC or USDT on Ethereum, Solana or Base. Cash by Zelle, Venmo or PayPal adds the processor fee." />
           </div>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1">
               <Label>NEAR Intents settles to</Label>
               <Select value={nearDefaultRail} onValueChange={setNearDefaultRail}>
@@ -239,18 +272,40 @@ export function StorefrontPage() {
               <Input id="sf-ins" value={insuranceRatePct} onChange={e => setInsuranceRatePct(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" className="font-mono" />
               <p className="text-xs text-muted-foreground">Shippo is $1.27 per $100.</p>
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="sf-pub">Published</Label>
-              <div className="flex items-center gap-3 h-9">
-                <Switch id="sf-pub" checked={published} onCheckedChange={setPublished} />
-                <span className="text-sm text-muted-foreground">{published ? 'Visible to signed-in members' : 'Hidden'}</span>
-              </div>
-            </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <Button onClick={save} disabled={saving || !codeOk}>{saving ? 'Saving…' : cs ? 'Save' : 'Save campaign setup'}</Button>
             {saveMsg && <span className={`text-sm ${/refused|failed|must|add at least/i.test(saveMsg) ? 'text-rose-400' : 'text-emerald-300'}`}>{saveMsg}</span>}
           </div>
+          {cs && (
+            <div className="border-t pt-3 space-y-2">
+              {!cs.published ? (
+                publishConfirm ? (
+                  <div className="rounded border border-amber-400/40 bg-amber-400/5 p-3 text-sm space-y-2">
+                    <p className="font-semibold text-amber-200">Publish {groupBuy?.name} to members?</p>
+                    <p>
+                      It appears at <span className="font-mono text-xs">{storefrontUrl}</span> for every signed-in member, paying on {[...activeRails].map(r => RAIL_LABEL[r] ?? r).join(', ')}.
+                      Campaign status is <span className="font-mono">{groupBuy?.status}</span>{groupBuy?.status !== 'open' ? ' — only an open campaign takes orders' : ''}.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button size="sm" disabled={publishing} onClick={() => setPublishedTo(true)}>{publishing ? 'Publishing…' : 'Publish'}</Button>
+                      <Button size="sm" variant="outline" disabled={publishing} onClick={() => setPublishConfirm(false)}>Cancel</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Button variant="outline" disabled={activeRails.size === 0 || publishing} onClick={() => setPublishConfirm(true)}>Publish to members</Button>
+                    <span className="text-xs text-muted-foreground">{activeRails.size === 0 ? 'Add an active payment option first.' : 'Hidden from members until published.'}</span>
+                  </div>
+                )
+              ) : (
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-sm text-emerald-300">Published — visible to signed-in members.</span>
+                  <Button variant="outline" size="sm" disabled={publishing} onClick={() => setPublishedTo(false)}>{publishing ? 'Working…' : 'Unpublish'}</Button>
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>}
 
@@ -282,11 +337,21 @@ export function StorefrontPage() {
                       <TableCell className="font-mono text-xs max-w-[260px] truncate" title={o.address}>{o.address}</TableCell>
                       <TableCell>{o.label}</TableCell>
                       <TableCell className="text-right font-mono text-xs">{o.orders_using}</TableCell>
-                      <TableCell><Switch checked={o.active} onCheckedChange={() => toggleOption(o)} aria-label={o.active ? 'Retire' : 'Reinstate'} /></TableCell>
+                      <TableCell><Switch checked={o.active} onCheckedChange={() => { if (o.active && Number(o.orders_using) > 0) setRetireConfirm(o); else toggleOption(o); }} aria-label={o.active ? 'Retire' : 'Reinstate'} /></TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
+            </div>
+          )}
+          {retireConfirm && (
+            <div className="rounded border border-amber-400/40 bg-amber-400/5 p-3 text-sm space-y-2">
+              <p className="font-semibold text-amber-200">Retire {retireConfirm.label || `${RAIL_LABEL[retireConfirm.rail] ?? retireConfirm.rail} ${retireConfirm.token}`}?</p>
+              <p>{retireConfirm.orders_using} order(s) were told to pay this address. Unpaid ones will be shown the remaining options; the storefront refuses new claims against it. Add the replacement first if there is one.</p>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={() => { const o = retireConfirm; setRetireConfirm(null); toggleOption(o); }}>Retire</Button>
+                <Button size="sm" variant="outline" onClick={() => setRetireConfirm(null)}>Keep</Button>
+              </div>
             </div>
           )}
           <div className="grid gap-2 sm:grid-cols-[8rem_8rem_1fr_10rem_auto] items-end">

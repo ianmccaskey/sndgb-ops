@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Home,
   ShoppingCart,
@@ -31,7 +31,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { useApp } from '@/app/AppContext';
+import { useApp, platformOf } from '@/app/AppContext';
 
 type NavItem = {
   label: string;
@@ -39,18 +39,20 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
+// Daily operations first, campaign setup last — the create → select → set up
+// path for a new buy lives in the bottom three entries, in that order.
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', href: '/', icon: Home },
   { label: 'Orders', href: '/orders', icon: ShoppingCart },
   { label: 'Import', href: '/import', icon: ClipboardPaste },
-  { label: 'Campaign Setup', href: '/storefront', icon: Globe },
   { label: 'Reconciliation', href: '/recon', icon: Scale },
-  { label: 'Vendors', href: '/vendors', icon: Store },
-  { label: 'Products', href: '/products', icon: Package },
   { label: 'Fulfillment', href: '/fulfillment', icon: Truck },
+  { label: 'Receiving', href: '/receiving', icon: PackageOpen },
+  { label: 'Vendors', href: '/vendors', icon: Store },
   { label: 'Financials', href: '/financials', icon: BarChart3 },
   { label: 'Planner', href: '/planner', icon: GitBranch },
-  { label: 'Receiving', href: '/receiving', icon: PackageOpen },
+  { label: 'Products', href: '/products', icon: Package },
+  { label: 'Campaign Setup', href: '/storefront', icon: Globe },
   { label: 'Settings', href: '/settings', icon: Settings },
 ];
 
@@ -147,6 +149,7 @@ function BottomNav() {
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const { groupBuys, groupBuy, groupBuyId, setGroupBuyId, userName } = useApp();
+  const navigate = useNavigate();
   return (
     <SidebarProvider defaultOpen={true}>
       {/* h-dvh, not h-screen: 100vh on mobile browsers includes the area
@@ -161,17 +164,22 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <Separator orientation="vertical" className="h-5" />
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground hidden sm:inline">Campaign</span>
+              {/* Every page acts on the campaign picked here, so each entry says
+                  which platform it runs on; a new buy is created from the last entry. */}
               <Select
                 value={groupBuyId != null ? String(groupBuyId) : ''}
-                onValueChange={(v) => setGroupBuyId(Number(v))}
+                onValueChange={(v) => { if (v === '__new') navigate('/settings?new=1'); else setGroupBuyId(Number(v)); }}
               >
-                <SelectTrigger className="h-8 w-[150px] sm:w-[220px] text-sm">
+                <SelectTrigger className="h-8 w-auto max-w-[62vw] sm:max-w-none sm:w-[280px] text-sm">
                   <SelectValue placeholder="Select a group buy" />
                 </SelectTrigger>
                 <SelectContent>
                   {groupBuys.map(g => (
-                    <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
+                    <SelectItem key={g.id} value={String(g.id)}>
+                      {g.name} <span className="text-xs text-muted-foreground">· {platformOf(g)}</span>
+                    </SelectItem>
                   ))}
+                  <SelectItem value="__new" className="text-cyan-300">+ New campaign…</SelectItem>
                 </SelectContent>
               </Select>
               {groupBuy && (

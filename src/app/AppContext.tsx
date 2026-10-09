@@ -22,6 +22,15 @@ export type GroupBuyRow = {
   storefront_published: boolean | null;
 };
 
+/** Which ordering platform a campaign runs on — shown wherever a campaign is picked or acted on. */
+export type CampaignPlatform = 'storefront' | 'base44' | 'not set up';
+export function platformOf(g: Pick<GroupBuyRow, 'external_id' | 'storefront_code'> | null | undefined): CampaignPlatform {
+  if (!g) return 'not set up';
+  if (g.storefront_code) return 'storefront';
+  if (g.external_id) return 'base44';
+  return 'not set up';
+}
+
 export interface AppState {
   userName: string;
   userEmail: string;

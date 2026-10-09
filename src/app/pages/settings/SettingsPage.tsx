@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useMutateAction, useLoadAction } from '@uibakery/data';
 import saveSetting from '@/actions/settings/saveSetting';
 import updateGroupBuy from '@/actions/groupBuys/updateGroupBuy';
@@ -37,7 +38,8 @@ function Field({ label, value, onChange, type = 'text', placeholder }: {
 }
 
 export function SettingsPage() {
-  const { groupBuy, groupBuyId, settings, reloadSettings, reloadGroupBuys } = useApp();
+  const { groupBuys, groupBuy, groupBuyId, setGroupBuyId, settings, reloadSettings, reloadGroupBuys } = useApp();
+  const location = useLocation();
   const [doSaveSetting] = useMutateAction(saveSetting);
   const [doUpdateGb] = useMutateAction(updateGroupBuy);
   const [doCreateGb] = useMutateAction(createGroupBuy);
@@ -80,7 +82,28 @@ export function SettingsPage() {
 
   // new campaign
   const [newName, setNewName] = useState('');
+  const [newAdminFee, setNewAdminFee] = useState('10');
+  const [newShipFee, setNewShipFee] = useState('10');
+  const [newCashPct, setNewCashPct] = useState('4.5');
   const [newMsg, setNewMsg] = useState('');
+  const [createdName, setCreatedName] = useState('');
+  // The campaign list reloads asynchronously after a create; selecting the
+  // new id before the list holds it would be undone by the context's
+  // "default to the most recent" effect. Select once the list has it.
+  const [pendingSelect, setPendingSelect] = useState<number | null>(null);
+  useEffect(() => {
+    if (pendingSelect != null && groupBuys.some(g => Number(g.id) === pendingSelect)) {
+      setGroupBuyId(pendingSelect);
+      setPendingSelect(null);
+    }
+  }, [groupBuys, pendingSelect, setGroupBuyId]);
+  // "+ New campaign…" in the header switcher lands here with ?new=1
+  const newNameRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('new') === '1') newNameRef.current?.focus();
+  }, [location.search]);
+  // Leaving "open" ends ordering for members: confirmed inline, never a bare save.
+  const [confirmStatus, setConfirmStatus] = useState(false);
 
   // splits
   const [splitEdits, setSplitEdits] = useState<Record<string, string>>({});
@@ -227,9 +250,12 @@ export function SettingsPage() {
     reloadWallets(); reloadSettings();
   };
 
-  const saveCampaign = async () => {
+  const saveCampaign = async (confirmed = false) => {
     if (!groupBuy) return;
     setGbMsg('');
+    const leavingOpen = groupBuy.status === 'open' && gbStatus !== 'open';
+    if (leavingOpen && !confirmed) { setConfirmStatus(true); return; }
+    setConfirmStatus(false);
     try {
       await doUpdateGb({
         id: groupBuy.id, name: gbName, status: gbStatus, starts_on: gbStart, ends_on: gbEnd,
@@ -245,13 +271,18 @@ export function SettingsPage() {
   };
 
   const createCampaign = async () => {
-    if (!newName.trim()) { setNewMsg('Name required.'); return; }
-    setNewMsg('');
+    const name = newName.trim();
+    if (!name) { setNewMsg('Name required.'); return; }
+    const admin = Number(newAdminFee), ship = Number(newShipFee), cash = Number(newCashPct);
+    if (![admin, ship, cash].every(n => Number.isFinite(n) && n >= 0)) { setNewMsg('Fees must be numbers (0 or more).'); return; }
+    setNewMsg(''); setCreatedName('');
     try {
-      await doCreateGb({ name: newName.trim(), starts_on: '', ends_on: '', admin_fee_usd: 10, shipping_fee_usd: 10, cash_processor_fee_pct: 4.5 });
+      const res = await doCreateGb({ name, starts_on: '', ends_on: '', admin_fee_usd: admin, shipping_fee_usd: ship, cash_processor_fee_pct: cash }) as { id: number | string }[] | null;
+      const newId = Array.isArray(res) && res[0] ? Number(res[0].id) : null;
       setNewName('');
       reloadGroupBuys();
-      setNewMsg('Created — select it from the campaign picker.');
+      if (newId != null) { setPendingSelect(newId); setCreatedName(name); }
+      else setNewMsg('Created — select it from the campaign picker.');
     } catch (e: unknown) {
       setNewMsg(e instanceof Error ? e.message : 'Failed to create');
     }
@@ -310,6 +341,30 @@ export function SettingsPage() {
       </div>
 
       <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-base">New campaign</CardTitle></CardHeader>
+        <CardContent className="space-y-2">
+          <div className="grid grid-cols-2 sm:grid-cols-[1fr_8rem_8rem_8rem_auto] gap-2 items-end">
+            <div className="space-y-1 col-span-2 sm:col-span-1">
+              <Label className="text-xs">Name</Label>
+              <Input ref={newNameRef} placeholder="e.g. Mixed Buy #6" value={newName} onChange={e => setNewName(e.target.value)} className="h-9"
+                onKeyDown={e => { if (e.key === 'Enter') createCampaign(); }} />
+            </div>
+            <Field label="Admin fee $ / order" value={newAdminFee} onChange={setNewAdminFee} />
+            <Field label="Shipping fee $ / order" value={newShipFee} onChange={setNewShipFee} />
+            <Field label="Cash processor fee %" value={newCashPct} onChange={setNewCashPct} />
+            <Button size="sm" className="h-9" onClick={createCampaign} disabled={!newName.trim()}>Create campaign</Button>
+          </div>
+          {createdName && (
+            <p className="text-sm text-emerald-300">
+              Created and selected: <span className="font-medium">{createdName}</span>. Next: <Link to="/storefront" className="text-cyan-300 hover:underline">Campaign Setup →</Link>
+            </p>
+          )}
+          {newMsg && <p className="text-sm text-amber-300">{newMsg}</p>}
+          <p className="text-xs text-muted-foreground">A new campaign starts as a draft on no ordering platform. Fees can be changed below once it is selected.</p>
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Campaign — {groupBuy?.name}</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -331,7 +386,18 @@ export function SettingsPage() {
             <Field label="Recon tolerance $" value={gbTolerance} onChange={setGbTolerance} />
           </div>
           {gbMsg && <p className="text-sm text-muted-foreground">{gbMsg}</p>}
-          <Button size="sm" onClick={saveCampaign}>Save campaign</Button>
+          {confirmStatus ? (
+            <div className="rounded border border-amber-400/40 bg-amber-400/5 p-3 text-sm space-y-2">
+              <p className="font-semibold text-amber-200">Set {groupBuy?.name} to "{gbStatus}"?</p>
+              <p>It is open now. Leaving "open" means members can no longer place orders{groupBuy?.storefront_published ? ' (it stays visible on the storefront as a published campaign)' : ''}. Fees and dates save with it.</p>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={() => saveCampaign(true)}>Yes, set {gbStatus}</Button>
+                <Button size="sm" variant="outline" onClick={() => { setConfirmStatus(false); setGbStatus(groupBuy?.status ?? gbStatus); }}>Cancel</Button>
+              </div>
+            </div>
+          ) : (
+            <Button size="sm" onClick={() => saveCampaign()}>Save campaign</Button>
+          )}
         </CardContent>
       </Card>
 
@@ -381,17 +447,6 @@ export function SettingsPage() {
           {splitMsg && <p className={`text-sm ${splitMsg === 'Saved.' || splitMsg.startsWith('Removed ') ? 'text-muted-foreground' : 'text-amber-300'}`}>{splitMsg}</p>}
           <Button size="sm" disabled={splitSaving} onClick={saveSplits}>{splitSaving ? 'Saving…' : 'Save splits'}</Button>
           <p className="text-xs text-muted-foreground">Percentages must total 100. ✕ removes a person from this campaign; anyone with adjustments attributed to them must be 0% instead. New people save on Save splits.</p>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base">New campaign</CardTitle></CardHeader>
-        <CardContent className="space-y-2">
-          <div className="flex gap-2">
-            <Input placeholder="e.g. Mixed Buy #6" value={newName} onChange={e => setNewName(e.target.value)} className="h-9 flex-1" />
-            <Button size="sm" onClick={createCampaign}>Create</Button>
-          </div>
-          {newMsg && <p className="text-sm text-muted-foreground">{newMsg}</p>}
         </CardContent>
       </Card>
 

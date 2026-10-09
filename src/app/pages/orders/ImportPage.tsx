@@ -229,6 +229,10 @@ export function ImportPage() {
   const results = sourceKey != null && job.sourceKey === sourceKey ? job.results : [];
 
   const canImport = enabled && (parsed.orders.length > 0 || cancellations.length > 0 || releases.length > 0) && skuProblems.size === 0 && !importing;
+  // Results with no row in the preview: releases for rows the validator
+  // skipped, and the abort marker. They would otherwise exist only as a count
+  // in the floating widget.
+  const prePassResults = results.filter(r => !parsed.orders.some(o => o.orderNumber === r.orderNumber) && !cancellations.some(c => c.orderNumber === r.orderNumber));
 
   const runImport = () => {
     if (!canImport || groupBuyId == null) return;
@@ -245,8 +249,8 @@ export function ImportPage() {
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
           {sfMode ? (
-            <>Orders for <span className="font-medium">{groupBuy?.name}</span> come from the storefront (p2collective.app, code <span className="font-mono">{groupBuy?.storefront_code}</span>);
-            the paste box below stays as a fallback. Re-importing the same orders is safe — they update in place, they don't duplicate.</>
+            <>Orders for <span className="font-medium">{groupBuy?.name}</span> come only from the storefront (p2collective.app, code <span className="font-mono">{groupBuy?.storefront_code}</span>).
+            Refresh pulls the latest; re-importing the same orders is safe — they update in place, they don't duplicate.</>
           ) : (
             <>Orders for <span className="font-medium">{groupBuy?.name}</span> pull straight from the ordering app;
             the paste box below stays as a fallback. Re-importing the same orders is safe — they update in place, they don't duplicate.</>
@@ -369,6 +373,14 @@ export function ImportPage() {
                 <p className="font-semibold">Unknown SKUs — add these as campaign products first (Products page):</p>
                 {[...skuProblems.entries()].map(([sku, ords]) => (
                   <div key={sku}><span className="font-mono">{sku}</span> — in {ords.length} order(s): {ords.slice(0, 5).join(', ')}{ords.length > 5 ? '…' : ''}</div>
+                ))}
+              </div>
+            )}
+            {prePassResults.length > 0 && (
+              <div className="rounded border p-2 text-sm space-y-1">
+                <p className="font-semibold">Pre-pass — rows with no order below (skipped rows whose stale claims were released, or an abort):</p>
+                {prePassResults.map((r, i) => (
+                  <div key={i} className={r.ok ? 'text-emerald-300' : 'text-rose-400'}><span className="font-mono">{r.orderNumber}</span> — {r.message}</div>
                 ))}
               </div>
             )}
