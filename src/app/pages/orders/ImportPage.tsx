@@ -43,6 +43,13 @@ export function ImportPage() {
   // below are identical; only the source differs — and the base44-only
   // machinery (token, external ids, deleted-upstream diff) stays off.
   const sfMode = !!groupBuy?.storefront_code;
+  // Paste input is a base44/manual path only. In storefront mode it is hidden,
+  // so it must also be INERT: a paste left over from another campaign would
+  // otherwise keep overriding the storefront pull with rows nobody can see.
+  // pasteText is what every derived value reads; the state itself is cleared
+  // on entering storefront mode and on every campaign switch.
+  const pasteText = sfMode ? '' : text;
+  useEffect(() => { setText(''); }, [groupBuyId, sfMode]);
   const [rawSf, sfLoading, , reloadSf] = useLoadAction(listStorefrontOrders, [groupBuyId, sfMode], { group_buy_id: groupBuyId }, { enabled: enabled && sfMode });
   const sfMapped = useMemo<MappedOrders | null>(
     () => (sfMode ? mapStorefrontOrders(rows<StorefrontOrderRow>(rawSf)) : null),
@@ -131,8 +138,8 @@ export function ImportPage() {
   );
 
   const parsed = useMemo(
-    () => (text.trim() !== '' ? parseOrderPaste(text) : pulledMapped ?? EMPTY_RESULT),
-    [text, pulledMapped],
+    () => (pasteText.trim() !== '' ? parseOrderPaste(pasteText) : pulledMapped ?? EMPTY_RESULT),
+    [pasteText, pulledMapped],
   );
 
   // Pre-flight: every SKU in every order must exist as a campaign product,
@@ -150,11 +157,11 @@ export function ImportPage() {
   }, [parsed, campaignSkus]);
 
   // Upstream cancellations only apply when the pulled set is the active source.
-  const cancellations = text.trim() === '' && pulledMapped ? pulledMapped.cancellations : [];
+  const cancellations = pasteText.trim() === '' && pulledMapped ? pulledMapped.cancellations : [];
   // Rejected claims to release first — from every pulled row, including the
   // ones the validator skipped (they still produced no order, but their
   // stale local hash must not block the orders that do import).
-  const releases = text.trim() === '' && pulledMapped ? (pulledMapped.releases ?? []) : [];
+  const releases = pasteText.trim() === '' && pulledMapped ? (pulledMapped.releases ?? []) : [];
 
   // Orders DELETED upstream never appear in the pull at all (deletion has no
   // status), so they'd linger locally in demand/revenue forever. Diff the
@@ -167,10 +174,10 @@ export function ImportPage() {
   const [deletedResults, setDeletedResults] = useState<Map<number, { busy?: boolean; ok?: boolean; message?: string }>>(new Map());
   useEffect(() => { setDeletedResults(new Map()); }, [groupBuyId, pulled]);
   const missingUpstream = useMemo<LocalExtOrder[]>(() => {
-    if (text.trim() !== '' || !pulledFresh || pulledFresh.orders.length === 0) return [];
+    if (pasteText.trim() !== '' || !pulledFresh || pulledFresh.orders.length === 0) return [];
     const pulledIds = new Set(pulledFresh.orders.map(o => o.id));
     return rows<LocalExtOrder>(rawLocalExt).filter(o => !pulledIds.has(o.external_id));
-  }, [text, pulledFresh, rawLocalExt]);
+  }, [pasteText, pulledFresh, rawLocalExt]);
 
   // Cancelling is a human call (per-order click): a vanished id USUALLY means
   // deleted upstream, but the operator confirms. Cancelled orders drop out of
@@ -266,7 +273,7 @@ export function ImportPage() {
                 Needs the ordering-app JWT (Settings) and a linked campaign (Products → Ordering app).
               </p>
             )}
-            {pulledMapped && text.trim() === '' && !pulling && !sfLoading && (
+            {pulledMapped && pasteText.trim() === '' && !pulling && !sfLoading && (
               <p className="text-sm text-muted-foreground">
                 {pulledMapped.orders.length} orders {sfMode ? 'on the storefront' : 'pulled from the ordering app'}
                 {pulledMapped.cancellations.length > 0 ? `, ${pulledMapped.cancellations.length} upstream cancellation(s)` : ''}
@@ -297,7 +304,7 @@ export function ImportPage() {
         />
       )}
 
-      {(text.trim() !== '' || pulledMapped) && (
+      {(pasteText.trim() !== '' || pulledMapped) && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">
@@ -327,7 +334,7 @@ export function ImportPage() {
                 })}
               </div>
             )}
-            {pulledMapped?.conflicts && pulledMapped.conflicts.length > 0 && text.trim() === '' && (
+            {pulledMapped?.conflicts && pulledMapped.conflicts.length > 0 && pasteText.trim() === '' && (
               <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-sm text-amber-200 space-y-1">
                 <p className="font-semibold">One transaction claimed by several orders — this app keeps it on one; the others import short (red row naming the holder) and get a dated admin-note line so reconciliation can reject the wrong claim:</p>
                 {pulledMapped.conflicts.map(c => (
