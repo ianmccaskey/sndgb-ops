@@ -30,10 +30,26 @@ function updateStorefrontPoll() {
       ), val AS (
         SELECT inp.*,
                CASE WHEN inp.max_choices_txt ~ '^[0-9]{1,2}$' THEN inp.max_choices_txt::int END AS max_choices,
-               CASE WHEN inp.opens_at_txt ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$'
-                    THEN inp.opens_at_txt::timestamptz END AS opens_at,
-               CASE WHEN inp.closes_at_txt ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$'
-                    THEN inp.closes_at_txt::timestamptz END AS closes_at
+               CASE WHEN inp.opens_at_txt ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$' THEN
+                 CASE WHEN substr(inp.opens_at_txt, 1, 4)::int >= 1 AND substr(inp.opens_at_txt, 6, 2)::int BETWEEN 1 AND 12
+                        AND substr(inp.opens_at_txt, 12, 2)::int <= 23 AND substr(inp.opens_at_txt, 15, 2)::int <= 59
+                        AND (substr(inp.opens_at_txt, 17, 1) <> ':' OR substr(inp.opens_at_txt, 18, 2)::int <= 59)
+                        AND (right(inp.opens_at_txt, 1) = 'Z' OR substring(inp.opens_at_txt from '[+-]([0-9]{2})(?::?[0-9]{2})?$')::int <= 15)
+                        AND (right(inp.opens_at_txt, 1) = 'Z' OR coalesce(substring(inp.opens_at_txt from '[+-][0-9]{2}:?([0-9]{2})$'), '00')::int <= 59) THEN
+                   CASE WHEN substr(inp.opens_at_txt, 9, 2)::int BETWEEN 1 AND extract(day from make_date(substr(inp.opens_at_txt, 1, 4)::int, substr(inp.opens_at_txt, 6, 2)::int, 1) + interval '1 month - 1 day')::int
+                        THEN inp.opens_at_txt::timestamptz END
+                 END
+               END AS opens_at,
+               CASE WHEN inp.closes_at_txt ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$' THEN
+                 CASE WHEN substr(inp.closes_at_txt, 1, 4)::int >= 1 AND substr(inp.closes_at_txt, 6, 2)::int BETWEEN 1 AND 12
+                        AND substr(inp.closes_at_txt, 12, 2)::int <= 23 AND substr(inp.closes_at_txt, 15, 2)::int <= 59
+                        AND (substr(inp.closes_at_txt, 17, 1) <> ':' OR substr(inp.closes_at_txt, 18, 2)::int <= 59)
+                        AND (right(inp.closes_at_txt, 1) = 'Z' OR substring(inp.closes_at_txt from '[+-]([0-9]{2})(?::?[0-9]{2})?$')::int <= 15)
+                        AND (right(inp.closes_at_txt, 1) = 'Z' OR coalesce(substring(inp.closes_at_txt from '[+-][0-9]{2}:?([0-9]{2})$'), '00')::int <= 59) THEN
+                   CASE WHEN substr(inp.closes_at_txt, 9, 2)::int BETWEEN 1 AND extract(day from make_date(substr(inp.closes_at_txt, 1, 4)::int, substr(inp.closes_at_txt, 6, 2)::int, 1) + interval '1 month - 1 day')::int
+                        THEN inp.closes_at_txt::timestamptz END
+                 END
+               END AS closes_at
         FROM inp
       ), old AS (
         -- the poll as the page loaded it, not closed, locked for the update

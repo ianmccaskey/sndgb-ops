@@ -28,7 +28,12 @@ function updateStorefrontCoaReport() {
                COALESCE(NULLIF(btrim({{params.actor}}::text), ''), 'admin') AS actor
       ), val AS (
         SELECT inp.*,
-               CASE WHEN inp.tested_at_txt ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN inp.tested_at_txt::date END AS tested_at,
+               CASE WHEN inp.tested_at_txt ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN
+                 CASE WHEN substr(inp.tested_at_txt, 1, 4)::int >= 1 AND substr(inp.tested_at_txt, 6, 2)::int BETWEEN 1 AND 12 THEN
+                   CASE WHEN substr(inp.tested_at_txt, 9, 2)::int BETWEEN 1 AND extract(day from make_date(substr(inp.tested_at_txt, 1, 4)::int, substr(inp.tested_at_txt, 6, 2)::int, 1) + interval '1 month - 1 day')::int
+                        THEN inp.tested_at_txt::date END
+                 END
+               END AS tested_at,
                CASE WHEN inp.purity_txt ~ '^[0-9]{1,3}(\\.[0-9]{1,2})?$' THEN inp.purity_txt::numeric END AS purity_pct
         FROM inp
       ), old AS (
