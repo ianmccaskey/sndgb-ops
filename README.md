@@ -21,6 +21,9 @@ UI Bakery Vibe app for running mixed-vendor group buys — the database-backed r
 | Fulfillment | (new) pack/ship queue, tracking, reship costs |
 | Financials | Profit tab summary + wallet balances + supplies (now actually in P&L) |
 | Settings | Fees, tolerance, API keys, wallet addresses, profit split |
+| Campaign Setup | (new) publishes a campaign on p2collective.app: order-number code, payment options, published flag, import stats |
+| COA Reports | (new) lab reports per campaign line for the storefront COA library (link, lab, batch, purity) |
+| Polls | (new) member polls on the storefront: draft → open → closed, options, results, voter comments |
 
 ## Database
 

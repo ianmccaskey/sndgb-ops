@@ -18,6 +18,8 @@ import { PlannerPage } from '@/app/pages/planner/PlannerPage';
 import { ReceivingPage } from '@/app/pages/receiving/ReceivingPage';
 import { SettingsPage } from '@/app/pages/settings/SettingsPage';
 import { StorefrontPage } from '@/app/pages/storefront/StorefrontPage';
+import { CoaReportsPage } from '@/app/pages/storefront/CoaReportsPage';
+import { PollsPage } from '@/app/pages/storefront/PollsPage';
 
 function App() {
   return (
@@ -38,6 +40,8 @@ function App() {
             <Route path="/receiving" element={<ReceivingPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/storefront" element={<StorefrontPage />} />
+            <Route path="/coa-reports" element={<CoaReportsPage />} />
+            <Route path="/polls" element={<PollsPage />} />
           </Routes>
           <ImportProgressWidget />
         </AppLayout>

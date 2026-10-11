@@ -14,6 +14,8 @@ import {
   Settings,
   MoreHorizontal,
   Globe,
+  FlaskConical,
+  Vote,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -39,8 +41,9 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
-// Daily operations first, campaign setup last — the create → select → set up
-// path for a new buy lives in the bottom three entries, in that order.
+// Daily operations first, campaign setup last: Products, then the campaign
+// admin for p2collective.app (Campaign Setup, its COA reports, member
+// polls), then Settings, where a new buy is created.
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', href: '/', icon: Home },
   { label: 'Orders', href: '/orders', icon: ShoppingCart },
@@ -53,6 +56,8 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Planner', href: '/planner', icon: GitBranch },
   { label: 'Products', href: '/products', icon: Package },
   { label: 'Campaign Setup', href: '/storefront', icon: Globe },
+  { label: 'COA Reports', href: '/coa-reports', icon: FlaskConical },
+  { label: 'Polls', href: '/polls', icon: Vote },
   { label: 'Settings', href: '/settings', icon: Settings },
 ];
 

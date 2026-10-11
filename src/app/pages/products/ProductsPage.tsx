@@ -417,7 +417,7 @@ export function ProductsPage() {
     <div className="p-4 sm:p-6 space-y-5">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2 text-gradient">
-          <Package className="h-6 w-6 text-cyan-300" /> Products & Campaign Setup
+          <Package className="h-6 w-6 text-cyan-300" /> Products
         </h1>
         <p className="text-sm text-muted-foreground mt-1">One quantity basis everywhere: demand + adjustments = final count.</p>
       </div>
