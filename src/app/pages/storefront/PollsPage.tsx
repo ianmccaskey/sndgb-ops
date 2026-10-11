@@ -54,7 +54,7 @@ type PollRow = {
   max_choices_used: string;
 };
 type OptionRow = { id: number; poll_id: number; label: string; sort: number; votes: string };
-type CommentRow = { id: number; member: string; comment: string; created_at: string; choices: string | null };
+type CommentRow = { id: number; poll_id: number; member: string; comment: string; created_at: string; choices: string | null };
 
 const STATUS_STYLE: Record<string, string> = {
   draft: 'bg-slate-400/10 text-slate-300',
@@ -101,7 +101,8 @@ export function PollsPage() {
   // a previous poll's rows can linger while the next one loads
   const options = rows<OptionRow>(rawOpts).filter(o => Number(o.poll_id) === selectedId);
   const [rawComments, commentsLoading, , reloadComments] = useLoadAction(listStorefrontPollComments, [selectedId], { poll_id: selectedId }, { enabled: optsEnabled });
-  const comments = selectedId == null ? [] : rows<CommentRow>(rawComments);
+  // same guard as options: a previous poll's comments can linger while the next poll's load
+  const comments = rows<CommentRow>(rawComments).filter(c => Number(c.poll_id) === selectedId);
 
   const [doCreate] = useMutateAction(createStorefrontPoll);
   const [doUpdate] = useMutateAction(updateStorefrontPoll);

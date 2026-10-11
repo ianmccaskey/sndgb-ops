@@ -10,7 +10,7 @@ function listStorefrontPollComments() {
   return action('listStorefrontPollComments', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT v.id, left(v.auth_user_id::text, 8) AS member, v.comment, v.created_at, v.updated_at,
+      SELECT v.id, v.poll_id, left(v.auth_user_id::text, 8) AS member, v.comment, v.created_at, v.updated_at,
              (SELECT string_agg(o.label, ', ' ORDER BY o.sort, o.id)
               FROM storefront.poll_vote_options pvo
               JOIN storefront.poll_options o ON o.id = pvo.option_id
