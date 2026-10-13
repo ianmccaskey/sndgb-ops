@@ -409,7 +409,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // claimant — importing anything now could attach a payment to the wrong
     // order or drop it from the right one. Nothing is imported; every row
     // says so, and the next pull retries from scratch.
-    const abort = (at: string, why: string) => {
+    const abort = async (at: string, why: string) => {
       const root: ImportRowResult = { orderNumber: at, ok: false, message: `${why} — import aborted before any order or payment was touched` };
       out.push(root);
       noteResult(root);
@@ -417,6 +417,11 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       for (const o of orders) if (o.orderNumber !== at) { const r = { orderNumber: o.orderNumber, ok: false, message: aborted }; out.push(r); noteResult(r, true); }
       for (const c of cancellations) if (c.orderNumber !== at) { const r = { orderNumber: c.orderNumber, ok: false, message: aborted }; out.push(r); noteResult(r, true); }
       setJob(j => ({ ...j, results: [...out] }));
+      // run() returns right after an abort — settle the recorder writes
+      // HERE, or the root row's delayed write could land after a LATER
+      // run's auto-resolve and resurrect a failure that already cleared
+      // (the same cross-run race the end-of-run allSettled closes)
+      await Promise.allSettled(recordPromises);
     };
     for (const r of releases) {
       try {
@@ -425,7 +430,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         if (n > 0) { const rr = { orderNumber: r.orderNumber, ok: true, message: `${n} stale local payment(s) rejected to match the storefront` }; out.push(rr); noteResult(rr); }
         setJob(j => ({ ...j, results: [...out] }));
       } catch (e: unknown) {
-        abort(r.orderNumber, e instanceof Error ? e.message : 'Failed to release rejected claims');
+        await abort(r.orderNumber, e instanceof Error ? e.message : 'Failed to release rejected claims');
         return;
       }
     }
@@ -455,7 +460,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         }
         setJob(j => ({ ...j, results: [...out] }));
       } catch (e: unknown) {
-        abort(rel.orderNumber, e instanceof Error ? e.message : "Failed to release a cancelled order's claims");
+        await abort(rel.orderNumber, e instanceof Error ? e.message : "Failed to release a cancelled order's claims");
         return;
       }
     }
