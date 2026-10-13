@@ -382,12 +382,19 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // cause would flood the basin; the root row is recorded by abort()).
     const okSet = new Set<string>();
     const failSet = new Set<string>();
+    // in-flight recorder writes are AWAITED (allSettled) before the
+    // end-of-run auto-resolve and before run() resolves: a delayed
+    // record landing after the next run's auto-resolve would resurrect
+    // an open row for a failure that already cleared (Codex review)
+    const recordPromises: Promise<unknown>[] = [];
     const noteResult = (r: ImportRowResult, broadcast = false) => {
       if (r.ok) { okSet.add(r.orderNumber); return; }
       failSet.add(r.orderNumber);
       if (broadcast) return;
-      void withRetry(() => envRef.current.doRecordFailure({ group_buy_id: groupBuyId, order_number: r.orderNumber, message: r.message }))
-        .catch(() => { /* advisory — the in-memory row still shows the failure */ });
+      recordPromises.push(
+        withRetry(() => envRef.current.doRecordFailure({ group_buy_id: groupBuyId, order_number: r.orderNumber, message: r.message }))
+          .catch(() => { /* advisory — the in-memory row still shows the failure */ }),
+      );
     };
     // FIRST: every claim the storefront has rejected — on live orders, on
     // cancelled ones, and on rows the validator skipped (the mapper collects
@@ -487,6 +494,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // still held; its open failure must survive). Set-based, one call —
     // and ANNOUNCED in the run output: an open failure the operator was
     // tracking must visibly close, not silently vanish from the card.
+    await Promise.allSettled(recordPromises);
     const clean = [...okSet].filter(n => !failSet.has(n));
     if (clean.length > 0) {
       try {

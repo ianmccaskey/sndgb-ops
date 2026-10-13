@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ClipboardPaste, CloudDownload, CheckCircle2, XCircle, Sparkles } from 'lucide-react';
+import { AlertTriangle, ClipboardPaste, CloudDownload, CheckCircle2, XCircle, Sparkles } from 'lucide-react';
 
 type CampaignProduct = { sku_code: string };
 type FailureRow = {
@@ -304,13 +304,17 @@ export function ImportPage() {
       </div>
 
       {(failures.length > 0 || failureMsg || failuresError) && (
-        <Card className={failures.length > 0 ? 'border-rose-400/40' : undefined}>
+        <Card className={failures.length > 0 ? 'border-rose-400/40' : failuresError != null ? 'border-amber-400/40' : undefined}>
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
+              {/* a load error must out-rank "all clear" — hidden failures
+                  may exist, and green chrome would say the opposite */}
               {failures.length > 0
                 ? <XCircle className="w-4 h-4 text-rose-400" />
-                : <CheckCircle2 className="w-4 h-4 text-emerald-300" />}
-              Import failures — {failures.length > 0 ? `${failures.length} open` : 'all clear'}
+                : failuresError != null
+                  ? <AlertTriangle className="w-4 h-4 text-amber-300" />
+                  : <CheckCircle2 className="w-4 h-4 text-emerald-300" />}
+              Import failures — {failures.length > 0 ? `${failures.length} open` : failuresError != null ? "couldn't load" : 'all clear'}
             </CardTitle>
             <p className="text-xs text-muted-foreground">
               Failed rows from every run land here and stay until addressed — they survive re-pulls and reloads.
@@ -544,7 +548,7 @@ export function ImportPage() {
             </div>
             <Button onClick={runImport} disabled={!canImport}>
               {importing
-                ? `Importing… (${results.length}/${job.total})`
+                ? `Importing… (${results.filter(r => r.orderNumber !== '—').length}/${job.total})`
                 : `Import ${parsed.orders.length} orders${cancellations.length > 0 ? ` + apply ${cancellations.length} cancellation(s)` : ''}`}
             </Button>
           </CardContent>
