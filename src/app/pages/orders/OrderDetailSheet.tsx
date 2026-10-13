@@ -62,6 +62,10 @@ import { Led } from '@/components/Led';
 import { TxHash } from '@/components/TxHash';
 import { Field } from '@/components/Field';
 import { TrackingLink } from '@/components/TrackingLink';
+import { AskAssistant } from '@/components/AskAssistant';
+import { orderFacts } from '@/lib/assistant';
+import { useAssistantTools } from '@/lib/useAssistantTools';
+import { Sparkles } from 'lucide-react';
 
 type OrderRow = {
   id: number; order_number: string; external_id: string | null; status: string; group_buy_id: number;
@@ -103,8 +107,12 @@ type PaymentRow = {
 };
 
 export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null; onClose: () => void }) {
-  const { userName, settings, groupBuyId } = useApp();
+  const { userName, settings, groupBuyId, groupBuy: selectedCampaign } = useApp();
   const open = orderId != null;
+  // read-only assistant: facts come from the loads below, tools are pinned
+  // to the selected campaign (the sheet already assumes it everywhere)
+  const [askOpen, setAskOpen] = useState(false);
+  const assistantTools = useAssistantTools(groupBuyId);
   const [rawOrder, , , reloadOrder] = useLoadAction(getOrder, [orderId], { order_id: orderId }, { enabled: open });
   const [rawItems, , , reloadItems] = useLoadAction(getOrderItems, [orderId], { order_id: orderId }, { enabled: open });
   const [rawPayments, , , reloadPayments] = useLoadAction(listOrderPayments, [orderId], { order_id: orderId }, { enabled: open });
@@ -1456,8 +1464,31 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
             <SheetHeader>
               <SheetTitle className="flex items-center gap-2">
                 {o.order_number} <StatusPill value={o.recon_status || 'awaiting'} />
+                <Button size="sm" variant="outline" className="ml-auto mr-6 h-7 text-xs gap-1" onClick={() => setAskOpen(true)}>
+                  <Sparkles className="h-3.5 w-3.5 text-cyan-300" /> Ask
+                </Button>
               </SheetTitle>
             </SheetHeader>
+            <AskAssistant
+              open={askOpen}
+              onClose={() => setAskOpen(false)}
+              title={`Ask about ${o.order_number}`}
+              context={{
+                kind: 'order',
+                label: `order ${o.order_number} (${o.recon_status || 'awaiting'})`,
+                facts: orderFacts({ order: o, items, payments, credits, refunds, shipments: shipRows, campaign: selectedCampaign }),
+              }}
+              tools={assistantTools}
+              scope={{ table: 'orders', rowPk: o.id }}
+              suggestions={[
+                'Why is this order in its current reconciliation state, and what are my options?',
+                'What happened to this order, in order?',
+                'Draft an admin note summarizing where this order stands',
+                'Draft a tracking email for the latest shipment',
+              ]}
+              onUseDraft={(t) => setAdminNote(prev => (prev ? `${prev}\n${t}` : t))}
+              useDraftLabel="Add to admin note"
+            />
             {/* section jump nav — this sheet is ~10 sections deep; blind
                 scrolling on a phone was the audit's #3 finding (2026-09-10) */}
             <div className="sticky top-0 z-10 -mx-6 px-4 mt-3 bg-card/95 backdrop-blur-sm border-b flex gap-1 py-1.5 overflow-x-auto">

@@ -13,6 +13,8 @@ import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { testShippoConnection } from '@/lib/shippo';
 import { useShippoHttp } from '@/lib/useShippoHttp';
+import { testAssistantConnection } from '@/lib/assistant';
+import { useAssistantHttp } from '@/lib/useAssistantHttp';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -191,6 +193,23 @@ export function SettingsPage() {
   // fast here instead of mid-purchase on the Receiving page. Tests the
   // PERSISTED key — the one Receiving/Transfers actually run with — not
   // whatever sits unsaved in the field.
+  // One tiny request through the FULL chain (datasource → backend →
+  // Anthropic) so a missing or drifted "Anthropic API" datasource fails
+  // fast here, not when an operator first clicks Ask. There is no key to
+  // test from this app: it lives on the datasource.
+  const assistantHttp = useAssistantHttp();
+  const [assistantMsg, setAssistantMsg] = useState('');
+  const [assistantTesting, setAssistantTesting] = useState(false);
+  const testAssistant = async () => {
+    setAssistantTesting(true); setAssistantMsg('Testing…');
+    try {
+      const r = await testAssistantConnection(assistantHttp);
+      setAssistantMsg((r.ok ? '✓ ' : '✗ ') + r.message);
+    } finally {
+      setAssistantTesting(false);
+    }
+  };
+
   const testShippo = async () => {
     const saved = (settings.shippo_api_key || '').trim();
     if (!saved) { setShippoMsg('Save the token first — the test verifies the SAVED key the app runs with.'); return; }
@@ -492,6 +511,20 @@ export function SettingsPage() {
           <p className="text-xs text-muted-foreground">
             Powers inbound package tracking and transfer label purchases on the Receiving page. Enable UPS in your Shippo dashboard (Carriers) to see UPS rates.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-base">Assistant (Claude)</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            "Ask" on the order sheet, "Explain these results" on Import and "Draft tracking email" in the ship dialog are read-only: the assistant explains reconciliation states, red import rows and an order's audited history, and drafts notes and emails you still review and submit. It has no way to change data.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            The API key is a header stored on the workspace's <span className="font-mono">Anthropic API</span> HTTP datasource — nothing in this app holds it (see <span className="font-mono">src/actions/assistant/DATASOURCE.md</span>). Member contact details are never sent and emails, phone numbers and handles inside notes are scrubbed (a name you typed into a note still travels with the note); every question is logged to the audit trail under your name.
+          </p>
+          {assistantMsg && <p className="text-sm text-muted-foreground break-all">{assistantMsg}</p>}
+          <Button size="sm" variant="outline" disabled={assistantTesting} onClick={testAssistant}>{assistantTesting ? 'Testing…' : 'Test assistant connection'}</Button>
         </CardContent>
       </Card>
 

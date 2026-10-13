@@ -42,6 +42,9 @@ const ATTENTION_SUBSTATUSES = ['delivery_attempted', 'address_issue', 'package_d
 const UNLINKED_LABEL_NOTE = 'NOTE: the label could not be linked to a Shippo order, so Shippo will NOT email tracking for this box — email the customer the tracking number yourself.';
 import { rows, dbText } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
+import { useApp } from '@/app/AppContext';
+import { AskAssistant } from '@/components/AskAssistant';
+import { firstName, shipmentFacts } from '@/lib/assistant';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -196,6 +199,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [mCost, setMCost] = useState('');
   const [manualBusy, setManualBusy] = useState(false);
   const [manualSuccess, setManualSuccess] = useState('');
+  // "Draft tracking email": the read-only assistant drafts the email the
+  // operator sends from their own mail client (manual and unlinked labels
+  // get no Shippo email). Carrier comes from the saved shipment row.
+  const [draftEmail, setDraftEmail] = useState<{ tracking: string; kind: 'shippo' | 'manual' } | null>(null);
+  const { groupBuy: selectedCampaign } = useApp();
   const [pendingFinalize, setPendingFinalize] = useState<Record<number, PurchaseResult>>({});
   const [recoverTxn, setRecoverTxn] = useState<Record<number, string>>({});
   const [rowMsg, setRowMsg] = useState<Record<number, string>>({});
@@ -1637,12 +1645,40 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
             <div className="rounded border border-emerald-400/30 bg-emerald-400/10 p-2 text-sm space-y-1">
               <p className="font-medium text-emerald-300">Label purchased — tracking <span className="font-mono">{success.trackingNumber}</span></p>
               {success.labelUrl && <p className="text-xs"><a className="underline" href={success.labelUrl} target="_blank" rel="noreferrer">Open label (PDF)</a> <span className="text-muted-foreground">— public unauthenticated link, don't share</span></p>}
+              {success.trackingNumber && (
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setDraftEmail({ tracking: success.trackingNumber, kind: 'shippo' })}>Draft tracking email</Button>
+              )}
             </div>
           )}
           {manualSuccess && (
-            <div className="rounded border border-emerald-400/30 bg-emerald-400/10 p-2 text-sm">
+            <div className="rounded border border-emerald-400/30 bg-emerald-400/10 p-2 text-sm space-y-1">
               <p className="font-medium text-emerald-300">Shipment recorded — tracking <span className="font-mono">{manualSuccess}</span> <span className="text-xs font-normal text-muted-foreground">(manual label — no in-app refund)</span></p>
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setDraftEmail({ tracking: manualSuccess, kind: 'manual' })}>Draft tracking email</Button>
             </div>
+          )}
+          {draftEmail && (
+            <AskAssistant
+              open
+              onClose={() => setDraftEmail(null)}
+              title={`Tracking email — ${order.order_number}`}
+              context={{
+                kind: 'shipment',
+                label: `tracking email for ${order.order_number}, tracking ${draftEmail.tracking}`,
+                facts: shipmentFacts({
+                  campaign: selectedCampaign,
+                  orderNumber: order.order_number,
+                  customerFirstName: firstName(order.contact_name || order.customer_name),
+                  carrier: finals.find(s => s.tracking_number === draftEmail.tracking)?.carrier || '',
+                  trackingNumber: draftEmail.tracking,
+                  labelKind: draftEmail.kind,
+                  shippoEmailsTracking: draftEmail.kind === 'shippo' && !testMode && !!order.contact_email?.trim() && !purchaseMsg.includes(UNLINKED_LABEL_NOTE),
+                }),
+              }}
+              tools={{}}
+              scope={{ table: 'orders', rowPk: order.id }}
+              initialQuestion="Draft the tracking email for this shipment (subject and body)."
+              suggestions={['Make it shorter', 'Add a line about what to do if tracking does not update for a few days']}
+            />
           )}
           {pushMsg && <p className={`text-sm ${pushMsg.startsWith('Pushed') ? 'text-emerald-300' : 'text-amber-300'}`}>{pushMsg}</p>}
 

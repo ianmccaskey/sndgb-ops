@@ -56,6 +56,17 @@ where the code fails to honour one; do not propose replacing the decision.
 - **Direct ship is routing only** (no customer surcharge); **split-kit fees are
   per-line snapshots**; **cash processor fee is a true gross-up** defined by
   the storefront and imported as stated.
+- **The assistant is read-only.** `src/lib/assistant.ts` + `AskAssistant`
+  explain records and draft text; its only tools are load actions
+  (`readAuditTrail`, `listOrderRecon`) pinned to the selected campaign, a
+  draft is text the operator pastes or a field they still submit, member
+  fields are never sent (hand-picked facts, `redact()` over facts and tool
+  results drops member-field keys and scrubs emails/phones/handles from
+  strings; the tracking-email draft sends the first name only), and every
+  question is audited (`assistant_asked`, question scrubbed). Never give it a write action and never
+  automate the manual confirmations it explains — they are the safety
+  design, not toil. The key lives on the `Anthropic API` datasource only.
+  Settled with the owner 2026-10-13.
 
 ## Verifying changes
 

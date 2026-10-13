@@ -7,6 +7,7 @@ UI Bakery Vibe app for running mixed-vendor group buys — the database-backed r
 - **UI Bakery Vibe project** (React 19 + Tailwind + Radix, `@uibakery/data` SQL actions) — pulled into UI Bakery from this repo, same workflow as `prtmgmt`.
 - **Neon Postgres** — project `snd-gb-ops` (`flat-dream-33800739`), database `neondb`. Connect it in UI Bakery as datasource **`SND GB DB`** (the name is referenced by every action).
 - **Moralis** (ETH + BASE) and **Helius** (SOL) for on-chain payment verification and wallet snapshots — keys are entered on the Settings page (stored in `app_settings`).
+- **Anthropic API** (Claude) for the read-only **"Ask about this"** assistant on the order sheet, the Import page and the ship dialog: it explains recon states, red import rows and an order's audited history, and drafts notes and tracking emails the operator still submits. Reached through the org-level HTTP datasource **`Anthropic API`**, whose stored header holds the key (`src/actions/assistant/DATASOURCE.md` — create it before pulling, a missing datasource breaks sync). It has no write tool; member fields are never sent and free text is scrubbed of emails, phones and handles before it leaves; every question is audited (`assistant_asked`).
 
 ## Pages
 

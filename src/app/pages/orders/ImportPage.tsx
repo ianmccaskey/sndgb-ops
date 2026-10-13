@@ -13,11 +13,14 @@ import { B44_DEFAULT_APP_ID, B44Order, b44OrderExists, listB44Orders } from '@/l
 import { mapB44Orders, MappedOrders } from '@/lib/mapB44Order';
 import listStorefrontOrders from '@/actions/storefront/listStorefrontOrders';
 import { mapStorefrontOrders, StorefrontOrderRow } from '@/lib/mapStorefrontOrder';
+import { AskAssistant } from '@/components/AskAssistant';
+import { importFacts } from '@/lib/assistant';
+import { useAssistantTools } from '@/lib/useAssistantTools';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ClipboardPaste, CloudDownload, CheckCircle2, XCircle } from 'lucide-react';
+import { ClipboardPaste, CloudDownload, CheckCircle2, XCircle, Sparkles } from 'lucide-react';
 
 type CampaignProduct = { sku_code: string };
 type CatalogProduct = { external_id: string | null; sku_code: string };
@@ -36,6 +39,10 @@ export function ImportPage() {
   // the input is parsed).
   const { job, startImport } = useImportRunner();
   const importing = job.running;
+  // read-only assistant over the preview + results (red rows explained,
+  // next moves named); tools pinned to this campaign
+  const [askOpen, setAskOpen] = useState(false);
+  const assistantTools = useAssistantTools(groupBuyId);
 
   const enabled = groupBuyId != null;
   // A campaign set up on the storefront (p2collective.app) pulls its orders
@@ -311,10 +318,44 @@ export function ImportPage() {
       {(pasteText.trim() !== '' || pulledMapped) && (
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">
-              Preview — {parsed.orders.length} orders parsed
-              {parsed.errors.length > 0 && <span className="text-rose-400">, {parsed.errors.length} rows rejected</span>}
-            </CardTitle>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <CardTitle className="text-base">
+                Preview — {parsed.orders.length} orders parsed
+                {parsed.errors.length > 0 && <span className="text-rose-400">, {parsed.errors.length} rows rejected</span>}
+              </CardTitle>
+              {groupBuyId != null && (
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setAskOpen(true)}>
+                  <Sparkles className="h-3.5 w-3.5 text-cyan-300" /> Explain these results
+                </Button>
+              )}
+            </div>
+            {groupBuyId != null && (
+              <AskAssistant
+                open={askOpen}
+                onClose={() => setAskOpen(false)}
+                title="Explain this import"
+                context={{
+                  kind: 'import',
+                  label: `import preview for ${groupBuy?.name ?? 'campaign'}: ${parsed.orders.length} orders, ${parsed.errors.length} rejected, ${cancellations.length} cancellations, ${missingUpstream.length} deleted-upstream, ${results.length} results${job.finished ? ' (run finished)' : ''}`,
+                  facts: importFacts({
+                    campaign: groupBuy,
+                    orders: parsed.orders,
+                    errors: parsed.errors,
+                    cancellations,
+                    conflicts: (pasteText.trim() === '' && pulledMapped?.conflicts) || [],
+                    missingUpstream,
+                    results,
+                  }),
+                }}
+                tools={assistantTools}
+                scope={{ table: 'group_buys', rowPk: groupBuyId }}
+                suggestions={[
+                  'Summarize the red rows and what I need to do for each',
+                  'Which orders need a payment rejected, and on which order?',
+                  'What does "deleted upstream" mean here, and what does Mark cancelled do?',
+                ]}
+              />
+            )}
           </CardHeader>
           <CardContent className="space-y-3">
             {parsed.errors.length > 0 && (
