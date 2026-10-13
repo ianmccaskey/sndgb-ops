@@ -4,10 +4,12 @@ import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import listProducts from '@/actions/products/listProducts';
 import listActiveExternalOrders from '@/actions/orders/listActiveExternalOrders';
 import cancelDeletedUpstream from '@/actions/orders/cancelDeletedUpstream';
+import listImportFailures from '@/actions/orders/listImportFailures';
+import resolveImportFailure from '@/actions/orders/resolveImportFailure';
 import { useApp } from '@/app/AppContext';
 import { useImportRunner, importSourceKey, lastResultFor } from '@/app/ImportRunner';
 import { rows } from '@/lib/rows';
-import { fmtUSD } from '@/lib/fmt';
+import { fmtUSD, fmtDateTime } from '@/lib/fmt';
 import { parseOrderPaste, ParseResult } from '@/lib/parseOrderImport';
 import { B44_DEFAULT_APP_ID, B44Order, b44OrderExists, listB44Orders } from '@/lib/base44';
 import { mapB44Orders, MappedOrders } from '@/lib/mapB44Order';
@@ -23,6 +25,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ClipboardPaste, CloudDownload, CheckCircle2, XCircle, Sparkles } from 'lucide-react';
 
 type CampaignProduct = { sku_code: string };
+type FailureRow = {
+  id: number; order_number: string; message: string; seen_count: string | number;
+  first_seen_at: string; last_seen_at: string; resolved_recently: string | number;
+};
 type CatalogProduct = { external_id: string | null; sku_code: string };
 type LocalExtOrder = { id: number; order_number: string; external_id: string; contact_name: string | null; total_usd: string };
 
@@ -45,6 +51,38 @@ export function ImportPage() {
   const assistantTools = useAssistantTools(groupBuyId);
 
   const enabled = groupBuyId != null;
+  // The durable failure basin: open failures recorded by past runs (this
+  // session's or not) — the whole point is that they survive the next
+  // pull and a reload, unlike the in-memory results below.
+  // the error slot matters here: a surface promising "failures survive
+  // reloads" must never render a load error as the all-clear empty state
+  const [rawFailures, , failuresError, reloadFailures] = useLoadAction(listImportFailures, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const failures = rows<FailureRow>(rawFailures);
+  const [doResolveFailure] = useMutateAction(resolveImportFailure);
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [failureMsg, setFailureMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  // a finished run has just recorded/auto-resolved rows — refresh the basin
+  // and drop any stale resolve confirmation from before the run
+  useEffect(() => { if (job.finished) { setFailureMsg(null); reloadFailures(); } }, [job.finished]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const resolveFailure = async (f: FailureRow) => {
+    if (resolvingId != null) return;
+    if (!window.confirm(`Mark ${f.order_number} resolved? Only do this after addressing the cause — the same failure on a future pull will reopen it.`)) return;
+    // optional audit note; cancelling the prompt still resolves (blank note)
+    const note = window.prompt('Optional note — what addressed it? (blank is fine)', '') ?? '';
+    setResolvingId(f.id);
+    setFailureMsg(null);
+    try {
+      const res = await doResolveFailure({ failure_id: f.id, resolution: note.trim(), actor: userName }) as unknown[] | null;
+      // zero rows = already resolved (a clean re-import raced the click) — done either way
+      setFailureMsg({ ok: true, text: (Array.isArray(res) && res.length > 0) ? `${f.order_number} resolved.` : `${f.order_number} was already resolved.` });
+      reloadFailures();
+    } catch (e: unknown) {
+      setFailureMsg({ ok: false, text: `Couldn't resolve ${f.order_number}: ${e instanceof Error ? e.message : 'the request failed'} — try again.` });
+    } finally {
+      setResolvingId(null);
+    }
+  };
   // A campaign set up on the storefront (p2collective.app) pulls its orders
   // from our own database instead of the ordering app. Preview and import
   // below are identical; only the source differs — and the base44-only
@@ -265,6 +303,48 @@ export function ImportPage() {
         </p>
       </div>
 
+      {(failures.length > 0 || failureMsg || failuresError) && (
+        <Card className={failures.length > 0 ? 'border-rose-400/40' : undefined}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              {failures.length > 0
+                ? <XCircle className="w-4 h-4 text-rose-400" />
+                : <CheckCircle2 className="w-4 h-4 text-emerald-300" />}
+              Import failures — {failures.length > 0 ? `${failures.length} open` : 'all clear'}
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Failed rows from every run land here and stay until addressed — they survive re-pulls and reloads.
+              A row closes itself when its order later imports clean{Number(failures[0]?.resolved_recently ?? 0) > 0 ? ` (${failures[0].resolved_recently} closed in the last 7 days)` : ''}; Resolve closes it by hand.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2 max-h-60 overflow-y-auto">
+            {failuresError != null && (
+              <p className="text-xs text-amber-300 flex items-center gap-2 flex-wrap">
+                Couldn't load open import failures — there may be open ones not shown.
+                <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => reloadFailures()}>Retry</Button>
+              </p>
+            )}
+            {failures.map(f => (
+              <div key={f.id} className="flex items-start gap-2 text-sm">
+                <span className="font-mono text-xs pt-0.5 whitespace-nowrap">{f.order_number}</span>
+                <span className="text-xs text-rose-300 flex-1 min-w-0 break-words">{f.message}</span>
+                <span className={`text-[11px] whitespace-nowrap pt-0.5 ${Number(f.seen_count) > 2 ? 'text-amber-300' : 'text-muted-foreground'}`}
+                  title={`First seen ${fmtDateTime(f.first_seen_at)}, last ${fmtDateTime(f.last_seen_at)}`}>
+                  {Number(f.seen_count) > 1 ? `×${f.seen_count} · since ${fmtDateTime(f.first_seen_at)}` : fmtDateTime(f.last_seen_at)}
+                </span>
+                <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] shrink-0"
+                  disabled={resolvingId != null}
+                  onClick={() => resolveFailure(f)}>
+                  {resolvingId === f.id ? 'Resolving…' : 'Resolve'}
+                </Button>
+              </div>
+            ))}
+            {failures.length === 0 && failuresError == null && <p className="text-sm text-emerald-300">No open import failures.</p>}
+            {failureMsg && <p className={`text-xs ${failureMsg.ok ? 'text-muted-foreground' : 'text-rose-400'}`}>{failureMsg.text}</p>}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardContent className="pt-4 space-y-2">
           <div className="flex items-center gap-3 flex-wrap">
@@ -419,7 +499,7 @@ export function ImportPage() {
             )}
             {prePassResults.length > 0 && (
               <div className="rounded border p-2 text-sm space-y-1">
-                <p className="font-semibold">Pre-pass — rows with no order below (skipped rows whose stale claims were released, or an abort):</p>
+                <p className="font-semibold">Run notes — rows with no order below (skipped rows whose stale claims were released, an abort, or the end-of-run failure auto-resolve summary):</p>
                 {prePassResults.map((r, i) => (
                   <div key={i} className={r.ok ? 'text-emerald-300' : 'text-rose-400'}><span className="font-mono">{r.orderNumber}</span> — {r.message}</div>
                 ))}

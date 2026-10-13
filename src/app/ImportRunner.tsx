@@ -9,6 +9,8 @@ import noteStorefrontClaimConflict from '@/actions/storefront/noteStorefrontClai
 import syncStorefrontRejectedClaims from '@/actions/storefront/syncStorefrontRejectedClaims';
 import releaseCancelledStorefrontClaims from '@/actions/storefront/releaseCancelledStorefrontClaims';
 import syncOrderStatus from '@/actions/orders/syncOrderStatus';
+import recordImportFailure from '@/actions/orders/recordImportFailure';
+import resolveImportFailuresForOrders from '@/actions/orders/resolveImportFailuresForOrders';
 import { useApp } from '@/app/AppContext';
 import { ParsedOrder } from '@/lib/parseOrderImport';
 import { B44Cancellation, ClaimRelease } from '@/lib/mapB44Order';
@@ -179,6 +181,8 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   const [doRejectedClaims] = useMutateAction(syncStorefrontRejectedClaims);
   const [doReleaseCancelled] = useMutateAction(releaseCancelledStorefrontClaims);
   const [doSyncStatus] = useMutateAction(syncOrderStatus);
+  const [doRecordFailure] = useMutateAction(recordImportFailure);
+  const [doAutoResolve] = useMutateAction(resolveImportFailuresForOrders);
 
   const [job, setJob] = useState<ImportJob>(IDLE);
   // The loop lives across renders; the ref (not state) is the concurrency
@@ -188,8 +192,8 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   // startImport is a stable callback, so the long-running loop must read the
   // CURRENT user and mutate functions at execution time — a first-render
   // closure would freeze 'Admin' (useUser resolves late) into audit rows.
-  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus });
-  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus };
+  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve });
+  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve };
 
   const importOne = async (o: ParsedOrder, gbId: number, cancelledOnStorefront: Set<string>): Promise<ImportRowResult> => {
     const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict } = envRef.current;
@@ -370,6 +374,21 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
 
   const run = async ({ groupBuyId, orders, cancellations, releases = [] }: StartArgs) => {
     const out: ImportRowResult[] = [];
+    // Durable failure basin: every failed row is recorded the moment it
+    // happens (import_failures, one open row per order), so the Import
+    // page's failures card survives the next pull and a reload. Recording
+    // is ADVISORY — a failed write must never break the run — and the
+    // abort broadcast rows are skipped (hundreds of copies of one root
+    // cause would flood the basin; the root row is recorded by abort()).
+    const okSet = new Set<string>();
+    const failSet = new Set<string>();
+    const noteResult = (r: ImportRowResult, broadcast = false) => {
+      if (r.ok) { okSet.add(r.orderNumber); return; }
+      failSet.add(r.orderNumber);
+      if (broadcast) return;
+      void withRetry(() => envRef.current.doRecordFailure({ group_buy_id: groupBuyId, order_number: r.orderNumber, message: r.message }))
+        .catch(() => { /* advisory — the in-memory row still shows the failure */ });
+    };
     // FIRST: every claim the storefront has rejected — on live orders, on
     // cancelled ones, and on rows the validator skipped (the mapper collects
     // `releases` from every source row, not from the orders it produced).
@@ -384,17 +403,19 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     // order or drop it from the right one. Nothing is imported; every row
     // says so, and the next pull retries from scratch.
     const abort = (at: string, why: string) => {
-      out.push({ orderNumber: at, ok: false, message: `${why} — import aborted before any order or payment was touched` });
+      const root: ImportRowResult = { orderNumber: at, ok: false, message: `${why} — import aborted before any order or payment was touched` };
+      out.push(root);
+      noteResult(root);
       const aborted = 'Not imported: releasing a stale storefront claim failed earlier in this run, so no order or payment was touched. Fix the cause and pull again.';
-      for (const o of orders) if (o.orderNumber !== at) out.push({ orderNumber: o.orderNumber, ok: false, message: aborted });
-      for (const c of cancellations) if (c.orderNumber !== at) out.push({ orderNumber: c.orderNumber, ok: false, message: aborted });
+      for (const o of orders) if (o.orderNumber !== at) { const r = { orderNumber: o.orderNumber, ok: false, message: aborted }; out.push(r); noteResult(r, true); }
+      for (const c of cancellations) if (c.orderNumber !== at) { const r = { orderNumber: c.orderNumber, ok: false, message: aborted }; out.push(r); noteResult(r, true); }
       setJob(j => ({ ...j, results: [...out] }));
     };
     for (const r of releases) {
       try {
         const res = await withRetry(() => envRef.current.doRejectedClaims({ order_number: r.orderNumber, group_buy_id: groupBuyId, rejected: JSON.stringify(r.rejected), actor: envRef.current.userName })) as unknown[] | null;
         const n = Array.isArray(res) ? res.length : (res ? 1 : 0);
-        if (n > 0) out.push({ orderNumber: r.orderNumber, ok: true, message: `${n} stale local payment(s) rejected to match the storefront` });
+        if (n > 0) { const rr = { orderNumber: r.orderNumber, ok: true, message: `${n} stale local payment(s) rejected to match the storefront` }; out.push(rr); noteResult(rr); }
         setJob(j => ({ ...j, results: [...out] }));
       } catch (e: unknown) {
         abort(r.orderNumber, e instanceof Error ? e.message : 'Failed to release rejected claims');
@@ -414,14 +435,16 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         const released = rows.filter(x => x.outcome === 'released').length;
         const held = rows.filter(x => x.outcome === 'held');
         if (released > 0 || held.length > 0) {
-          out.push({
+          const rr: ImportRowResult = {
             orderNumber: rel.orderNumber,
             ok: held.length === 0,
             message: [
               released > 0 ? `${released} pending hash(es) released to the live claimant` : '',
               held.length > 0 ? `${held.length} verified hash(es) still held on this cancelled order — reject or reassign by hand` : '',
             ].filter(Boolean).join(' · '),
-          });
+          };
+          out.push(rr);
+          noteResult(rr);
         }
         setJob(j => ({ ...j, results: [...out] }));
       } catch (e: unknown) {
@@ -431,26 +454,50 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
     }
     const cancelledOnStorefront = new Set(cancellations.map(c => c.orderNumber));
     for (const o of orders) {
+      let rr: ImportRowResult;
       try {
-        out.push(await importOne(o, groupBuyId, cancelledOnStorefront));
+        rr = await importOne(o, groupBuyId, cancelledOnStorefront);
       } catch (e: unknown) {
-        out.push({ orderNumber: o.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Import failed' });
+        rr = { orderNumber: o.orderNumber, ok: false, message: e instanceof Error ? e.message : 'Import failed' };
       }
+      out.push(rr);
+      noteResult(rr);
       setJob(j => ({ ...j, results: [...out] }));
     }
     for (const c of cancellations) {
+      let rr: ImportRowResult;
       try {
         const res = await withRetry(() => envRef.current.doSyncStatus({ order_number: c.orderNumber, group_buy_id: groupBuyId, status: c.status, source: c.source ?? '' })) as { id: number }[] | { id: number } | null;
         const touched = Array.isArray(res) ? res.length > 0 : !!res;
-        out.push({
+        rr = {
           orderNumber: c.orderNumber,
           ok: true,
           message: touched ? `marked ${c.status} (source: ${c.sourceStatus})` : `${c.sourceStatus} upstream — not present locally, nothing to do`,
-        });
+        };
       } catch (e: unknown) {
-        out.push({ orderNumber: c.orderNumber, ok: false, message: e instanceof Error ? e.message : `Failed to mark ${c.status}` });
+        rr = { orderNumber: c.orderNumber, ok: false, message: e instanceof Error ? e.message : `Failed to mark ${c.status}` };
       }
+      out.push(rr);
+      noteResult(rr);
       setJob(j => ({ ...j, results: [...out] }));
+    }
+    // Auto-resolve the basin for every order that ran FULLY CLEAN this run
+    // (at least one ok result, zero failed ones — an order can carry both,
+    // e.g. a cancelled order whose status synced but whose verified hash is
+    // still held; its open failure must survive). Set-based, one call —
+    // and ANNOUNCED in the run output: an open failure the operator was
+    // tracking must visibly close, not silently vanish from the card.
+    const clean = [...okSet].filter(n => !failSet.has(n));
+    if (clean.length > 0) {
+      try {
+        const res = await withRetry(() => envRef.current.doAutoResolve({ group_buy_id: groupBuyId, order_numbers: JSON.stringify(clean), actor: envRef.current.userName })) as { order_number: string }[] | null;
+        const closed = Array.isArray(res) ? res.map(r => r.order_number) : [];
+        if (closed.length > 0) {
+          const names = closed.slice(0, 5).join(', ') + (closed.length > 5 ? ` and ${closed.length - 5} more` : '');
+          out.push({ orderNumber: '—', ok: true, message: `${closed.length} open import failure(s) auto-resolved — ${names} imported clean this run` });
+          setJob(j => ({ ...j, results: [...out] }));
+        }
+      } catch { /* advisory — an open row that should have closed re-closes on the next clean run */ }
     }
   };
 
@@ -496,8 +543,11 @@ export function ImportProgressWidget() {
   if (location.pathname === '/import') return null;
   if (!job.running && !job.finished) return null;
 
-  const done = job.results.length;
-  const failed = job.results.filter(r => !r.ok).length;
+  // the '—' row is the end-of-run auto-resolve summary, not an order —
+  // counting it would read "601/600" and inflate the ok tally
+  const counted = job.results.filter(r => r.orderNumber !== '—');
+  const done = counted.length;
+  const failed = counted.filter(r => !r.ok).length;
   const pct = job.total > 0 ? Math.round((done / job.total) * 100) : 0;
 
   return (
