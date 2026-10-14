@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useLoadAction } from '@uibakery/data';
 import getDashboardStats from '@/actions/dashboard/getDashboardStats';
 import getMoqProgress from '@/actions/dashboard/getMoqProgress';
+import getProductOrderCounts from '@/actions/dashboard/getProductOrderCounts';
 import getDailyOrderSeries from '@/actions/dashboard/getDailyOrderSeries';
 import listRailRecon from '@/actions/recon/listRailRecon';
 import getPnl from '@/actions/financials/getPnl';
@@ -31,6 +32,54 @@ type MoqRow = {
   final_count: string; moq_met: boolean; gb_price_usd: string; vendor_order_value_usd: string;
 };
 
+type ProductOrderRow = { group_buy_product_id: number; sku_code: string; units: string; order_count: string };
+
+/** Units on active orders per physical product — COA add-ons excluded. */
+function ProductOrdersCard({ products, loading, error }: { products: ProductOrderRow[]; loading: boolean; error: unknown }) {
+  const totalUnits = products.reduce((sum, p) => sum + Number(p.units), 0);
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <span>Orders by product</span>
+          <span className="text-xs font-normal text-muted-foreground">
+            Physical items only{products.length > 0 && ` · ${fmtNum(totalUnits)} units`}
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {error ? (
+          <p className="text-sm text-rose-400">
+            Could not load orders by product: {error instanceof Error ? error.message : String(error)}
+          </p>
+        ) : loading && products.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : products.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No physical products configured for this campaign yet — add them under Products.
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+            {products.map(p => (
+              <div key={p.group_buy_product_id} className="min-w-0 rounded-md border border-border/60 bg-background px-3 py-2">
+                {/* wraps instead of truncating: long SKUs (CJC-1295 …) would
+                    otherwise be hover-only, unreachable on touch */}
+                <span className="block text-xs text-muted-foreground break-words">{p.sku_code}</span>
+                <span className={`block text-lg font-semibold font-mono mt-0.5 ${Number(p.units) > 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  {fmtNum(p.units)}
+                </span>
+                <span className="block text-[10px] leading-tight text-muted-foreground">
+                  {fmtNum(p.order_count)} {Number(p.order_count) === 1 ? 'order' : 'orders'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function StatTile({ label, value, tone, sub }: { label: string; value: string; tone?: 'bad' | 'warn' | 'good'; sub?: string }) {
   const color = tone === 'bad' ? 'text-rose-400' : tone === 'warn' ? 'text-amber-300' : tone === 'good' ? 'text-emerald-300' : 'text-foreground';
   return (
@@ -49,12 +98,14 @@ export function HomePage() {
   const enabled = groupBuyId != null;
   const [rawStats] = useLoadAction(getDashboardStats, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawMoq] = useLoadAction(getMoqProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProductOrders, productOrdersLoading, productOrdersError] = useLoadAction(getProductOrderCounts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawDaily] = useLoadAction(getDailyOrderSeries, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawRails] = useLoadAction(listRailRecon, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const s = firstRow<Stats>(rawStats);
   const moq = rows<MoqRow>(rawMoq);
+  const productOrders = rows<ProductOrderRow>(rawProductOrders);
   const daily = rows<DailyPoint>(rawDaily);
   const rails = rows<RailRow>(rawRails);
   const pnl = firstRow<PnlData>(rawPnl);
@@ -116,6 +167,8 @@ export function HomePage() {
           </CardContent>
         </Card>
       )}
+
+      {enabled && <ProductOrdersCard products={productOrders} loading={productOrdersLoading} error={productOrdersError} />}
 
       <MomentumChart series={daily} endsOn={groupBuy?.ends_on || null} />
 
