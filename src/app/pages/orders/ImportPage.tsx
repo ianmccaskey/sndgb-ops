@@ -318,7 +318,8 @@ export function ImportPage() {
             </CardTitle>
             <p className="text-xs text-muted-foreground">
               Failed rows from every run land here and stay until addressed — they survive re-pulls and reloads.
-              A row closes itself when its order later imports clean{Number(failures[0]?.resolved_recently ?? 0) > 0 ? ` (${failures[0].resolved_recently} closed in the last 7 days)` : ''}; Resolve closes it by hand.
+              A row closes itself when its order later imports clean{Number(failures[0]?.resolved_recently ?? 0) > 0 ? ` (${failures[0].resolved_recently} closed in the last 7 days)` : ''}; Resolve closes it by hand,
+              but a row whose cause is still in the source data reopens on the next pull.
             </p>
           </CardHeader>
           <CardContent className="space-y-2 max-h-60 overflow-y-auto">

@@ -318,9 +318,21 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         if (holders.some(h => h.same_order && h.status !== 'rejected')) continue; // already attached here: idempotent
         const label = `tx ${p.value.slice(0, 10)}…${p.value.slice(-6)}`;
         if (holders.length === 0) short.push(`${label} was not attached and no holder was reported`);
+        // Which side is wrong is the operator's call, but the two fixes live
+        // in different places: a stale ref on THIS order (e.g. a customer's
+        // old signature from an earlier buy) is corrected in the source —
+        // resolving the failure row can't stick while the source still
+        // carries it — whereas a wrong holder is rejected here.
+        const fixAtSource = o.raw.source === 'storefront' ? 'have the member correct the claim on this order'
+          : o.raw.source === 'base44' ? 'delete this ref from this order in the ordering app'
+          : 'drop this ref from the pasted row';
         for (const h of holders) {
-          if (h.same_order) short.push(`${label} was rejected on this order here, yet the storefront still claims it — un-reject it, or have the member correct the claim`);
-          else short.push(`${label} is ${h.status} on ${h.order_number}${cancelledOnStorefront.has(h.order_number) ? ' (cancelled on the storefront)' : ''} — one order holds a hash here; reject the wrong claim, then pull again`);
+          if (h.same_order) short.push(o.raw.source === 'base44'
+            ? `${label} was rejected on this order here, yet the ordering app still lists it — un-reject it, or click "Push tx refs to ordering app" in this order's sheet to remove it upstream`
+            : o.raw.source === 'storefront'
+              ? `${label} was rejected on this order here, yet the storefront still claims it — un-reject it, or have the member correct the claim`
+              : `${label} was rejected on this order here, yet the pasted row still lists it — un-reject it, or drop it from the pasted row`);
+          else short.push(`${label} is ${h.status} on ${h.order_number}${cancelledOnStorefront.has(h.order_number) ? ' (cancelled on the storefront)' : ''} — one order holds a hash here. If it is ${h.order_number}'s payment, ${fixAtSource} (Resolve alone won't stick — the next pull raises it again); if it is this order's, reject it on ${h.order_number}. Then pull again`);
         }
       }
       if (receipts.length > 0) {

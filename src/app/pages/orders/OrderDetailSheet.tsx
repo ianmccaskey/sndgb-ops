@@ -2097,7 +2097,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                       <Button size="sm" variant="outline" className="h-8 text-xs" disabled={pushing} onClick={pushTxRefs}>
                         {pushing ? 'Pushing…' : 'Push tx refs to ordering app'}
                       </Button>
-                      <span className="text-xs text-muted-foreground">replaces the order's hash list upstream with the non-rejected set</span>
+                      {/* read-merge-write (see pushTxRefs): an upstream ref with no
+                          payment row here — e.g. one held by another order — is kept */}
+                      <span className="text-xs text-muted-foreground">adds this order's hashes upstream and removes the ones rejected here — any other upstream ref is kept</span>
                     </div>
                     {pushMsg && <p className="text-xs mt-1 text-muted-foreground">{pushMsg}</p>}
                   </div>
