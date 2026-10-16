@@ -3,6 +3,7 @@ import { useLoadAction, useMutateAction } from '@uibakery/data';
 import createManualOrder from '@/actions/orders/createManualOrder';
 import nextManualOrderNumber from '@/actions/orders/nextManualOrderNumber';
 import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
+import listOrders from '@/actions/orders/listOrders';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
@@ -37,6 +38,13 @@ const REFUSALS: Record<string, string> = {
  * Partial success is shown, not hidden: if the header landed but a line was
  * refused, the dialog stays open naming the line, with a button to open
  * the order (the operator adds the line there or cancels the order).
+ *
+ * A LOST create response (the header committed, the reply never arrived —
+ * the transport failure ImportRunner documents) is recovered, never
+ * duplicated: on a thrown create, the dialog looks the typed number up in
+ * this campaign; if that order now exists, its lines are added and it
+ * opens, exactly as if the reply had arrived. Only when no such order
+ * exists is the error shown and a retry offered.
  */
 export function AddOrderDialog({ open, onClose, onCreated }: {
   open: boolean;
@@ -52,6 +60,7 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
   );
   const [doCreate] = useMutateAction(createManualOrder);
   const [doAddLine] = useMutateAction(addLocalOrderItem);
+  const [findOrders] = useMutateAction(listOrders);
 
   const products = useMemo(
     () => rows<CampaignProduct>(rawProducts).filter(p => p.status === 'active'),
@@ -124,18 +133,66 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
     return '';
   };
 
+  // the header exists (created now, or recovered after a lost reply): add
+  // every line, then open the order — or stay open naming refused lines
+  const addLinesAndOpen = async (orderId: number, orderNumber: string) => {
+    if (groupBuyId == null) return;
+    const failed: string[] = [];
+    for (const l of validLines) {
+      try {
+        const lr = await doAddLine({ order_id: orderId, group_buy_id: groupBuyId, sku: l.sku, qty: l.qty.trim(), actor: userName }) as unknown[] | null;
+        if (!(Array.isArray(lr) ? lr.length > 0 : !!lr)) failed.push(`${l.sku} × ${l.qty}`);
+      } catch (e: unknown) {
+        failed.push(`${l.sku} × ${l.qty} (${e instanceof Error ? e.message : 'failed'})`);
+      }
+    }
+    if (failed.length > 0) {
+      setPartial({ id: orderId, number: orderNumber, failed });
+      return;
+    }
+    onCreated(orderId);
+  };
+
+  // did the create land even though its reply did not? The number is this
+  // campaign's manual shape, so an order holding it here can only be ours
+  const findCommittedHeader = async (orderNumber: string): Promise<number | null> => {
+    if (groupBuyId == null) return null;
+    try {
+      const res = await findOrders({ group_buy_id: groupBuyId, search: orderNumber, status: 'all', rail: 'all', recon: 'all' }) as unknown;
+      const hit = rows<{ id: number; order_number: string }>(res).find(o => o.order_number === orderNumber);
+      return hit ? Number(hit.id) : null;
+    } catch {
+      return null;
+    }
+  };
+
   const submit = async () => {
     if (groupBuyId == null) return;
     const err = validate();
     if (err) { setMsg(err); return; }
+    const orderNumber = number.trim();
     setSaving(true); setMsg('');
     try {
-      const res = await doCreate({
-        group_buy_id: groupBuyId, order_number: number.trim(), payment_rail: rail,
-        customer_name: name.trim(), email: email.trim(), discord: discord.trim(), phone: phone.trim(),
-        address_line1: line1.trim(), address_line2: line2.trim(), city: city.trim(), state_code: state.trim(), postal_code: zip.trim(),
-        customer_note: note.trim(), actor: userName,
-      }) as unknown;
+      let res: unknown;
+      try {
+        res = await doCreate({
+          group_buy_id: groupBuyId, order_number: orderNumber, payment_rail: rail,
+          customer_name: name.trim(), email: email.trim(), discord: discord.trim(), phone: phone.trim(),
+          address_line1: line1.trim(), address_line2: line2.trim(), city: city.trim(), state_code: state.trim(), postal_code: zip.trim(),
+          customer_note: note.trim(), actor: userName,
+        });
+      } catch (e: unknown) {
+        // ambiguous failure: the header may have committed with the reply
+        // lost — recover it instead of letting a retry mint a second order
+        const recovered = await findCommittedHeader(orderNumber);
+        if (recovered != null) {
+          setMsg('');
+          await addLinesAndOpen(recovered, orderNumber);
+          return;
+        }
+        setMsg(`${e instanceof Error ? e.message : 'Failed to create the order'} — nothing was written; try again.`);
+        return;
+      }
       const r = firstRow<CreateResult>(res);
       if (!r || r.id == null) {
         const why = r?.refused || '';
@@ -143,21 +200,7 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
         if (why === 'number taken' || why === 'bad number') { setNumberTouched(false); reloadNext(); }
         return;
       }
-      const orderId = Number(r.id);
-      const failed: string[] = [];
-      for (const l of validLines) {
-        try {
-          const lr = await doAddLine({ order_id: orderId, group_buy_id: groupBuyId, sku: l.sku, qty: l.qty.trim(), actor: userName }) as unknown[] | null;
-          if (!(Array.isArray(lr) ? lr.length > 0 : !!lr)) failed.push(`${l.sku} × ${l.qty}`);
-        } catch (e: unknown) {
-          failed.push(`${l.sku} × ${l.qty} (${e instanceof Error ? e.message : 'failed'})`);
-        }
-      }
-      if (failed.length > 0) {
-        setPartial({ id: orderId, number: String(r.order_number || number), failed });
-        return;
-      }
-      onCreated(orderId);
+      await addLinesAndOpen(Number(r.id), String(r.order_number || orderNumber));
     } catch (e: unknown) {
       setMsg(e instanceof Error ? e.message : 'Failed to create the order');
     } finally {
