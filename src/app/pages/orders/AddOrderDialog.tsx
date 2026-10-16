@@ -4,6 +4,7 @@ import createManualOrder from '@/actions/orders/createManualOrder';
 import nextManualOrderNumber from '@/actions/orders/nextManualOrderNumber';
 import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
 import listOrders from '@/actions/orders/listOrders';
+import getOrder from '@/actions/orders/getOrder';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
@@ -41,11 +42,18 @@ const REFUSALS: Record<string, string> = {
  *
  * A LOST create response (the header committed, the reply never arrived —
  * the transport failure ImportRunner documents) is recovered, never
- * duplicated: on a thrown create, the dialog looks the typed number up in
- * this campaign; if that order now exists, its lines are added and it
- * opens, exactly as if the reply had arrived. Only when no such order
- * exists is the error shown and a retry offered.
+ * duplicated: every submit carries a per-open request token stored on the
+ * header (raw_import.request_id); on a thrown create, the dialog looks the
+ * typed number up in this campaign and resumes it ONLY if it carries this
+ * token. An order holding the number under another token is another
+ * admin's (both got the same suggestion and theirs won the registry): that
+ * is a refused number, never a place to put these lines.
  */
+
+const mintRequestId = (): string =>
+  (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 export function AddOrderDialog({ open, onClose, onCreated }: {
   open: boolean;
   onClose: () => void;
@@ -61,6 +69,7 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
   const [doCreate] = useMutateAction(createManualOrder);
   const [doAddLine] = useMutateAction(addLocalOrderItem);
   const [findOrders] = useMutateAction(listOrders);
+  const [fetchOrder] = useMutateAction(getOrder);
 
   const products = useMemo(
     () => rows<CampaignProduct>(rawProducts).filter(p => p.status === 'active'),
@@ -82,6 +91,9 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
   const [numberTouched, setNumberTouched] = useState(false);
   const [note, setNote] = useState('');
   const [lines, setLines] = useState<Line[]>([{ key: 1, sku: '', qty: '1' }]);
+  // one token per open: a retry after an ambiguous failure is the SAME
+  // request, so it can find (and only find) its own committed header
+  const [requestId, setRequestId] = useState(mintRequestId);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
   const [fieldErr, setFieldErr] = useState<Record<string, string>>({});
@@ -100,6 +112,7 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
     setLine1(''); setLine2(''); setCity(''); setState(''); setZip('');
     setRail(''); setNumber(''); setNumberTouched(false); setNote('');
     setLines([{ key: 1, sku: '', qty: '1' }]);
+    setRequestId(mintRequestId());
     setMsg(''); setFieldErr({}); setPartial(null); setSaving(false);
     reloadNext();
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -153,14 +166,17 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
     onCreated(orderId);
   };
 
-  // did the create land even though its reply did not? The number is this
-  // campaign's manual shape, so an order holding it here can only be ours
-  const findCommittedHeader = async (orderNumber: string): Promise<number | null> => {
+  // did the create land even though its reply did not? Ours only if the
+  // header carries THIS request's token; the same number under another
+  // token is another admin's order that won the registry race
+  const findCommittedHeader = async (orderNumber: string): Promise<{ id: number } | 'taken' | null> => {
     if (groupBuyId == null) return null;
     try {
       const res = await findOrders({ group_buy_id: groupBuyId, search: orderNumber, status: 'all', rail: 'all', recon: 'all' }) as unknown;
       const hit = rows<{ id: number; order_number: string }>(res).find(o => o.order_number === orderNumber);
-      return hit ? Number(hit.id) : null;
+      if (!hit) return null;
+      const full = firstRow<{ raw_import: { source?: string; request_id?: string } | null }>(await fetchOrder({ order_id: hit.id }) as unknown);
+      return full?.raw_import?.source === 'manual' && full.raw_import.request_id === requestId ? { id: Number(hit.id) } : 'taken';
     } catch {
       return null;
     }
@@ -179,15 +195,20 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
           group_buy_id: groupBuyId, order_number: orderNumber, payment_rail: rail,
           customer_name: name.trim(), email: email.trim(), discord: discord.trim(), phone: phone.trim(),
           address_line1: line1.trim(), address_line2: line2.trim(), city: city.trim(), state_code: state.trim(), postal_code: zip.trim(),
-          customer_note: note.trim(), actor: userName,
+          customer_note: note.trim(), actor: userName, request_id: requestId,
         });
       } catch (e: unknown) {
         // ambiguous failure: the header may have committed with the reply
         // lost — recover it instead of letting a retry mint a second order
         const recovered = await findCommittedHeader(orderNumber);
+        if (recovered === 'taken') {
+          setMsg(REFUSALS['number taken']);
+          setNumberTouched(false); reloadNext();
+          return;
+        }
         if (recovered != null) {
           setMsg('');
-          await addLinesAndOpen(recovered, orderNumber);
+          await addLinesAndOpen(recovered.id, orderNumber);
           return;
         }
         setMsg(`${e instanceof Error ? e.message : 'Failed to create the order'} — nothing was written; try again.`);

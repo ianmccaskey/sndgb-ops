@@ -111,7 +111,12 @@ function createManualOrder() {
           0, 0, 0, 0, 0, 0, 0,
           now(),
           NULLIF({{params.customer_note}}::text, ''),
-          jsonb_build_object('source', 'manual', 'created_by', {{params.actor}}::text, 'created_at', now())
+          -- request_id: the dialog's per-submit token, so a create whose reply
+          -- was lost can be recovered by the request that made it and ONLY
+          -- that request — two admins given the same suggested number must
+          -- never resume each other's order (Codex)
+          jsonb_build_object('source', 'manual', 'created_by', {{params.actor}}::text, 'created_at', now(),
+                             'request_id', NULLIF({{params.request_id}}::text, ''))
         FROM cust
         WHERE (SELECT refused FROM chk) IS NULL
         RETURNING id, order_number, customer_id, payment_rail
