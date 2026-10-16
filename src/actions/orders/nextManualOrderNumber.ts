@@ -42,7 +42,9 @@ function nextManualOrderNumber() {
           AND r.order_number ~ '-X[0-9]+$'
       )
       SELECT pfx.prefix,
-             pfx.prefix || '-X' || lpad((taken.last_n + 1)::text, 3, '0') AS order_number
+             -- three digits minimum, never truncated: lpad(text, 3) would
+             -- cut X1000 to X100 (Codex), which is registered and refused forever
+             pfx.prefix || '-X' || lpad((taken.last_n + 1)::text, greatest(3, length((taken.last_n + 1)::text)), '0') AS order_number
       FROM pfx, taken
     `,
   });
