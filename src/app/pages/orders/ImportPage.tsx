@@ -71,31 +71,44 @@ export function ImportPage() {
   // loaded at click time — never from a render that may predate a pull —
   // and the dialog opens only once it has landed, so the first question
   // (asked automatically for a single row) never runs on empty facts.
+  // Every load is bound to the campaign it was started for: a response that
+  // lands after a campaign switch (or after leaving the page) is another
+  // campaign's evidence and is dropped, and the dialog renders only while
+  // the stored result's campaign is the selected one — never A's failures
+  // under B's facts, tools and audit scope.
   const [doLoadTriage] = useMutateAction(listImportFailureContext);
-  const [triage, setTriage] = useState<{ rows: Record<string, unknown>[]; focus: string | null; loadedAt: string } | null>(null);
+  const [triage, setTriage] = useState<{ gbId: number; rows: Record<string, unknown>[]; focus: string | null; loadedAt: string } | null>(null);
   const [triageOpen, setTriageOpen] = useState(false);
   const [triageLoading, setTriageLoading] = useState(false);
+  const currentGbRef = useRef(groupBuyId);
+  currentGbRef.current = groupBuyId;
+  const pageAliveRef = useRef(true);
+  useEffect(() => () => { pageAliveRef.current = false; }, []);
   const openTriage = async (focus: string | null) => {
-    if (groupBuyId == null || triageLoading) return;
+    const gb = groupBuyId;
+    if (gb == null || triageLoading) return;
+    const stillCurrent = () => pageAliveRef.current && currentGbRef.current === gb;
     setTriageLoading(true);
     setFailureMsg(null);
     try {
-      const loaded = rows<Record<string, unknown>>(await doLoadTriage({ group_buy_id: groupBuyId }));
+      const loaded = rows<Record<string, unknown>>(await doLoadTriage({ group_buy_id: gb }));
+      if (!stillCurrent()) return;
       if (loaded.length === 0) {
         setFailureMsg({ ok: true, text: 'No open import failures right now — nothing to triage.' });
         reloadFailures();
         return;
       }
-      setTriage({ rows: loaded, focus, loadedAt: new Date().toISOString() });
+      setTriage({ gbId: gb, rows: loaded, focus, loadedAt: new Date().toISOString() });
       setTriageOpen(true);
     } catch (e: unknown) {
-      setFailureMsg({ ok: false, text: `Couldn't load the failure details for the assistant: ${e instanceof Error ? e.message : 'the request failed'} — try again.` });
+      if (stillCurrent()) setFailureMsg({ ok: false, text: `Couldn't load the failure details for the assistant: ${e instanceof Error ? e.message : 'the request failed'} — try again.` });
     } finally {
-      setTriageLoading(false);
+      if (stillCurrent()) setTriageLoading(false);
     }
   };
-  // another campaign's failures must never stay on screen as this one's
-  useEffect(() => { setTriageOpen(false); setTriage(null); }, [groupBuyId]);
+  // another campaign's failures must never stay on screen as this one's; a
+  // load still pending for the old campaign is discarded on arrival
+  useEffect(() => { setTriageOpen(false); setTriage(null); setTriageLoading(false); }, [groupBuyId]);
 
   const resolveFailure = async (f: FailureRow) => {
     if (resolvingId != null) return;
@@ -399,7 +412,7 @@ export function ImportPage() {
 
       {/* outside the card: the card unmounts when its last failure closes,
           and an answer being read must not vanish with it */}
-      {groupBuyId != null && triage && (
+      {groupBuyId != null && triage && triage.gbId === groupBuyId && (
         <AskAssistant
           open={triageOpen}
           onClose={() => setTriageOpen(false)}
@@ -412,7 +425,7 @@ export function ImportPage() {
             facts: importFailureFacts({ campaign: groupBuy, failures: triage.rows, focusOrder: triage.focus }),
           }}
           tools={assistantTools}
-          scope={{ table: 'group_buys', rowPk: groupBuyId }}
+          scope={{ table: 'group_buys', rowPk: triage.gbId }}
           initialQuestion={triage.focus
             ? `Triage ${triage.focus}: what caused this failure, whose payment is it if a hash is involved, and exactly what should I do so it does not come back on the next pull?`
             : undefined}
