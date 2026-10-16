@@ -314,12 +314,22 @@ function jsonValue(v: unknown): unknown {
 export function importFailureFacts(args: {
   campaign: CampaignLike | null | undefined;
   failures: Rec[];
-  /** set when the operator asked about one row */
+  /** set when the operator asked about one row (then only that row is listed) */
   focusOrder?: string | null;
+  /** every open failure in the campaign, listed or not */
+  openTotal: number;
 }): Rec {
+  const listed = args.failures.length;
   return {
     campaign: campaignFacts(args.campaign),
     ...(args.focusOrder ? { focus_order: args.focusOrder } : {}),
+    open_failure_count: args.openTotal,
+    // the model must never treat a subset as the whole basin
+    listed_failures: args.focusOrder
+      ? `only the focused order's failure is listed (${args.openTotal} open in the campaign)`
+      : listed < args.openTotal
+        ? `the oldest ${listed} of ${args.openTotal} open failures are listed — the rest are not in these facts`
+        : `all ${args.openTotal} open failures are listed`,
     open_failures: args.failures.map(f => ({
       ...pick(f, ['order_number', 'message', 'seen_count', 'first_seen_at', 'last_seen_at']),
       resolved_by_hand_before: jsonValue(f.resolved_by_hand) ?? [],

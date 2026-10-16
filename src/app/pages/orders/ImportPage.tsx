@@ -77,7 +77,7 @@ export function ImportPage() {
   // the stored result's campaign is the selected one — never A's failures
   // under B's facts, tools and audit scope.
   const [doLoadTriage] = useMutateAction(listImportFailureContext);
-  const [triage, setTriage] = useState<{ loadId: number; gbId: number; rows: Record<string, unknown>[]; focus: string | null; loadedAt: string } | null>(null);
+  const [triage, setTriage] = useState<{ loadId: number; gbId: number; rows: Record<string, unknown>[]; openTotal: number; focus: string | null; loadedAt: string } | null>(null);
   // each successful load is its own conversation: the dialog is keyed on
   // this, so reopening never continues a history built on older evidence
   const triageSeq = useRef(0);
@@ -94,14 +94,18 @@ export function ImportPage() {
     setTriageLoading(true);
     setFailureMsg(null);
     try {
-      const loaded = rows<Record<string, unknown>>(await doLoadTriage({ group_buy_id: gb }));
+      // a row's Ask loads exactly that row's failure (however many are open)
+      const loaded = rows<Record<string, unknown>>(await doLoadTriage({ group_buy_id: gb, focus_order: focus ?? '' }));
       if (!stillCurrent()) return;
       if (loaded.length === 0) {
-        setFailureMsg({ ok: true, text: 'No open import failures right now — nothing to triage.' });
+        setFailureMsg({ ok: true, text: focus
+          ? `${focus}'s failure is no longer open (it imported clean or was resolved) — nothing to triage.`
+          : 'No open import failures right now — nothing to triage.' });
         reloadFailures();
         return;
       }
-      setTriage({ loadId: ++triageSeq.current, gbId: gb, rows: loaded, focus, loadedAt: new Date().toISOString() });
+      const openTotal = Number(loaded[0].open_total ?? loaded.length) || loaded.length;
+      setTriage({ loadId: ++triageSeq.current, gbId: gb, rows: loaded, openTotal, focus, loadedAt: new Date().toISOString() });
       setTriageOpen(true);
     } catch (e: unknown) {
       if (stillCurrent()) setFailureMsg({ ok: false, text: `Couldn't load the failure details for the assistant: ${e instanceof Error ? e.message : 'the request failed'} — try again.` });
@@ -425,8 +429,10 @@ export function ImportPage() {
           title={triage.focus ? `Triage ${triage.focus}` : 'Triage import failures'}
           context={{
             kind: 'import_failures',
-            label: `${triage.rows.length} open import failure(s) in ${groupBuy?.name ?? 'campaign'}${triage.focus ? `, asking about ${triage.focus}` : ''} (details loaded ${fmtDateTime(triage.loadedAt)})`,
-            facts: importFailureFacts({ campaign: groupBuy, failures: triage.rows, focusOrder: triage.focus }),
+            label: triage.focus
+              ? `the import failure on ${triage.focus} in ${groupBuy?.name ?? 'campaign'} (details loaded ${fmtDateTime(triage.loadedAt)})`
+              : `${triage.openTotal} open import failure(s) in ${groupBuy?.name ?? 'campaign'}${triage.rows.length < triage.openTotal ? ` — the oldest ${triage.rows.length} included` : ''} (details loaded ${fmtDateTime(triage.loadedAt)})`,
+            facts: importFailureFacts({ campaign: groupBuy, failures: triage.rows, focusOrder: triage.focus, openTotal: triage.openTotal }),
           }}
           tools={assistantTools}
           scope={{ table: 'group_buys', rowPk: triage.gbId }}

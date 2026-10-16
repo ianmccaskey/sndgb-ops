@@ -4,6 +4,9 @@ import { action } from '@uibakery/data';
  * Triage facts for the read-only assistant: the campaign's OPEN import
  * failures, each with the evidence needed to say which side of a hash
  * conflict is wrong. Read-only, campaign-scoped on the failures.
+ * focus_order (blank = all) narrows to one order's failure, so a row's
+ * Ask always gets that row however many are open; unfocused, the oldest
+ * 50 are listed and open_total says how many exist.
  *
  * - local_order / local_payments: the failing order as this app holds it
  *   (null = never imported here). No member fields are selected.
@@ -25,11 +28,13 @@ function listImportFailureContext() {
     datasourceName: 'SND GB DB',
     query: `
       WITH inp AS (
-        SELECT NULLIF({{params.group_buy_id}}::text, '')::bigint AS gb
+        SELECT NULLIF({{params.group_buy_id}}::text, '')::bigint AS gb,
+               NULLIF(btrim({{params.focus_order}}::text), '') AS focus
       ), f AS (
         SELECT f.id, f.order_number, f.message, f.seen_count, f.first_seen_at, f.last_seen_at
         FROM import_failures f, inp
         WHERE f.group_buy_id = inp.gb AND f.resolved_at IS NULL
+          AND (inp.focus IS NULL OR f.order_number = inp.focus)
         ORDER BY f.first_seen_at
         LIMIT 50
       ), o AS (
@@ -48,6 +53,10 @@ function listImportFailureContext() {
         FROM f, LATERAL regexp_matches(f.message, 'tx ([0-9A-Za-z]{10})…([0-9A-Za-z]{6})', 'g') AS m
       )
       SELECT f.id, f.order_number, f.message, f.seen_count, f.first_seen_at, f.last_seen_at,
+             -- every open failure in the campaign, whatever the focus/cap, so
+             -- the caller can say when the listed set is a subset
+             (SELECT count(*) FROM import_failures a, inp
+               WHERE a.group_buy_id = inp.gb AND a.resolved_at IS NULL) AS open_total,
              (SELECT jsonb_agg(jsonb_build_object('resolved_at', h.resolved_at, 'note', h.resolution) ORDER BY h.resolved_at)
                 FROM import_failures h, inp
                WHERE h.group_buy_id = inp.gb AND h.order_number = f.order_number
