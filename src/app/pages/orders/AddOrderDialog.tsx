@@ -211,12 +211,30 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
           await addLinesAndOpen(recovered.id, orderNumber);
           return;
         }
-        setMsg(`${e instanceof Error ? e.message : 'Failed to create the order'} — nothing was written; try again.`);
+        // nothing found, or the recovery read failed too: the outcome is
+        // unknown, so keep THIS number and token — a retry re-checks for
+        // the committed header before anything else (below) and can never
+        // mint a second order
+        setMsg(`${e instanceof Error ? e.message : 'Failed to create the order'} — could not confirm whether it was created. Keep the same order number and try again.`);
         return;
       }
       const r = firstRow<CreateResult>(res);
       if (!r || r.id == null) {
         const why = r?.refused || '';
+        if (why === 'number taken') {
+          // a retry after an unconfirmed create: if the number is ours
+          // (same token), resume that header instead of moving on
+          const mine = await findCommittedHeader(orderNumber);
+          if (mine != null && mine !== 'taken') {
+            setMsg('');
+            await addLinesAndOpen(mine.id, orderNumber);
+            return;
+          }
+          if (mine == null) {
+            setMsg('That order number is registered, but whether it is this order could not be confirmed. Keep the same number and try again.');
+            return;
+          }
+        }
         setMsg(REFUSALS[why] || 'The order was not created — nothing was written.');
         if (why === 'number taken' || why === 'bad number') { setNumberTouched(false); reloadNext(); }
         return;
