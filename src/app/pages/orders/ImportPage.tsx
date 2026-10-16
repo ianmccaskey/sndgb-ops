@@ -77,7 +77,10 @@ export function ImportPage() {
   // the stored result's campaign is the selected one — never A's failures
   // under B's facts, tools and audit scope.
   const [doLoadTriage] = useMutateAction(listImportFailureContext);
-  const [triage, setTriage] = useState<{ gbId: number; rows: Record<string, unknown>[]; focus: string | null; loadedAt: string } | null>(null);
+  const [triage, setTriage] = useState<{ loadId: number; gbId: number; rows: Record<string, unknown>[]; focus: string | null; loadedAt: string } | null>(null);
+  // each successful load is its own conversation: the dialog is keyed on
+  // this, so reopening never continues a history built on older evidence
+  const triageSeq = useRef(0);
   const [triageOpen, setTriageOpen] = useState(false);
   const [triageLoading, setTriageLoading] = useState(false);
   const currentGbRef = useRef(groupBuyId);
@@ -98,7 +101,7 @@ export function ImportPage() {
         reloadFailures();
         return;
       }
-      setTriage({ gbId: gb, rows: loaded, focus, loadedAt: new Date().toISOString() });
+      setTriage({ loadId: ++triageSeq.current, gbId: gb, rows: loaded, focus, loadedAt: new Date().toISOString() });
       setTriageOpen(true);
     } catch (e: unknown) {
       if (stillCurrent()) setFailureMsg({ ok: false, text: `Couldn't load the failure details for the assistant: ${e instanceof Error ? e.message : 'the request failed'} — try again.` });
@@ -414,13 +417,14 @@ export function ImportPage() {
           and an answer being read must not vanish with it */}
       {groupBuyId != null && triage && triage.gbId === groupBuyId && (
         <AskAssistant
+          // remount per load: fresh history on fresh evidence, and an answer
+          // still in flight from the previous load is dropped on unmount
+          key={triage.loadId}
           open={triageOpen}
           onClose={() => setTriageOpen(false)}
           title={triage.focus ? `Triage ${triage.focus}` : 'Triage import failures'}
           context={{
             kind: 'import_failures',
-            // the load time is part of the subject: every open carries fresh
-            // evidence, so it starts a fresh conversation on it
             label: `${triage.rows.length} open import failure(s) in ${groupBuy?.name ?? 'campaign'}${triage.focus ? `, asking about ${triage.focus}` : ''} (details loaded ${fmtDateTime(triage.loadedAt)})`,
             facts: importFailureFacts({ campaign: groupBuy, failures: triage.rows, focusOrder: triage.focus }),
           }}

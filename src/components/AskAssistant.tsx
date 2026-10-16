@@ -88,20 +88,24 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
     setEntries(prev => [...prev, { id: ++seq.current, role: 'user', text }]);
     try {
       const a = await askAssistant(http, { context, tools, history, question: text });
-      if (!mounted.current) return;
-      setHistory(a.history);
-      setEntries(prev => [...prev, { id: ++seq.current, role: 'assistant', text: a.text, meta: { model: a.model, usage: a.usage, toolsRan: a.toolsRan } }]);
       // the trail: who asked what, at what cost — never the answer. The
       // question is scrubbed (emails, phones, handles) and capped, since an
-      // operator can type member data into it.
+      // operator can type member data into it. Written BEFORE the unmount
+      // check: a question that reached the model is audited even when the
+      // dialog closed (or was remounted on a fresh load) while it ran.
+      let logged = true;
       try {
         await doLog({
           scope: scope.table, row_pk: String(scope.rowPk), actor: userName,
           detail: JSON.stringify({ kind: context.kind, label: scrubText(context.label), question: scrubText(text).slice(0, 300), model: a.model, stop_reason: a.stopReason, usage: a.usage, tools: a.toolsRan }),
         });
       } catch {
-        if (mounted.current) setNotice('Answered, but the audit row for this question could not be written.');
+        logged = false;
       }
+      if (!mounted.current) return;
+      setHistory(a.history);
+      setEntries(prev => [...prev, { id: ++seq.current, role: 'assistant', text: a.text, meta: { model: a.model, usage: a.usage, toolsRan: a.toolsRan } }]);
+      if (!logged) setNotice('Answered, but the audit row for this question could not be written.');
     } catch (e: unknown) {
       if (mounted.current) setEntries(prev => [...prev, { id: ++seq.current, role: 'error', text: normalizeAssistantError(e).message }]);
     } finally {
