@@ -79,6 +79,8 @@ type OrderRow = {
   shipping_insurance_override_usd: string | null; tip_override_usd: string | null;
   customer_note: string | null; admin_note: string | null; hold_shipping: boolean;
   customer_name: string; customer_email: string | null;
+  /** import provenance; source 'manual' = created in this app (createManualOrder), no upstream */
+  raw_import: { source?: string; created_by?: string } | null;
   recon_status: string | null; received_usd: string | null; override_usd: string | null;
   effective_received_usd: string | null; diff_usd: string | null;
   comp_usd: string | null; writeoff_usd: string | null; due_usd: string | null;
@@ -1468,6 +1470,11 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                   <Sparkles className="h-3.5 w-3.5 text-cyan-300" /> Ask
                 </Button>
               </SheetTitle>
+              {o.raw_import?.source === 'manual' && (
+                <p className="text-xs text-amber-300">
+                  Manual order — exists only in this app{o.raw_import.created_by ? ` (added by ${o.raw_import.created_by})` : ''}. Its lines are local items; it is billed at their value plus any fees set below, and no pull or paste will ever touch it.
+                </p>
+              )}
             </SheetHeader>
             <AskAssistant
               open={askOpen}

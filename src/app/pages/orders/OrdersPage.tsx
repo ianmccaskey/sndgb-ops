@@ -9,7 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { StatusPill } from '@/components/StatusPill';
 import { OrderDetailSheet } from './OrderDetailSheet';
-import { ShoppingCart, PauseCircle } from 'lucide-react';
+import { AddOrderDialog } from './AddOrderDialog';
+import { Button } from '@/components/ui/button';
+import { ShoppingCart, PauseCircle, Plus } from 'lucide-react';
 
 export type OrderListRow = {
   id: number; order_number: string; status: string; payment_rail: string | null;
@@ -22,14 +24,20 @@ export type OrderListRow = {
 };
 
 export function OrdersPage() {
-  const { groupBuyId } = useApp();
+  const { groupBuyId, groupBuy } = useApp();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
   const [rail, setRail] = useState('all');
   const [recon, setRecon] = useState('all');
   const [openOrderId, setOpenOrderId] = useState<number | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   const enabled = groupBuyId != null;
+  // Manual orders (created here, never upstream) are for base44-linked or
+  // unlinked campaigns only: a storefront campaign takes orders from
+  // p2collective.app alone (one platform per campaign, 1790101100), and the
+  // database refuses the insert — so the button is not offered at all.
+  const canAdd = enabled && !groupBuy?.storefront_code;
   const [raw, loading, , reload] = useLoadAction(
     listOrders,
     [groupBuyId, search, status, rail, recon],
@@ -46,7 +54,7 @@ export function OrdersPage() {
             <ShoppingCart className="h-6 w-6 text-cyan-300" /> Orders
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {orders.length} orders · imported from the ordering app, reconciled here
+            {orders.length} orders · {groupBuy?.storefront_code ? 'imported from the storefront' : 'imported from the ordering app, or added here'}, reconciled here
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -87,6 +95,11 @@ export function OrdersPage() {
               <SelectItem value="awaiting">awaiting</SelectItem>
             </SelectContent>
           </Select>
+          {canAdd && (
+            <Button size="sm" className="h-9 gap-1" onClick={() => setAddOpen(true)}>
+              <Plus className="h-4 w-4" /> Add order
+            </Button>
+          )}
         </div>
       </div>
 
@@ -176,6 +189,13 @@ export function OrdersPage() {
       </div>
 
       <OrderDetailSheet orderId={openOrderId} onClose={() => { setOpenOrderId(null); reload(); }} />
+      {canAdd && (
+        <AddOrderDialog
+          open={addOpen}
+          onClose={() => setAddOpen(false)}
+          onCreated={id => { setAddOpen(false); reload(); setOpenOrderId(id); }}
+        />
+      )}
     </div>
   );
 }

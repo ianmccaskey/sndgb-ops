@@ -245,7 +245,10 @@ export function orderFacts(args: {
         'split_fee_usd', 'admin_note',
         'recon_status', 'received_usd', 'override_usd', 'effective_received_usd', 'diff_usd',
         'comp_usd', 'writeoff_usd', 'due_usd', 'credits_usd', 'refunds_usd', 'pending_payment_count']),
-      source: o.external_id ? 'base44 ordering app' : 'storefront or paste (no upstream id)',
+      source: o.external_id ? 'base44 ordering app'
+        : (o.raw_import as Rec | null | undefined)?.source === 'manual' ? 'manual (created in this app; no upstream)'
+        : (o.raw_import as Rec | null | undefined)?.source === 'storefront' ? 'storefront (p2collective.app)'
+        : 'paste (no upstream id)',
     },
     items: args.items.map(it => pick(it, ['sku_code', 'product_name', 'qty', 'qty_override', 'removed_at', 'unit_price_usd',
       'comp_qty', 'comp_reason', 'direct_ship', 'direct_ship_source', 'direct_fulfilled_at', 'item_source', 'split_fee_usd',

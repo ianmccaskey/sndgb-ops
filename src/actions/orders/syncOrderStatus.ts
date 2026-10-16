@@ -20,6 +20,8 @@ function syncOrderStatus() {
         -- must never cancel the other side's order
         AND (COALESCE(raw_import->>'source', '') = 'storefront')
             = ({{params.source}}::text = 'storefront')
+        -- a manual order has no upstream, so no upstream may cancel it
+        AND COALESCE(raw_import->>'source', '') <> 'manual'
       RETURNING id
     `,
   });

@@ -154,6 +154,11 @@ function importUpsertOrder() {
         -- Same number from the other source = a numbering collision, refused.
         AND (COALESCE(orders.raw_import->>'source', '') = 'storefront')
             = (COALESCE(EXCLUDED.raw_import->>'source', '') = 'storefront')
+        -- and a MANUAL order (createManualOrder: exists only in this app,
+        -- number shape <prefix>-X<NNN> no upstream mints) is never refreshed
+        -- by a pull or paste: a pasted row carrying its number is a
+        -- collision, refused, never an adoption
+        AND COALESCE(orders.raw_import->>'source', '') <> 'manual'
       RETURNING id, total_usd
       ), targets AS (
         -- classify every existing row matched by the incoming item list

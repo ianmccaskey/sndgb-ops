@@ -14,7 +14,7 @@ UI Bakery Vibe app for running mixed-vendor group buys — the database-backed r
 | Page | What it replaces in the sheet |
 |---|---|
 | Dashboard | MOQ tracker totals + "where are we" glances |
-| Orders | Orders tab (with per-order recon status inline) |
+| Orders | Orders tab (with per-order recon status inline); **Add order** creates a manual order that exists only in this app (base44-linked or unlinked campaigns only) |
 | Import | Manual copy-paste into the Orders tab — now parsed, validated, idempotent |
 | Reconciliation | Both audit tabs — per-order and per-rail, plus on-chain Verify buttons |
 | Vendors | Vendor payment tracking (OVERPAID is loud, vendors are dropdowns) |
@@ -35,6 +35,14 @@ Key invariants:
 - Orders upsert on `order_number`; re-importing an export refreshes rather than duplicates.
 - Payment overrides require a reason and are written to `audit_log`.
 - Zip codes are text (leading zeros survive); states normalize to 2-letter codes at import.
+
+### Manual orders (source `manual`)
+
+An order that exists only in this app — never in base44 or on the storefront — is created from the Orders page (**Add order** → `createManualOrder`). The header carries `external_id NULL`, `raw_import = {source:'manual', created_by, created_at}`, every money column 0 and `placed_at = now()`; the lines go in as **local items** (`addLocalOrderItem`, one call per line, whole kits at campaign price), so `v_order_reconciliation` bills the order at exactly its local items value, and demand/packing count the lines like any other order. Fees come from the order sheet (`setOrderFees`), payments from the existing payment flows. Rules:
+- **Number shape is one no upstream can mint**: `<campaign prefix>-X<NNN>` (`2026-MB5-X001`, `2026-X001`), where the prefix is derived from the campaign's own upstream numbers (everything before the last hyphen of its most common shape; a campaign with no upstream orders yet uses the current year). Every base44 and storefront number ends in a digits-only segment, so a manual number can never be claimed by a later pull or paste. `nextManualOrderNumber` suggests the next free one (counted over the registry, both writers); `createManualOrder` re-derives the prefix and refuses any other shape, a registered number, a missing customer name, or a storefront campaign (one platform per campaign, `1790101100`) — the result row says which (`refused`), and the dialog shows it. The registry trigger registers the number as `ops` like any other.
+- **Invisible to every upstream control**: `importUpsertOrder` never updates a `manual` row (a pasted row carrying its number is a refused collision), `syncOrderStatus` never cancels one, the deleted-upstream diff (`listActiveExternalOrders` / `cancelDeletedUpstream`) and the push/rail controls gate on `external_id` and `source = 'base44'`. Pulls never prune local items, so a base44 pull leaves a manual order untouched.
+- **A manual order fixes the campaign's platform**: the one-platform trigger refuses storefront setup for a campaign holding orders from another source, so a campaign with a manual order can never move to the storefront. A storefront campaign shows no Add order button.
+- Audited `manual_order_created`; the order sheet labels the order "Manual order" with who added it.
 
 ### Storefront source (p2collective.app)
 
