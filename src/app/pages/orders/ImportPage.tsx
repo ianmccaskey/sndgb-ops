@@ -6,6 +6,7 @@ import listActiveExternalOrders from '@/actions/orders/listActiveExternalOrders'
 import cancelDeletedUpstream from '@/actions/orders/cancelDeletedUpstream';
 import listImportFailures from '@/actions/orders/listImportFailures';
 import resolveImportFailure from '@/actions/orders/resolveImportFailure';
+import listImportFailureContext from '@/actions/orders/listImportFailureContext';
 import { useApp } from '@/app/AppContext';
 import { useImportRunner, importSourceKey, lastResultFor } from '@/app/ImportRunner';
 import { rows } from '@/lib/rows';
@@ -16,7 +17,7 @@ import { mapB44Orders, MappedOrders } from '@/lib/mapB44Order';
 import listStorefrontOrders from '@/actions/storefront/listStorefrontOrders';
 import { mapStorefrontOrders, StorefrontOrderRow } from '@/lib/mapStorefrontOrder';
 import { AskAssistant } from '@/components/AskAssistant';
-import { importFacts } from '@/lib/assistant';
+import { importFacts, importFailureFacts } from '@/lib/assistant';
 import { useAssistantTools } from '@/lib/useAssistantTools';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -64,6 +65,37 @@ export function ImportPage() {
   // a finished run has just recorded/auto-resolved rows — refresh the basin
   // and drop any stale resolve confirmation from before the run
   useEffect(() => { if (job.finished) { setFailureMsg(null); reloadFailures(); } }, [job.finished]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Assistant triage of the failure basin. The evidence (local order and
+  // payments, every holder of a named hash, earlier hand resolutions) is
+  // loaded at click time — never from a render that may predate a pull —
+  // and the dialog opens only once it has landed, so the first question
+  // (asked automatically for a single row) never runs on empty facts.
+  const [doLoadTriage] = useMutateAction(listImportFailureContext);
+  const [triage, setTriage] = useState<{ rows: Record<string, unknown>[]; focus: string | null; loadedAt: string } | null>(null);
+  const [triageOpen, setTriageOpen] = useState(false);
+  const [triageLoading, setTriageLoading] = useState(false);
+  const openTriage = async (focus: string | null) => {
+    if (groupBuyId == null || triageLoading) return;
+    setTriageLoading(true);
+    setFailureMsg(null);
+    try {
+      const loaded = rows<Record<string, unknown>>(await doLoadTriage({ group_buy_id: groupBuyId }));
+      if (loaded.length === 0) {
+        setFailureMsg({ ok: true, text: 'No open import failures right now — nothing to triage.' });
+        reloadFailures();
+        return;
+      }
+      setTriage({ rows: loaded, focus, loadedAt: new Date().toISOString() });
+      setTriageOpen(true);
+    } catch (e: unknown) {
+      setFailureMsg({ ok: false, text: `Couldn't load the failure details for the assistant: ${e instanceof Error ? e.message : 'the request failed'} — try again.` });
+    } finally {
+      setTriageLoading(false);
+    }
+  };
+  // another campaign's failures must never stay on screen as this one's
+  useEffect(() => { setTriageOpen(false); setTriage(null); }, [groupBuyId]);
 
   const resolveFailure = async (f: FailureRow) => {
     if (resolvingId != null) return;
@@ -306,16 +338,23 @@ export function ImportPage() {
       {(failures.length > 0 || failureMsg || failuresError) && (
         <Card className={failures.length > 0 ? 'border-rose-400/40' : failuresError != null ? 'border-amber-400/40' : undefined}>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              {/* a load error must out-rank "all clear" — hidden failures
-                  may exist, and green chrome would say the opposite */}
-              {failures.length > 0
-                ? <XCircle className="w-4 h-4 text-rose-400" />
-                : failuresError != null
-                  ? <AlertTriangle className="w-4 h-4 text-amber-300" />
-                  : <CheckCircle2 className="w-4 h-4 text-emerald-300" />}
-              Import failures — {failures.length > 0 ? `${failures.length} open` : failuresError != null ? "couldn't load" : 'all clear'}
-            </CardTitle>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <CardTitle className="text-base flex items-center gap-2">
+                {/* a load error must out-rank "all clear" — hidden failures
+                    may exist, and green chrome would say the opposite */}
+                {failures.length > 0
+                  ? <XCircle className="w-4 h-4 text-rose-400" />
+                  : failuresError != null
+                    ? <AlertTriangle className="w-4 h-4 text-amber-300" />
+                    : <CheckCircle2 className="w-4 h-4 text-emerald-300" />}
+                Import failures — {failures.length > 0 ? `${failures.length} open` : failuresError != null ? "couldn't load" : 'all clear'}
+              </CardTitle>
+              {failures.length > 0 && groupBuyId != null && (
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1" disabled={triageLoading} onClick={() => openTriage(null)}>
+                  <Sparkles className="h-3.5 w-3.5 text-cyan-300" /> {triageLoading ? 'Loading details…' : 'Triage with assistant'}
+                </Button>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
               Failed rows from every run land here and stay until addressed — they survive re-pulls and reloads.
               A row closes itself when its order later imports clean{Number(failures[0]?.resolved_recently ?? 0) > 0 ? ` (${failures[0].resolved_recently} closed in the last 7 days)` : ''}; Resolve closes it by hand,
@@ -330,13 +369,21 @@ export function ImportPage() {
               </p>
             )}
             {failures.map(f => (
-              <div key={f.id} className="flex items-start gap-2 text-sm">
+              // phone width: the message takes its own full-width line under
+              // the order number and controls instead of being squeezed
+              <div key={f.id} className="flex flex-wrap sm:flex-nowrap items-start gap-x-2 gap-y-1 text-sm">
                 <span className="font-mono text-xs pt-0.5 whitespace-nowrap">{f.order_number}</span>
-                <span className="text-xs text-rose-300 flex-1 min-w-0 break-words">{f.message}</span>
-                <span className={`text-[11px] whitespace-nowrap pt-0.5 ${Number(f.seen_count) > 2 ? 'text-amber-300' : 'text-muted-foreground'}`}
+                <span className="text-xs text-rose-300 min-w-0 break-words order-last basis-full sm:order-none sm:flex-1">{f.message}</span>
+                <span className={`text-[11px] whitespace-nowrap pt-0.5 ml-auto sm:ml-0 ${Number(f.seen_count) > 2 ? 'text-amber-300' : 'text-muted-foreground'}`}
                   title={`First seen ${fmtDateTime(f.first_seen_at)}, last ${fmtDateTime(f.last_seen_at)}`}>
                   {Number(f.seen_count) > 1 ? `×${f.seen_count} · since ${fmtDateTime(f.first_seen_at)}` : fmtDateTime(f.last_seen_at)}
                 </span>
+                <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] shrink-0 gap-1"
+                  disabled={triageLoading || groupBuyId == null}
+                  title={`Ask the assistant why ${f.order_number} failed and what to do`}
+                  onClick={() => openTriage(f.order_number)}>
+                  <Sparkles className="h-3 w-3 text-cyan-300" /> Ask
+                </Button>
                 <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] shrink-0"
                   disabled={resolvingId != null}
                   onClick={() => resolveFailure(f)}>
@@ -348,6 +395,33 @@ export function ImportPage() {
             {failureMsg && <p className={`text-xs ${failureMsg.ok ? 'text-muted-foreground' : 'text-rose-400'}`}>{failureMsg.text}</p>}
           </CardContent>
         </Card>
+      )}
+
+      {/* outside the card: the card unmounts when its last failure closes,
+          and an answer being read must not vanish with it */}
+      {groupBuyId != null && triage && (
+        <AskAssistant
+          open={triageOpen}
+          onClose={() => setTriageOpen(false)}
+          title={triage.focus ? `Triage ${triage.focus}` : 'Triage import failures'}
+          context={{
+            kind: 'import_failures',
+            // the load time is part of the subject: every open carries fresh
+            // evidence, so it starts a fresh conversation on it
+            label: `${triage.rows.length} open import failure(s) in ${groupBuy?.name ?? 'campaign'}${triage.focus ? `, asking about ${triage.focus}` : ''} (details loaded ${fmtDateTime(triage.loadedAt)})`,
+            facts: importFailureFacts({ campaign: groupBuy, failures: triage.rows, focusOrder: triage.focus }),
+          }}
+          tools={assistantTools}
+          scope={{ table: 'group_buys', rowPk: groupBuyId }}
+          initialQuestion={triage.focus
+            ? `Triage ${triage.focus}: what caused this failure, whose payment is it if a hash is involved, and exactly what should I do so it does not come back on the next pull?`
+            : undefined}
+          suggestions={triage.focus ? [] : [
+            'Triage every open failure: the cause, which side is wrong, and the fix',
+            'Which of these will come back on the next pull even if I resolve them?',
+            'Which failures are just transient connection errors I can re-pull?',
+          ]}
+        />
       )}
 
       <Card>
