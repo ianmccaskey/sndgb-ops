@@ -261,10 +261,8 @@ export function FinancialsPage() {
           <CardContent className="text-sm space-y-1">
             <div className="flex justify-between"><span className="text-muted-foreground">Product revenue (expected)</span><span>{fmtUSD(pnl?.product_revenue_usd)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Admin fees ({pnl?.order_count || 0} orders)</span><span>{fmtUSD(pnl?.admin_fee_revenue_usd)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Shipping fees</span><span>{fmtUSD(pnl?.shipping_fee_revenue_usd)}</span></div>
-            {Number(pnl?.insurance_revenue_usd) > 0 && (
-              <div className="flex justify-between"><span className="text-muted-foreground">Shipping insurance</span><span>{fmtUSD(pnl?.insurance_revenue_usd)}</span></div>
-            )}
+            {/* shipping fees + insurance moved to the Shipping pot box
+                below — earmarked for shipping costs, never profit */}
             <div className="flex justify-between"><span className="text-muted-foreground">Tips</span><span>{fmtUSD(pnl?.tip_revenue_usd)}</span></div>
             {Number(pnl?.split_fees_usd) > 0 && (
               <div className="flex justify-between"><span className="text-muted-foreground">Split kit fees</span><span>{fmtUSD(pnl?.split_fees_usd)}</span></div>
@@ -311,10 +309,12 @@ export function FinancialsPage() {
                   : <span className="text-emerald-300">+{fmtUSD(-Number(pnl?.adj_both_usd))}</span>}
               </div>
             )}
-            <div className="flex justify-between font-medium border-t pt-1"><span>Total revenue</span><span>{fmtUSD(pnl?.total_revenue_usd)}</span></div>
+            {/* the view's total_revenue_usd still counts shipping money
+                (gross receipts); the pot lines live in their own box, so
+                the composing figure shown here excludes them */}
+            <div className="flex justify-between font-medium border-t pt-1"><span>Total revenue (excl. shipping pot)</span><span>{fmtUSD(Number(pnl?.total_revenue_usd || 0) - Number(pnl?.shipping_fee_revenue_usd || 0) - Number(pnl?.insurance_revenue_usd || 0))}</span></div>
             <div className="flex justify-between mt-2"><span className="text-muted-foreground">Product profit</span><span>{fmtUSD(pnl?.product_profit_usd)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Expenses (supplies, shipping, testing…)</span><span className="text-rose-400">−{fmtUSD(pnl?.expenses_usd)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Label costs (from shipments)</span><span className="text-rose-400">−{fmtUSD(pnl?.label_costs_usd)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Expenses (non-shipping: supplies, testing…)</span><span className="text-rose-400">−{fmtUSD(Number(pnl?.expenses_usd || 0) - Number(pnl?.shipping_expenses_usd || 0))}</span></div>
             {Number(pnl?.direct_freight_usd) > 0 && (
               <div className="flex justify-between"><span className="text-muted-foreground">Direct-ship freight (internal, to vendors)</span><span className="text-rose-400">−{fmtUSD(pnl?.direct_freight_usd)}</span></div>
             )}
@@ -335,6 +335,36 @@ export function FinancialsPage() {
             )}
             <div className="flex justify-between font-semibold text-base border-t pt-1">
               <span>Net profit</span><span className={netProfit >= 0 ? 'text-emerald-300' : 'text-rose-400'}>{fmtUSD(netProfit)}</span>
+            </div>
+            {/* the shipping pot: earmarked money, shown with its own
+                balance and NEVER in net profit (policy, 2026-10-17). A
+                surplus is the planner's shipping reserve; a deficit is
+                amber because shipping cost more than was collected and
+                net profit is deliberately not absorbing it. */}
+            <div className="rounded border border-border/60 bg-muted/30 px-2 py-1.5 mt-2 space-y-0.5 text-xs">
+              <div className="font-semibold text-muted-foreground uppercase text-[11px]"
+                title="Shipping fees and insurance are collected to pay for shipping — they are excluded from net profit on both sides (the money in, and the labels/shipping expenses it covers)">
+                Shipping pot — covers shipping, not profit
+              </div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Shipping fees collected</span><span>{fmtUSD(pnl?.shipping_fee_revenue_usd)}</span></div>
+              {Number(pnl?.insurance_revenue_usd) > 0 && (
+                <div className="flex justify-between"><span className="text-muted-foreground">Shipping insurance collected</span><span>{fmtUSD(pnl?.insurance_revenue_usd)}</span></div>
+              )}
+              {Number(pnl?.label_costs_usd) > 0 && (
+                <div className="flex justify-between"><span className="text-muted-foreground">Label costs (from shipments)</span><span className="text-rose-400">−{fmtUSD(pnl?.label_costs_usd)}</span></div>
+              )}
+              {Number(pnl?.shipping_expenses_usd) > 0 && (
+                <div className="flex justify-between"><span className="text-muted-foreground">Shipping / reship expenses</span><span className="text-rose-400">−{fmtUSD(pnl?.shipping_expenses_usd)}</span></div>
+              )}
+              {(() => {
+                const snet = Number(pnl?.shipping_net_usd || 0);
+                return (
+                  <div className="flex justify-between font-medium border-t border-border/60 pt-0.5">
+                    <span>{snet >= 0 ? 'Pot surplus (shipping reserve)' : 'Pot deficit — shipping cost more than was collected'}</span>
+                    <span className={snet >= 0 ? '' : 'text-amber-300'}>{snet >= 0 ? '+' : '−'}{fmtUSD(Math.abs(snet))}</span>
+                  </div>
+                );
+              })()}
             </div>
             {((pnl?.adjustments || []).filter(a =>
               a.beneficiary !== 'both' && Number(a.value_usd) !== 0 && !(pnl?.splits || []).some(s => s.party === a.beneficiary)

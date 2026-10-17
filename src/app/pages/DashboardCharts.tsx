@@ -169,24 +169,27 @@ export type PnlData = {
   product_revenue_usd: string; admin_fee_revenue_usd: string; shipping_fee_revenue_usd: string;
   insurance_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string; expenses_usd: string; label_costs_usd: string;
   comps_usd: string; writeoffs_usd: string; adj_both_usd: string; net_profit_usd: string;
+  shipping_expenses_usd: string; shipping_net_usd: string;
   splits: { party: string; pct: string }[] | null;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
 };
 
-/** Revenue composition + deductions + net + profit split. */
+/** Revenue composition + deductions + net + profit split. Shipping money
+ * is the POT, not profit (policy 2026-10-17): it leaves the revenue bar
+ * and the deductions, and shows as its own ± line. */
 export function PnlBlock({ pnl }: { pnl: PnlData }) {
   const parts = [
     { name: 'Product', value: Number(pnl.product_revenue_usd), color: C_BILLED },
     { name: 'Admin fees', value: Number(pnl.admin_fee_revenue_usd), color: C_RECEIVED },
-    { name: 'Shipping fees', value: Number(pnl.shipping_fee_revenue_usd), color: 'var(--chart-4)' },
-    { name: 'Insurance', value: Number(pnl.insurance_revenue_usd), color: 'var(--chart-5)' },
     { name: 'Tips', value: Number(pnl.tip_revenue_usd), color: 'var(--chart-1)' },
   ].filter(p => p.value > 0);
-  const total = Number(pnl.total_revenue_usd);
+  // total shown excludes the shipping pot, matching the parts and the net
+  const total = Number(pnl.total_revenue_usd) - Number(pnl.shipping_fee_revenue_usd) - Number(pnl.insurance_revenue_usd);
   // Bar widths scale against the GROSS parts sum — total revenue is net of
   // comps, so sizing against it would overflow the row when comps exist.
   const partsSum = parts.reduce((s, p) => s + p.value, 0);
-  const deductions = Number(pnl.expenses_usd) + Number(pnl.label_costs_usd);
+  const deductions = Number(pnl.expenses_usd) - Number(pnl.shipping_expenses_usd);
+  const shippingNet = Number(pnl.shipping_net_usd);
   const net = Number(pnl.net_profit_usd);
   const splits = pnl.splits || [];
   // Personal adjustments come out of THAT party's payout; 'both' is already
@@ -205,7 +208,7 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
         {/* revenue composition: one horizontal stacked bar with 2px gaps */}
         <div>
           <div className="flex justify-between text-xs text-muted-foreground mb-1">
-            <span>Revenue</span><span className="font-medium text-foreground">{fmtUSD(total, { cents: false })}</span>
+            <span>Revenue (excl. shipping pot)</span><span className="font-medium text-foreground">{fmtUSD(total, { cents: false })}</span>
           </div>
           <div className="flex h-5 rounded overflow-hidden" style={{ gap: 2 }}>
             {parts.map(p => (
@@ -226,7 +229,7 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
           </div>
         </div>
         <div className="text-sm space-y-1 border-t pt-2">
-          <div className="flex justify-between"><span className="text-muted-foreground">Expenses + labels</span><span className="text-rose-400">−{fmtUSD(deductions, { cents: false })}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Expenses (non-shipping)</span><span className="text-rose-400">−{fmtUSD(deductions, { cents: false })}</span></div>
           {Number(pnl.comps_usd) > 0 && (
             <div className="flex justify-between"><span className="text-muted-foreground">Comped product</span><span className="text-rose-400">−{fmtUSD(pnl.comps_usd, { cents: false })}</span></div>
           )}
@@ -249,7 +252,16 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
                 : <span className="text-emerald-300">+{fmtUSD(-Number(a.value_usd), { cents: false })}</span>}
             </div>
           ))}
-          <div className="flex justify-between font-semibold"><span>Net profit</span><span className="text-emerald-300">{fmtUSD(net, { cents: false })}</span></div>
+          <div className="flex justify-between font-semibold">
+            <span>Net profit</span>
+            <span className={net >= 0 ? 'text-emerald-300' : 'text-rose-400'}>{net < 0 ? '−' : ''}{fmtUSD(Math.abs(net), { cents: false })}</span>
+          </div>
+          {/* after Net, echoing the Financials card: the pot has its own
+              books and must not break the rose minus-to-net sequence */}
+          <div className="flex justify-between">
+            <span className="text-muted-foreground" title="Shipping fees + insurance − labels − shipping/reship expenses. Earmarked for shipping; excluded from net profit on both sides.">Shipping pot (not in net)</span>
+            <span className={shippingNet >= 0 ? 'text-muted-foreground' : 'text-amber-300'}>{shippingNet >= 0 ? '+' : '−'}{fmtUSD(Math.abs(shippingNet), { cents: false })}</span>
+          </div>
         </div>
         {orphanedAdj.length > 0 && (
           <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs text-amber-200">

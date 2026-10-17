@@ -4,15 +4,12 @@ function getPnl() {
   return action('getPnl', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      SELECT pnl.*, splits.splits, adj.adjustments,
-             -- the shipping/reship expense slice rides in the SAME statement
-             -- (same snapshot) as the view read: the dispersion tab's
-             -- shipping bridge must never pair view totals with a
-             -- separately-loaded (possibly stale) expense list
-             (SELECT COALESCE(SUM(e.total_usd), 0)
-              FROM expenses e
-              WHERE e.group_buy_id = pnl.group_buy_id
-                AND e.category IN ('shipping', 'reship')) AS shipping_expenses_usd
+      -- shipping_expenses_usd and shipping_net_usd now come FROM the
+      -- view (migration 1790101400, which took the shipping pot out of
+      -- net profit) — same snapshot as every other total, so the
+      -- dispersion tab's pot math never pairs view totals with a
+      -- separately-loaded (possibly stale) expense list
+      SELECT pnl.*, splits.splits, adj.adjustments
       FROM v_group_buy_pnl pnl
       LEFT JOIN (
         SELECT group_buy_id,

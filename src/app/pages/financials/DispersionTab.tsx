@@ -11,11 +11,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
  *   earned_margin = product_profit − (stock_retail − stock_cost)
  *   GROSS         = earned_margin + admin_fees + tips + split_fees
  *   shipping_net  = shipping_fees + insurance − label_costs − ship/reship expenses
- *   NET           = GROSS + shipping_net − other expenses − comps − credits
+ *   NET           = GROSS − other expenses − comps − credits
  *                   − write-offs − GB-price giveaways − at-cost margin waived
  *                   − direct freight − group stock (at cost+freight)
  *
- * This is an algebraic identity with v_group_buy_pnl.net_profit_usd (the
+ * shipping_net is the SHIPPING POT and is NOT part of NET (policy,
+ * 2026-10-17 — "those are used to cover shipping expenses"): the view's
+ * net_profit_usd excludes the pot's revenue AND its costs, and this tab
+ * shows the pot in its own card instead of the bridge.
+ *
+ * NET is an algebraic identity with v_group_buy_pnl.net_profit_usd (the
  * stock_retail/stock_cost terms cancel exactly) — verified against live
  * data, and re-checked at render: any drift ≥ 1¢ shows a red banner
  * instead of silently lying.
@@ -29,6 +34,7 @@ export type Pnl = {
   stock_cost_usd: string; stock_retail_usd: string;
   comps_usd: string; credits_usd: string; writeoffs_usd: string; adj_both_usd: string;
   shipping_expenses_usd: string;
+  shipping_net_usd: string;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
   splits: { party: string; pct: string }[] | null;
 };
@@ -91,22 +97,20 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
     .filter(e => e.category === 'shipping' || e.category === 'reship')
     .reduce((s, e) => s + num(e.total_usd), 0);
 
+  // the shipping POT — rendered in its own card, never a bridge line:
+  // net profit excludes it by policy (see the header comment)
+  const potRows = [
+    { label: 'Shipping fees collected', amount: num(pnl?.shipping_fee_revenue_usd) },
+    { label: 'Shipping insurance collected', amount: num(pnl?.insurance_revenue_usd) },
+    { label: 'Label costs (from shipments)', amount: -num(pnl?.label_costs_usd) },
+    { label: 'Shipping / reship expenses', amount: -shipExp },
+  ];
+  // the on-screen expense list disagreeing with the P&L snapshot means
+  // it's stale — rendered as an amber WARNING under the pot, never as a
+  // money row a scanner could read as a real cost line
+  const potListStale = Math.abs(shipExpFromList - shipExp) >= 0.005;
+
   const bridge: { label: string; amount: number; hint?: string; subs?: { label: string; amount: number }[] }[] = [
-    {
-      label: 'Shipping (net)', amount: shippingNet,
-      hint: 'Shipping fees and insurance are earmarked for shipping costs — this is what remains after labels and shipping/reship expenses',
-      subs: [
-        { label: 'Shipping fees collected', amount: num(pnl?.shipping_fee_revenue_usd) },
-        { label: 'Shipping insurance collected', amount: num(pnl?.insurance_revenue_usd) },
-        { label: 'Label costs (from shipments)', amount: -num(pnl?.label_costs_usd) },
-        { label: 'Shipping / reship expenses', amount: -shipExp },
-        // informational: the on-screen expense list disagreeing with the
-        // P&L snapshot means it's stale — the parent line stays authoritative
-        ...(Math.abs(shipExpFromList - shipExp) >= 0.005
-          ? [{ label: 'expense list is stale vs the P&L snapshot — reload', amount: shipExp - shipExpFromList }]
-          : []),
-      ],
-    },
     {
       label: 'Expenses (non-shipping)', amount: -otherExp,
       // category sub-rows are DERIVED from the expense list, never a
@@ -135,11 +139,12 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
   const composedNet = gross + bridge.reduce((s, b) => s + b.amount, 0);
   const drift = Math.abs(composedNet - viewNet) >= 0.005;
 
-  // informational per-party figure (Ian's ask): net after ONLY shipping
-  // (net), comps, credits, write-offs, and GB-price giveaways — stock
+  // informational per-party figure (Ian's ask, updated with the pot
+  // policy): net after ONLY comps, credits, write-offs, and GB-price
+  // giveaways — the shipping pot (no longer profit at all), stock
   // (group AND personal), at-cost waivers, direct freight, and
   // non-shipping expenses deliberately excluded. Not a payout figure.
-  const infoNet = gross + shippingNet
+  const infoNet = gross
     - num(pnl?.comps_usd) - num(pnl?.credits_usd) - num(pnl?.writeoffs_usd) - num(pnl?.adj_both_usd);
 
   // ---- per-party stock contributions --------------------------------------
@@ -231,8 +236,8 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                   <span className="text-2xl font-bold text-emerald-300 whitespace-nowrap">{fmtUSD(viewNet * Number(s.pct) / 100)}</span>
                 </div>
                 <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
-                  title="Informational only: gross + shipping (net) − comps − credits − write-offs − GB-price giveaways, × split share. Stock (group and personal), at-cost waivers, direct freight, and non-shipping expenses are deliberately excluded — this is not a payout figure.">
-                  <span>after ship/comp/credit/WO/giveaway</span>
+                  title="Informational only: gross − comps − credits − write-offs − GB-price giveaways, × split share. The shipping pot (not profit by policy), stock (group and personal), at-cost waivers, direct freight, and non-shipping expenses are deliberately excluded — this is not a payout figure.">
+                  <span>after comp/credit/WO/giveaway</span>
                   <span className="whitespace-nowrap">{fmtUSD(infoNet * Number(s.pct) / 100)}</span>
                 </div>
               </CardContent>
@@ -292,6 +297,41 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
               </TableRow>
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+
+      {/* the shipping pot — outside the bridge because it is outside net
+          profit: earmarked money, its own books */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base"
+            title="Shipping fees and insurance are collected to pay for shipping. Both the money in and the costs it covers are excluded from net profit — a surplus is the planner's shipping reserve; a deficit is NOT absorbed by profit and shows amber.">
+            Shipping pot — covers shipping, not profit
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-sm space-y-1 max-w-md">
+            {potRows.filter(r => r.amount !== 0).map(r => (
+              <div key={r.label} className="flex justify-between">
+                <span className="text-muted-foreground">{r.label}</span>
+                <span className={r.amount < 0 ? 'text-rose-400' : ''}>{r.amount < 0 ? '−' : ''}{fmtUSD(Math.abs(r.amount))}</span>
+              </div>
+            ))}
+            <div className="flex justify-between font-medium border-t pt-1">
+              <span>{shippingNet >= 0 ? 'Pot surplus (shipping reserve)' : 'Pot deficit — shipping cost more than was collected'}</span>
+              <span className={shippingNet >= 0 ? '' : 'text-amber-300'}>{shippingNet >= 0 ? '+' : '−'}{fmtUSD(Math.abs(shippingNet))}</span>
+            </div>
+            {potListStale && (
+              <p className="text-xs text-amber-300">
+                Expense list is stale vs the P&L snapshot ({shipExp - shipExpFromList >= 0 ? '+' : '−'}{fmtUSD(Math.abs(shipExp - shipExpFromList))}) — reload. The pot total above is authoritative.
+              </p>
+            )}
+            {Math.abs(shippingNet - num(pnl?.shipping_net_usd)) >= 0.005 && (
+              <p className="text-xs text-rose-400">
+                Pot drift: these lines sum to {shippingNet >= 0 ? '' : '−'}{fmtUSD(Math.abs(shippingNet))} but the P&L view says {num(pnl?.shipping_net_usd) >= 0 ? '' : '−'}{fmtUSD(Math.abs(num(pnl?.shipping_net_usd)))} — trust the view; this is a bug in this page's math.
+              </p>
+            )}
+          </div>
         </CardContent>
       </Card>
 
