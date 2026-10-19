@@ -15,7 +15,7 @@ function getPackableItems() {
     query: `
       SELECT oi.id AS order_item_id,
              p.id AS product_id, p.sku_code, p.name AS product_name,
-             p.external_id AS product_external_id, p.unit_weight_oz, p.digital,
+             cpl.external_id AS product_external_id, p.unit_weight_oz, p.digital,
              oi.unit_price_usd,
              CASE WHEN oi.removed_at IS NULL THEN COALESCE(oi.qty_override, oi.qty) ELSE 0 END AS effective_qty,
              COALESCE(att.attributed, 0) AS attributed_qty,
@@ -26,6 +26,10 @@ function getPackableItems() {
       FROM order_items oi
       JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
       JOIN products p ON p.id = gbp.product_id
+      -- the ordering-app product id IN THIS ORDER'S CAMPAIGN (1790101900):
+      -- the shipment push stamps shipped_date on upstream items by it
+      LEFT JOIN campaign_product_links cpl
+        ON cpl.group_buy_id = gbp.group_buy_id AND cpl.product_id = p.id
       LEFT JOIN LATERAL (
         SELECT COALESCE(sum(si.qty), 0) AS attributed,
                COALESCE(sum(si.qty) FILTER (WHERE sh.finalized_at IS NOT NULL), 0) AS shipped

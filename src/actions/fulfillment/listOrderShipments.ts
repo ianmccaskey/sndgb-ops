@@ -32,11 +32,14 @@ function listOrderShipments() {
                  'qty', si.qty,
                  'sku_code', p.sku_code,
                  'product_id', p.id,
-                 'product_external_id', p.external_id) ORDER BY p.sku_code) AS items
+                 'product_external_id', cpl.external_id) ORDER BY p.sku_code) AS items
         FROM shipment_items si
         JOIN order_items oi ON oi.id = si.order_item_id
         JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
         JOIN products p ON p.id = gbp.product_id
+        -- ordering-app product id in this order's campaign (1790101900)
+        LEFT JOIN campaign_product_links cpl
+          ON cpl.group_buy_id = gbp.group_buy_id AND cpl.product_id = p.id
         WHERE si.shipment_id = s.id
       ) si ON true
       WHERE s.order_id = {{params.order_id}}::bigint

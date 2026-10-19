@@ -13,11 +13,15 @@ function getOrderItems() {
              -- is rounded by the JS transport unless it travels with a
              -- non-digit char; stripped at the row boundary (dbText)
              oi.direct_vendor_carrier, '#' || oi.direct_vendor_tracking AS direct_vendor_tracking,
-             p.sku_code, p.name AS product_name, p.mass_label, p.external_id AS product_external_id,
+             p.sku_code, p.name AS product_name, p.mass_label, cpl.external_id AS product_external_id,
              dt.carrier AS direct_carrier, '#' || dt.tracking_number AS direct_tracking_number
       FROM order_items oi
       JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
       JOIN products p ON p.id = gbp.product_id
+      -- the ordering-app product id IN THIS ORDER'S CAMPAIGN (1790101900):
+      -- "Push changes" matches and adds upstream items by it
+      LEFT JOIN campaign_product_links cpl
+        ON cpl.group_buy_id = gbp.group_buy_id AND cpl.product_id = p.id
       -- the label that OWNS this line's current fulfillment — joined
       -- through order_items.direct_fulfilled_transfer_id, which only the
       -- successful stamp sets and the manual undo/mark clears. A

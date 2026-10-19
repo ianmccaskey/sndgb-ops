@@ -4,8 +4,10 @@
  * idempotent upsert flow is shared between both sources.
  *
  * Item SKU resolution: base44 items carry product_id + product_name. The
- * catalog stores base44 ids in products.external_id (populated by the product
- * sync), so ids resolve to curated SKUs first and the name is only a fallback.
+ * product sync links each base44 product to a local product PER CAMPAIGN
+ * (campaign_product_links — base44 keeps a separate Product record per group
+ * buy), and the caller hands in the selected campaign's links, so ids resolve
+ * to curated SKUs; the name is only used for an item that has no id.
  */
 
 import { B44Order } from '@/lib/base44';

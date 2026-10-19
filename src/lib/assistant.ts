@@ -101,7 +101,7 @@ HOW IMPORTS WORK
   * "Push tx refs to ordering app" adds the order's hashes upstream and removes only the ones rejected on THAT order; every other upstream ref is kept, so it cannot remove a ref that another order holds.
   * "Can't execute … action", "Datasource can't be reached", a connection reset or a 5xx: a transient connection failure, not a data problem — pull again (re-importing is safe).
   * "claims sit on several rails": an order reconciles on ONE rail; settle by hand (reject the stray claim or correct the rail).
-  * "Product not synced": Products → Ordering app tab → pull products, then pull orders again.
+  * "Product not synced": the selected campaign has no link for that ordering-app product. Products → Ordering app tab → pull products (with this campaign selected), then pull orders again. Links are per campaign, because the ordering app keeps a separate product record per group buy, so syncing one campaign never changes another campaign's links.
   * "appears both direct-shipped and packed-by-us": fix the order upstream, then pull again.
   * "Deleted upstream?": each listed order is re-checked live; Mark cancelled only if the deletion was intentional. Nothing auto-cancels.
   * "import aborted before any order or payment was touched": a stale-claim release failed; fix the cause and pull again — nothing was written.

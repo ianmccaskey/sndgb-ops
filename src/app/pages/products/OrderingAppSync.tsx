@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import saveProduct from '@/actions/products/saveProduct';
+import linkCampaignProduct from '@/actions/products/linkCampaignProduct';
 import linkGroupBuyExternal from '@/actions/groupBuys/linkGroupBuyExternal';
 import { useApp } from '@/app/AppContext';
 import {
@@ -15,20 +16,37 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { CloudDownload, Link2 } from 'lucide-react';
 
-type ExistingProduct = { id: number; external_id: string | null; sku_code: string; name: string };
+type ExistingProduct = { id: number; sku_code: string; name: string };
+
+/** One row of listCampaignProductLinks — the selected campaign's links. */
+export type CampaignProductLink = { group_buy_id: number | string; product_id: number | string; external_id: string; sku_code: string };
 
 type PreviewRow = {
   include: boolean;
   b44: B44Product;
   match: ExistingProduct | null;
+  /** this campaign's link state for the row, shown before importing */
+  linkState: 'linked' | 'new' | 'other';
 };
 
-export function OrderingAppSync({ products, onImported }: {
+type LinkOutcome = { outcome?: string; ext_holder_sku?: string | null; current_external_id?: string | null };
+
+/*
+ * Product sync for the SELECTED campaign. Ordering-app ids are linked per
+ * campaign (campaign_product_links, 1790101900): base44 keeps a separate
+ * Product record per group buy, so syncing one campaign must never move
+ * another campaign's links — the single products.external_id it used to
+ * overwrite did exactly that (Elora & More's sync broke Mixed Buy #5's
+ * imports). products.external_id is no longer written here.
+ */
+export function OrderingAppSync({ products, links, onImported }: {
   products: ExistingProduct[];
+  links: CampaignProductLink[];
   onImported: () => void;
 }) {
-  const { groupBuy, settings, reloadGroupBuys } = useApp();
+  const { groupBuy, settings, reloadGroupBuys, userName } = useApp();
   const [doSaveProduct] = useMutateAction(saveProduct);
+  const [doLinkProduct] = useMutateAction(linkCampaignProduct);
   const [doLinkGb] = useMutateAction(linkGroupBuyExternal);
 
   const cfg = useMemo(() => ({
@@ -41,8 +59,17 @@ export function OrderingAppSync({ products, onImported }: {
   const [b44Buys, setB44Buys] = useState<B44GroupBuy[] | null>(null);
   const [pickedB44Id, setPickedB44Id] = useState('');
   const [preview, setPreview] = useState<PreviewRow[] | null>(null);
+  // the campaign + ordering-app buy a preview was pulled for: its links may
+  // only ever be written to that campaign
+  const [previewFor, setPreviewFor] = useState<{ gbId: number; gbExternalId: string } | null>(null);
   const [unscoped, setUnscoped] = useState(false);
   const [doneMsg, setDoneMsg] = useState('');
+  const [linkProblems, setLinkProblems] = useState<string[]>([]);
+
+  // a preview pulled for one campaign is meaningless for another
+  useEffect(() => {
+    setPreview(null); setPreviewFor(null); setDoneMsg(''); setLinkProblems([]);
+  }, [groupBuy?.id, groupBuy?.external_id]);
 
   if (!cfg.token) {
     return (
@@ -97,20 +124,29 @@ export function OrderingAppSync({ products, onImported }: {
 
   const pull = async () => {
     if (!groupBuy?.external_id) return;
-    setBusy(true); setError(''); setDoneMsg('');
+    const target = { gbId: groupBuy.id, gbExternalId: groupBuy.external_id };
+    setBusy(true); setError(''); setDoneMsg(''); setLinkProblems([]);
     try {
       const all = await listB44Products(cfg);
-      const scoped = scopeProductsToGroupBuy(all, groupBuy.external_id);
+      const scoped = scopeProductsToGroupBuy(all, target.gbExternalId);
       setUnscoped(scoped === null);
       const list = scoped ?? all;
+      // only this campaign's links, never a row left over from another one
+      const mine = links.filter(l => Number(l.group_buy_id) === target.gbId);
       setPreview(list.map(p => {
         const name = String(p.name ?? '').trim();
+        // this campaign's link first; the name only for a record not linked yet
+        const linked = mine.find(l => l.external_id === p.id);
         const match =
-          products.find(x => x.external_id === p.id) ||
+          (linked ? products.find(x => Number(x.id) === Number(linked.product_id)) : undefined) ||
           products.find(x => x.sku_code.toLowerCase() === name.toLowerCase() || x.name.toLowerCase() === name.toLowerCase()) ||
           null;
-        return { include: !!name, b44: p, match };
+        const linkState: PreviewRow['linkState'] = linked
+          ? 'linked'
+          : match && mine.some(l => Number(l.product_id) === Number(match.id)) ? 'other' : 'new';
+        return { include: !!name, b44: p, match, linkState };
       }));
+      setPreviewFor(target);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to pull products');
     } finally {
@@ -119,33 +155,69 @@ export function OrderingAppSync({ products, onImported }: {
   };
 
   const importRows = async () => {
-    if (!preview) return;
-    setBusy(true); setError(''); setDoneMsg('');
-    let created = 0, updated = 0;
+    if (!preview || !previewFor) return;
+    // never write one campaign's ordering-app records as another's links
+    if (!groupBuy || groupBuy.id !== previewFor.gbId || groupBuy.external_id !== previewFor.gbExternalId) {
+      setError('The campaign changed since this preview was pulled — pull again.');
+      setPreview(null); setPreviewFor(null);
+      return;
+    }
+    const targetName = groupBuy.name;
+    setBusy(true); setError(''); setDoneMsg(''); setLinkProblems([]);
+    let created = 0, updated = 0, linkedNew = 0, linkedSame = 0, relinked = 0;
+    const problems: string[] = [];
     try {
       for (const row of preview) {
         if (!row.include) continue;
         const name = String(row.b44.name ?? '').trim();
         if (!name) continue;
-        await doSaveProduct({
+        const sku = row.match ? row.match.sku_code : name;
+        const saved = await doSaveProduct({
           // SKU must match how the ordering app writes items in exports, which
           // is the product name — existing rows keep their curated SKU because
           // the upsert conflicts on sku_code via the matched product.
-          sku_code: row.match ? row.match.sku_code : name,
+          sku_code: sku,
           name,
           mass_label: '',
-          external_id: row.b44.id,
+          // blank = keep the frozen legacy column; the link is written below
+          // for THIS campaign only
+          external_id: '',
           // blank = keep any curated weight (saveProduct is set-if-provided)
           unit_weight_oz: '',
           active: true,
-        });
+        }) as { id?: number | string }[] | { id?: number | string } | null;
+        const productId = Array.isArray(saved) ? saved[0]?.id : saved?.id;
+        if (productId == null) { problems.push(`${sku}: the product could not be saved, so it was not linked`); continue; }
         if (row.match) updated++; else created++;
+        const res = await doLinkProduct({
+          group_buy_id: previewFor.gbId, product_id: productId, external_id: row.b44.id, actor: userName,
+        }) as LinkOutcome[] | LinkOutcome | null;
+        const r = (Array.isArray(res) ? res[0] : res) ?? {};
+        switch (r.outcome) {
+          case 'linked': linkedNew++; break;
+          case 'unchanged': linkedSame++; break;
+          case 'relinked': relinked++; break;
+          case 'ext_taken':
+            problems.push(`${name}: this ordering-app product already stands for ${r.ext_holder_sku ?? 'another product'} in this campaign — not changed`);
+            break;
+          case 'product_linked':
+            problems.push(`${sku}: already linked in this campaign to ordering-app product ${r.current_external_id ?? '?'}, which this campaign's orders use — not changed (two ordering-app records for one product)`);
+            break;
+          case 'conflict':
+            problems.push(`${sku}: another sync changed this campaign's links at the same moment — pull again`);
+            break;
+          default:
+            problems.push(`${sku}: link refused`);
+        }
       }
-      setDoneMsg(`Imported: ${created} new, ${updated} updated.`);
-      setPreview(null);
+      setDoneMsg(`Imported: ${created} new, ${updated} updated. Links for ${targetName}: ${linkedNew} new, ${linkedSame} already linked${relinked ? `, ${relinked} replaced (old record unused by any order)` : ''}.`);
+      setLinkProblems(problems);
+      setPreview(null); setPreviewFor(null);
       onImported();
     } catch (e: unknown) {
+      setLinkProblems(problems);
       setError(e instanceof Error ? e.message : 'Import failed part-way — re-running is safe (upserts).');
+      onImported();
     } finally {
       setBusy(false);
     }
@@ -238,9 +310,18 @@ export function OrderingAppSync({ products, onImported }: {
                           <TableCell className="font-medium">{String(row.b44.name ?? '(unnamed)')}</TableCell>
                           <TableCell className="text-right">{typeof row.b44.price === 'number' ? fmtUSD(row.b44.price) : '—'}</TableCell>
                           <TableCell>
-                            {row.match
-                              ? <Badge variant="secondary">update “{row.match.sku_code}”</Badge>
-                              : <Badge>create</Badge>}
+                            <span className="flex flex-wrap items-center gap-1">
+                              {row.match
+                                ? <Badge variant="secondary">update “{row.match.sku_code}”</Badge>
+                                : <Badge>create</Badge>}
+                              {row.linkState === 'linked' && <span className="text-[11px] text-muted-foreground">already linked</span>}
+                              {row.linkState === 'new' && <span className="text-[11px] text-muted-foreground">will link</span>}
+                              {row.linkState === 'other' && (
+                                <span className="text-[11px] text-amber-300" title="This product is already linked to a different ordering-app record in this campaign. The link changes only if no order of this campaign uses the old record.">
+                                  linked to another record
+                                </span>
+                              )}
+                            </span>
                           </TableCell>
                           <TableCell className="font-mono text-xs">{row.b44.id}</TableCell>
                         </TableRow>
@@ -264,14 +345,22 @@ export function OrderingAppSync({ products, onImported }: {
                   <Button size="sm" variant="ghost" onClick={() => setPreview(null)} disabled={busy}>Cancel</Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Imports go to the shared catalog with the ordering-app ID attached; new products use their
-                  name as the SKU (that's how the export writes items). Campaign cost/margin/MOQ still get set
-                  in “Add / update campaign product” — price here is the customer-facing GB price, not vendor cost.
+                  Imports go to the shared catalog, and each ordering-app ID is linked for {groupBuy?.name} only —
+                  the ordering app keeps a separate product record per group buy, so syncing this campaign never
+                  changes another campaign's links. New products use their name as the SKU (that's how the export
+                  writes items). Campaign cost/margin/MOQ still get set in “Add / update campaign product” — price
+                  here is the customer-facing GB price, not vendor cost.
                 </p>
               </>
             )}
             {error && <p className="text-sm text-rose-400">{error}</p>}
             {doneMsg && <p className="text-sm text-emerald-300">{doneMsg}</p>}
+            {linkProblems.length > 0 && (
+              <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-sm text-amber-200 space-y-1">
+                <p className="font-semibold">{linkProblems.length} link(s) not changed:</p>
+                {linkProblems.map(m => <p key={m} className="text-xs break-words">{m}</p>)}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

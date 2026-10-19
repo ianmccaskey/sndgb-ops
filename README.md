@@ -35,6 +35,7 @@ Key invariants:
 - Orders upsert on `order_number`; re-importing an export refreshes rather than duplicates.
 - Payment overrides require a reason and are written to `audit_log`.
 - Zip codes are text (leading zeros survive); states normalize to 2-letter codes at import.
+- Ordering-app product ids are linked **per campaign** (`campaign_product_links`, `1790101900`): base44 keeps a separate Product record per group buy, so Mixed Buy #5's R30 and Elora & More's R30 are different ids. Imports, the product sync, the shipment push, the order-sheet push and the fulfillment check all resolve the link through the order's own campaign. `products.external_id` is a frozen legacy column — never read or write it.
 
 ### Manual orders (source `manual`)
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listCampaignProducts from '@/actions/campaign/listCampaignProducts';
-import listProducts from '@/actions/products/listProducts';
+import listCampaignProductLinks from '@/actions/products/listCampaignProductLinks';
 import listActiveExternalOrders from '@/actions/orders/listActiveExternalOrders';
 import cancelDeletedUpstream from '@/actions/orders/cancelDeletedUpstream';
 import listImportFailures from '@/actions/orders/listImportFailures';
@@ -30,7 +30,7 @@ type FailureRow = {
   id: number; order_number: string; message: string; seen_count: string | number;
   first_seen_at: string; last_seen_at: string; resolved_recently: string | number;
 };
-type CatalogProduct = { external_id: string | null; sku_code: string };
+type ProductLink = { group_buy_id: number | string; external_id: string; sku_code: string };
 type LocalExtOrder = { id: number; order_number: string; external_id: string; contact_name: string | null; total_usd: string };
 
 const EMPTY_RESULT: ParseResult = { orders: [], errors: [] };
@@ -157,14 +157,19 @@ export function ImportPage() {
     () => new Set(rows<CampaignProduct>(rawProducts).map(p => p.sku_code)),
     [rawProducts],
   );
-  const [rawCatalog, catalogLoading] = useLoadAction(listProducts, [], {});
+  // Pulled items map through THIS campaign's ordering-app product links:
+  // base44 keeps a separate Product record per group buy, so one id per
+  // product could only ever be right for one campaign (1790101900).
+  const [rawLinks, catalogLoading] = useLoadAction(listCampaignProductLinks, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const skuByExternalId = useMemo(() => {
     const m = new Map<string, string>();
-    for (const p of rows<CatalogProduct>(rawCatalog)) {
-      if (p.external_id) m.set(p.external_id, p.sku_code);
+    for (const l of rows<ProductLink>(rawLinks)) {
+      // a response still in flight from before a campaign switch carries
+      // the previous campaign's links — never map with those
+      if (Number(l.group_buy_id) === groupBuyId && l.external_id) m.set(l.external_id, l.sku_code);
     }
     return m;
-  }, [rawCatalog]);
+  }, [rawLinks, groupBuyId]);
 
   const [doCancelDeleted] = useMutateAction(cancelDeletedUpstream);
   const [rawLocalExt, , , reloadLocalExt] = useLoadAction(

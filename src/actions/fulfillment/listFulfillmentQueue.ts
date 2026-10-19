@@ -72,11 +72,11 @@ function listFulfillmentQueue() {
                -- by the ordering app's product id — includes fully-drafted
                -- lines (packable_json drops them), because a draft is not
                -- shipped evidence
-               jsonb_agg(jsonb_build_object('ext', p.external_id,
+               jsonb_agg(jsonb_build_object('ext', cpl.external_id,
                                             'effective', COALESCE(oi.qty_override, oi.qty),
                                             'shipped', LEAST(att.shipped, COALESCE(oi.qty_override, oi.qty))))
                  FILTER (WHERE NOT oi.direct_ship AND oi.removed_at IS NULL AND NOT p.digital
-                         AND p.external_id IS NOT NULL) AS upstream_check_json,
+                         AND cpl.external_id IS NOT NULL) AS upstream_check_json,
                -- digital lines are excluded from the DIRECT side too: even a
                -- (mis)flagged digital+direct combination is not vendor
                -- shipping work and must not enter the direct queue or the
@@ -98,6 +98,10 @@ function listFulfillmentQueue() {
         FROM order_items oi
         JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id
         JOIN products p ON p.id = gbp.product_id
+        -- ordering-app product id in this campaign (1790101900), keying
+        -- the upstream shipped check
+        LEFT JOIN campaign_product_links cpl
+          ON cpl.group_buy_id = gbp.group_buy_id AND cpl.product_id = p.id
         LEFT JOIN LATERAL (
           SELECT COALESCE(sum(si.qty), 0) AS attributed,
                  COALESCE(sum(si.qty) FILTER (WHERE sh.finalized_at IS NOT NULL), 0) AS shipped

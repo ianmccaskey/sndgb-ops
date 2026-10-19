@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listProducts from '@/actions/products/listProducts';
+import listCampaignProductLinks from '@/actions/products/listCampaignProductLinks';
 import saveProduct from '@/actions/products/saveProduct';
 import setProductWeight from '@/actions/products/setProductWeight';
 import setProductDigital from '@/actions/products/setProductDigital';
@@ -17,7 +18,7 @@ import listVendorProductProgress from '@/actions/vendors/listVendorProductProgre
 import listWallets from '@/actions/financials/listWallets';
 import getPnl from '@/actions/financials/getPnl';
 import { useApp } from '@/app/AppContext';
-import { OrderingAppSync } from '@/app/pages/products/OrderingAppSync';
+import { OrderingAppSync, CampaignProductLink } from '@/app/pages/products/OrderingAppSync';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtNum, fmtDate, fmtDateTime } from '@/lib/fmt';
 import { Button } from '@/components/ui/button';
@@ -55,6 +56,12 @@ export function ProductsPage() {
   const enabled = groupBuyId != null;
 
   const [rawProducts, , , reloadProducts] = useLoadAction(listProducts, [], {});
+  // ordering-app links are per campaign (1790101900): the catalog shows and
+  // the sync matches the SELECTED campaign's — rows a campaign switch left
+  // in flight are dropped
+  const [rawLinks, , , reloadLinks] = useLoadAction(listCampaignProductLinks, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const links = rows<CampaignProductLink>(rawLinks).filter(l => Number(l.group_buy_id) === groupBuyId);
+  const linkByProduct = new Map(links.map(l => [Number(l.product_id), l.external_id]));
   const [rawVendors] = useLoadAction(listVendors, [], {});
   const [rawCampaign, , , reloadCampaign] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawAdj, , , reloadAdj] = useLoadAction(listAdjustments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
@@ -834,7 +841,7 @@ export function ProductsPage() {
                   <TableHead>Mass</TableHead>
                   <TableHead>Weight (oz)</TableHead>
                   <TableHead>Digital</TableHead>
-                  <TableHead>Ordering-app ID</TableHead>
+                  <TableHead title="Each campaign links its own ordering-app product record">Ordering-app ID (this campaign)</TableHead>
                   <TableHead>Active</TableHead>
                 </TableRow>
               </TableHeader>
@@ -874,7 +881,7 @@ export function ProductsPage() {
                           : <span className="text-muted-foreground text-xs">physical</span>}
                       </button>
                     </TableCell>
-                    <TableCell className="font-mono text-xs">{p.external_id || '—'}</TableCell>
+                    <TableCell className="font-mono text-xs">{linkByProduct.get(Number(p.id)) || '—'}</TableCell>
                     <TableCell>{p.active ? 'yes' : 'no'}</TableCell>
                   </TableRow>
                 ))}
@@ -907,7 +914,7 @@ export function ProductsPage() {
         </TabsContent>
 
         <TabsContent value="sync" className="mt-4">
-          <OrderingAppSync products={products} onImported={reloadProducts} />
+          <OrderingAppSync products={products} links={links} onImported={() => { reloadProducts(); reloadLinks(); }} />
         </TabsContent>
       </Tabs>
 
