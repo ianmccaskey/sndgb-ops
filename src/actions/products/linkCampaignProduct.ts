@@ -10,15 +10,20 @@ import { action } from '@uibakery/data';
  *   linked          new link written
  *   unchanged       already linked exactly so
  *   relinked        the product's previous link in this campaign was
- *                   replaced — allowed ONLY when none of this campaign's
- *                   imported orders reference the old id (a base44 record
- *                   recreated before any order used it)
+ *                   replaced — allowed ONLY while the product is unused
+ *                   in this campaign: no order line of the campaign
+ *                   carries it (imported, locally added, removed — a
+ *                   local line may already have been pushed upstream
+ *                   under the old id, which no raw_import snapshot shows
+ *                   yet) and no imported order references the old id.
+ *                   The case it exists for: a base44 record recreated
+ *                   before any order used it.
  *   ext_taken       that base44 product already stands for another
  *                   product here (ext_holder_sku names it)
  *   product_linked  the product is already linked here to a different
- *                   base44 product that this campaign's orders use
- *                   (current_external_id) — two records for one product
- *                   in one campaign is refused, never guessed
+ *                   base44 product (current_external_id) and is in use
+ *                   in this campaign — two records for one product in
+ *                   one campaign is refused, never guessed
  *   conflict        another sync changed the links mid-request; pull again
  *   refused         bad input: no actor/id, unknown product, or a campaign
  *                   that is not linked to the ordering app
@@ -46,9 +51,17 @@ function linkCampaignProduct() {
         SELECT l.id, l.external_id FROM campaign_product_links l, ok
         WHERE l.group_buy_id = ok.gb AND l.product_id = ok.pid
       ), old_used AS (
-        -- does any of this campaign's imported base44 orders reference the
-        -- product's CURRENT link? Then that link is evidence, not a typo.
+        -- is the product's CURRENT link in use in this campaign? Then it is
+        -- evidence, not a typo. Any order line of the campaign carrying the
+        -- product counts — a locally added line may already be upstream
+        -- under the old id (Push changes) before any re-import records it —
+        -- and so does any imported order whose base44 items reference it.
         SELECT EXISTS (
+          SELECT 1
+          FROM ok, order_items oi
+          JOIN group_buy_products g ON g.id = oi.group_buy_product_id
+          WHERE g.group_buy_id = ok.gb AND g.product_id = ok.pid
+        ) OR EXISTS (
           SELECT 1
           FROM by_prod, ok, orders o
           CROSS JOIN LATERAL jsonb_array_elements(((o.raw_import->>'json')::jsonb)->'items') it

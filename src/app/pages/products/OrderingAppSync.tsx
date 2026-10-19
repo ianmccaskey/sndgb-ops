@@ -201,7 +201,7 @@ export function OrderingAppSync({ products, links, onImported }: {
             problems.push(`${name}: this ordering-app product already stands for ${r.ext_holder_sku ?? 'another product'} in this campaign — not changed`);
             break;
           case 'product_linked':
-            problems.push(`${sku}: already linked in this campaign to ordering-app product ${r.current_external_id ?? '?'}, which this campaign's orders use — not changed (two ordering-app records for one product)`);
+            problems.push(`${sku}: already linked in this campaign to ordering-app product ${r.current_external_id ?? '?'} and already on this campaign's orders — not changed (two ordering-app records for one product)`);
             break;
           case 'conflict':
             problems.push(`${sku}: another sync changed this campaign's links at the same moment — pull again`);
@@ -210,7 +210,7 @@ export function OrderingAppSync({ products, links, onImported }: {
             problems.push(`${sku}: link refused`);
         }
       }
-      setDoneMsg(`Imported: ${created} new, ${updated} updated. Links for ${targetName}: ${linkedNew} new, ${linkedSame} already linked${relinked ? `, ${relinked} replaced (old record unused by any order)` : ''}.`);
+      setDoneMsg(`Imported: ${created} new, ${updated} updated. Links for ${targetName}: ${linkedNew} new, ${linkedSame} already linked${relinked ? `, ${relinked} replaced (product not on any order of this campaign yet)` : ''}.`);
       setLinkProblems(problems);
       setPreview(null); setPreviewFor(null);
       onImported();
@@ -317,7 +317,7 @@ export function OrderingAppSync({ products, links, onImported }: {
                               {row.linkState === 'linked' && <span className="text-[11px] text-muted-foreground">already linked</span>}
                               {row.linkState === 'new' && <span className="text-[11px] text-muted-foreground">will link</span>}
                               {row.linkState === 'other' && (
-                                <span className="text-[11px] text-amber-300" title="This product is already linked to a different ordering-app record in this campaign. The link changes only if no order of this campaign uses the old record.">
+                                <span className="text-[11px] text-amber-300" title="This product is already linked to a different ordering-app record in this campaign. The link changes only if no order of this campaign carries the product yet.">
                                   linked to another record
                                 </span>
                               )}
