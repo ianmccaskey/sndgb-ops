@@ -65,7 +65,7 @@ export type TransferRow = {
   shippo_order_id: string | null;
   items: { product_id: number; sku_code: string; qty: string }[] | null;
 };
-export type CatalogProduct = { id: number; sku_code: string; name: string; mass_label: string | null; active: boolean };
+export type CatalogProduct = { id: number; sku_code: string; name: string; mass_label: string | null; digital: boolean; active: boolean };
 // one outstanding vendor-direct order line + its order's ship-to — a
 // candidate destination for shipping a box straight to the customer
 export type DirectShipCandidate = {

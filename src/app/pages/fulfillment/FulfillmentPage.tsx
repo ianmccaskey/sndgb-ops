@@ -12,7 +12,7 @@ import adoptUpstreamShipment from '@/actions/fulfillment/adoptUpstreamShipment';
 import listReceiveAddresses from '@/actions/receiving/listReceiveAddresses';
 import listUndeliveredShipmentTracks from '@/actions/fulfillment/listUndeliveredShipmentTracks';
 import updateShipmentTracking from '@/actions/fulfillment/updateShipmentTracking';
-import listProducts from '@/actions/products/listProducts';
+import listCampaignCatalogProducts from '@/actions/receiving/listCampaignCatalogProducts';
 import { useApp } from '@/app/AppContext';
 import { useShippoHttp } from '@/lib/useShippoHttp';
 import { isTestKey, trackPackage } from '@/lib/shippo';
@@ -99,9 +99,11 @@ export function FulfillmentPage() {
   }, [filterMode]);
   const [rawAddresses, , , reloadAddresses] = useLoadAction(listReceiveAddresses, [], {});
   const addresses = rows<RxAddress>(rawAddresses);
-  const [rawProducts] = useLoadAction(listProducts, [], {});
-  // digital products (COA certificates) are never packed — they don't
-  // belong in the filter chips or the session pool
+  // ONLY the selected campaign's products — the whole catalog made the
+  // filter and the session picker a wall of every buy's SKUs (Ian,
+  // 2026-10-21). Digital products (COA certificates) are never packed —
+  // they don't belong in the filter chips or the session pool either.
+  const [rawProducts] = useLoadAction(listCampaignCatalogProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active && !p.digital), [rawProducts]);
   const [doMarkDirect] = useMutateAction(markOrderDirectFulfilled);
 
@@ -371,6 +373,17 @@ export function FulfillmentPage() {
   // fully covers; partials appear only when toggled on
   const [showPartials, setShowPartials] = useState(false);
   const [pool, setPool] = useState<Record<number, string>>({});
+  // switching campaigns drops the product filter and the session pool:
+  // both hold product ids of the buy they were picked in, and an id that
+  // is no longer in `products` would keep narrowing the queue (or hold
+  // units in the pool) with no chip or row left to show or remove it
+  const campaignMounted = useRef(false);
+  useEffect(() => {
+    if (!campaignMounted.current) { campaignMounted.current = true; return; }
+    setFilterIds(new Set());
+    setPool({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupBuyId]);
   const [sAddProduct, setSAddProduct] = useState('');
   const [sAddQty, setSAddQty] = useState('');
   const poolEntries = Object.entries(pool);

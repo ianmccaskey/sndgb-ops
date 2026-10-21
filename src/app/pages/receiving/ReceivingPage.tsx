@@ -85,7 +85,10 @@ export function ReceivingPage() {
   })), [rawTransfers]);
   const destinations = rows<RxAddress>(rawDestinations);
   const drains = rows<DrainRow>(rawDrains);
-  const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active), [rawProducts]);
+  // physical lines only: a digital product (COA certificate) is never
+  // inside a package, so it has no place in a content picker or an
+  // import match (Ian, 2026-10-21: "only the physical items")
+  const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active && !p.digital), [rawProducts]);
   const vendors = rows<VendorRow>(rawVendors);
 
   const [doUpdateTracking] = useMutateAction(updatePackageTracking);
