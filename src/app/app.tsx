@@ -5,6 +5,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AppProvider } from '@/app/AppContext';
 import { ImportRunnerProvider, ImportProgressWidget } from '@/app/ImportRunner';
+import { AutoReconProvider } from '@/app/AutoRecon';
 import { AppLayout } from '@/app/layout/AppLayout';
 import { HomePage } from '@/app/pages/HomePage';
 import { OrdersPage } from '@/app/pages/orders/OrdersPage';
@@ -25,6 +26,7 @@ function App() {
   return (
     <BrowserRouter>
       <AppProvider>
+        <AutoReconProvider>
         <ImportRunnerProvider>
         <AppLayout>
           <Routes>
@@ -46,6 +48,7 @@ function App() {
           <ImportProgressWidget />
         </AppLayout>
         </ImportRunnerProvider>
+        </AutoReconProvider>
       </AppProvider>
     </BrowserRouter>
   );
