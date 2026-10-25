@@ -153,8 +153,27 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
   // it gets an explicit Orphaned column so table totals always reconcile
   const isOrphaned = (a: DispAdjustment) => !a.stock && !splits.some(s => s.party === a.beneficiary);
   const hasOrphans = stockRows.some(isOrphaned);
+  // group-stock row shares use CUMULATIVE rounding: a row's share is the
+  // equal split of the running total up to and including it, minus the
+  // split up to the row before. Splitting each row on its own would hand
+  // every odd cent to the last party, and the table's column totals would
+  // drift from the ledgers' single equalShares(stockCost) by a cent per
+  // odd-cent row (Codex, 2026-10-24); this way the columns sum to exactly
+  // what the ledgers deduct.
+  const stockRowShares = new Map<number, Record<string, number>>();
+  {
+    let runningStock = 0;
+    for (const a of stockRows) {
+      if (!a.stock) continue;
+      const before = equalShares(runningStock, splits);
+      runningStock = Math.round((runningStock + rowValue(a)) * 100) / 100;
+      const after = equalShares(runningStock, splits);
+      stockRowShares.set(a.id, Object.fromEntries(splits.map(s =>
+        [s.party, Math.round(((after[s.party] || 0) - (before[s.party] || 0)) * 100) / 100])));
+    }
+  }
   const rowShares = (a: DispAdjustment): Record<string, number> => {
-    if (a.stock) return equalShares(rowValue(a), splits);
+    if (a.stock) return stockRowShares.get(a.id) || equalShares(rowValue(a), splits);
     return Object.fromEntries(splits.map(s => [s.party, s.party === a.beneficiary ? rowValue(a) : 0]));
   };
   const orphanedTotal = stockRows.filter(isOrphaned).reduce((s, a) => s + rowValue(a), 0);
