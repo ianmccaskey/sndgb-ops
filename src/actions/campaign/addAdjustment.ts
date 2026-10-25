@@ -32,6 +32,12 @@ import { action } from '@uibakery/data';
  * NOT tiered (incremental vendor cost of a tiered line is not qty ×
  * unit_cost, so exact P&L neutrality can't be guaranteed).
  *
+ * reason is mandatory on every row except GROUP STOCK: the "P² Stock"
+ * button on the Products page writes stock rows with no reason and the
+ * row records 'P² stock' instead (a typed reason still wins). Nothing
+ * here looks at group_buy_products.qty_cap ("Max available"): that cap is
+ * a sold-out flag for CUSTOMER demand only, so stock buys ignore it.
+ *
  * preordered 'true' (cost rows only) = the vendor order was ALREADY placed
  * and paid from the wallet: the kits contribute NOTHING to demand
  * (v_moq_progress excludes them) and NOTHING to P&L (no waiver needed);
@@ -46,7 +52,12 @@ function addAdjustment() {
       SELECT
         gbp.id,
         ({{params.qty}})::numeric,
-        {{params.reason}}::text,
+        -- reason is required on every row EXCEPT group stock, where the
+        -- row's own classification is the reason: the "P² Stock" button
+        -- (Ian, 2026-10-25) sends none and the audit line reads 'P² stock'.
+        -- A typed reason still wins on a stock row.
+        COALESCE(NULLIF(btrim({{params.reason}}::text), ''),
+                 CASE WHEN COALESCE(NULLIF({{params.stock}}::text, ''), 'false') = 'true' THEN 'P² stock' END),
         {{params.created_by}}::text,
         {{params.beneficiary}}::text,
         COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb'),
@@ -61,6 +72,10 @@ function addAdjustment() {
         -- forged product id from another campaign must not gain demand or
         -- P&L deductions there
         AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
+        -- a blank reason is refused (zero rows, never a NOT NULL error)
+        -- unless the row is group stock, which names itself above
+        AND (NULLIF(btrim({{params.reason}}::text), '') IS NOT NULL
+             OR COALESCE(NULLIF({{params.stock}}::text, ''), 'false') = 'true')
         AND ({{params.qty}})::text ~ '^-?[0-9]+(\\.[0-9]{1,2})?$'
         AND ({{params.qty}})::numeric <> 0
         AND COALESCE(NULLIF({{params.pricing}}::text, ''), 'gb') IN ('gb', 'cost')

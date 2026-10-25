@@ -420,6 +420,45 @@ export function ProductsPage() {
     }
   };
 
+  // "P² Stock" (Ian, 2026-10-25): one click records GROUP STOCK — at vendor
+  // cost + freight, for both partners, stock flag on — from just the
+  // product and qty. The Pricing / For selects are ignored, the reason is
+  // optional (the row records 'P² stock' when blank), and "Max available"
+  // never applies: that cap flags sold-out CUSTOMER demand, not stock buys.
+  const addP2Stock = async () => {
+    const qty = Number(aQty);
+    if (!aProduct || !(qty > 0)) {
+      setAError('P² Stock needs a campaign product and a positive qty.');
+      return;
+    }
+    if (!/^\d+$/.test(aQty.trim())) {
+      setAError('P² Stock is bought in WHOLE kits (fractional kits would break the P&L-neutral math).');
+      return;
+    }
+    if (aCostProduct?.cost_tier_price != null) {
+      setAError('P² Stock is not supported on tiered-cost products — their incremental vendor cost is not qty × unit cost.');
+      return;
+    }
+    setAError('');
+    try {
+      const res = await doAddAdj({
+        group_buy_product_id: Number(aProduct), group_buy_id: groupBuyId, qty, reason: aReason.trim(), created_by: userName,
+        beneficiary: 'both', pricing: 'cost', preordered: '', stock: 'true',
+      });
+      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!wrote) throw new Error('P² Stock refused: the product must be an active, flat-cost line of this campaign and the qty a positive whole number.');
+      setAQty(''); setAReason('');
+      reloadAdj(); reloadCampaign();
+    } catch (e: unknown) {
+      setAError(e instanceof Error ? e.message : 'Failed to add P² Stock');
+    }
+  };
+
+  // what P² Stock would cost for the typed line, whatever the Pricing select says
+  const p2StockUsd = aCostProduct && /^\d+$/.test(aQty.trim()) && Number(aQty) > 0
+    ? Math.round(Number(aQty) * (Number(aCostProduct.unit_cost_usd) + Number(aCostProduct.freight_usd)) * 100) / 100
+    : null;
+
   return (
     <div className="p-4 sm:p-6 space-y-5">
       <div>
@@ -694,12 +733,22 @@ export function ProductsPage() {
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field label={aIsCost ? 'Reason / customer · audited' : 'Reason · audited'} className="col-span-2 sm:col-span-3">
+                <Field label={aIsCost ? 'Reason / customer · audited' : 'Reason · audited'} hint="optional for P² Stock" className="col-span-2 sm:col-span-3">
                   <Input placeholder={aIsCost ? '' : "e.g. 'P&P personal x100'"} value={aReason} onChange={e => setAReason(e.target.value)} className="h-9" />
                 </Field>
-                <Button size="sm" className="h-9 self-end justify-self-start" onClick={addAdj}>Add</Button>
+                <div className="flex gap-2 self-end">
+                  <Button size="sm" className="h-9" onClick={addAdj}>Add</Button>
+                  <Button size="sm" variant="secondary" className="h-9 whitespace-nowrap" onClick={addP2Stock}
+                    title="Group stock in one click: at vendor cost + freight, for both partners, no reason needed. Ignores the Pricing and For selects and the product's Max available.">
+                    P² Stock
+                  </Button>
+                </div>
               </div>
               {aError && <p className="text-sm text-rose-400">{aError}</p>}
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium">P² Stock</span> records group stock from the product and qty alone
+                {p2StockUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(p2StockUsd)}</span> for this line)</>}: at vendor cost + freight, for both partners, no reason required, and the product's Max available does not apply. Pricing and For are ignored.
+              </p>
               {aPricing === 'gb' ? (
                 <p className="text-xs text-muted-foreground">
                   "For" decides whose profit pays for these units at GB price: a person's adjustments come out of their split payout; "Both" comes out of total profit before the split.
