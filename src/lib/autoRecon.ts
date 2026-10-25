@@ -98,6 +98,23 @@ export type AutoReconDeps = {
 /** The pace Verify-all uses: rarely hits a provider's per-second limit; the fetch layer's 429 backoff is the net. */
 const LOOKUP_GAP_MS = 300;
 
+/** The Settings key holding our receiving wallet on each network. */
+const WALLET_KEY: Record<string, string> = { eth: 'eth_wallet_address', base: 'base_wallet_address', sol: 'sol_wallet_address' };
+
+/**
+ * Without a receiving wallet for the network, lookupTxPayment counts EVERY
+ * transfer in the transaction and only notes that the amount was not
+ * recipient-checked. An operator reads that note; an unattended pass must
+ * not act on it — so a network with no wallet configured is treated like
+ * one with no API key: its payments are skipped and the card says why.
+ */
+function missingWallet(method: string, settings: Record<string, string>): string | null {
+  const key = WALLET_KEY[method];
+  if (!key) return `${method} is not a network this pass verifies`;
+  if ((settings[key] || '').trim()) return null;
+  return `Set the ${method.toUpperCase()} receiving wallet address in Settings first — without it a lookup cannot tell our transfers from anyone else's, so the pass does not verify on ${method.toUpperCase()}.`;
+}
+
 type LookupOutcome =
   | { ok: true; res: TxLookupResult }
   | { ok: false; kind: 'config' | 'not_found' | 'no_transfer' | 'failed' | 'error'; message: string };
@@ -146,6 +163,8 @@ export async function runAutoRecon(groupBuyId: number, deps: AutoReconDeps): Pro
 
   let lookups = 0;
   const tryLookup = async (method: string, hash: string): Promise<LookupOutcome> => {
+    const noWallet = missingWallet(method, deps.settings);
+    if (noWallet) return { ok: false, kind: 'config', message: noWallet };
     if (lookups > 0) await sleep(LOOKUP_GAP_MS);
     lookups++;
     try {

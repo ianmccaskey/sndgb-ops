@@ -120,8 +120,16 @@ export async function correctOrderRail(o: RailOrder, newRail: string, deps: Rail
     // Local trail BEFORE the upstream mutation — standing rule for anything
     // that changes the ordering app.
     const pushingLine = `${ts} pushing payment_method correction to the ordering app: ${upstreamValue} (${newRail.toUpperCase()}).${tag}`;
-    await appendNote(pushingLine, { rail_push: true, from: b44.payment_method || null, to: upstreamValue });
+    // no trail line, no upstream mutation — the local rail stays corrected
+    // and the next import reverts it, so the correction is offered again
+    if (!(await appendNote(pushingLine, { rail_push: true, from: b44.payment_method || null, to: upstreamValue }))) {
+      return {
+        ok: false, localWritten: true, notes,
+        message: 'Local rail corrected, but the audit note that must precede the ordering-app push could not be written — nothing was pushed. The next import will revert the local rail and re-offer this correction; retry then.',
+      };
+    }
     const line = `${ts} payment method corrected to ${upstreamValue} (${newRail.toUpperCase()}) by SND GB Ops — customer paid on ${newRail.toUpperCase()}.`;
+
     try {
       await updateB44Order(cfg, o.external_id, {
         payment_method: upstreamValue,
