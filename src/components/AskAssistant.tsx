@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import logAssistantCall from '@/actions/assistant/logAssistantCall';
+import logAssistantFix from '@/actions/assistant/logAssistantFix';
 import { useApp } from '@/app/AppContext';
 import { useAssistantHttp } from '@/lib/useAssistantHttp';
-import { askAssistant, normalizeAssistantError, scrubText } from '@/lib/assistant';
-import type { ApiMessage, AssistantContext, AssistantTools, AssistantUsage } from '@/lib/assistant';
+import { askAssistant, describeFix, normalizeAssistantError, scrubText } from '@/lib/assistant';
+import type { ApiMessage, AssistantContext, AssistantTools, AssistantUsage, ProposedFix } from '@/lib/assistant';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -14,8 +15,12 @@ import { Sparkles } from 'lucide-react';
  * "Ask about this" — the read-only assistant's one surface. The caller
  * hands it PII-free facts (src/lib/assistant.ts builders), campaign-pinned
  * read tools, and optionally a way to hand a draft back into a field the
- * operator still submits. Nothing here writes data except the audit row
- * per question (assistant_asked), under the operator who asked.
+ * operator still submits — or, on the order sheet, a way to APPLY a fix
+ * the model proposed (onApplyFix). A proposal is a card with an editable
+ * reason and an Apply button; the click calls the caller's handler, which
+ * is the same handler its own buttons use. This component writes two
+ * kinds of audit row, both under the operator: one per question
+ * (assistant_asked) and one per proposal applied (assistant_fix_applied).
  */
 
 type Entry = {
@@ -23,7 +28,11 @@ type Entry = {
   role: 'user' | 'assistant' | 'error';
   text: string;
   meta?: { model: string; usage: AssistantUsage; toolsRan: string[] };
+  /** fixes the model proposed with this answer — rendered as cards, applied only on click */
+  proposals?: ProposedFix[];
 };
+
+type FixState = { status: 'busy' | 'applied' | 'refused'; message: string };
 
 export type AskAssistantProps = {
   open: boolean;
@@ -39,12 +48,24 @@ export type AskAssistantProps = {
   /** when set, each answer offers a button that hands its text to the caller (e.g. prefill the admin note) */
   onUseDraft?: (text: string) => void;
   useDraftLabel?: string;
+  /**
+   * when set, the model may propose fixes (propose_fix) and each one renders
+   * as a card with an Apply button that calls this — the caller runs the same
+   * audited control its own button would, and reports ok + a message. Only a
+   * caller whose scope is an order should pass it.
+   */
+  onApplyFix?: (fix: ProposedFix) => Promise<{ ok: boolean; message: string }>;
 };
 
-export function AskAssistant({ open, onClose, title, context, tools, scope, suggestions = [], initialQuestion, onUseDraft, useDraftLabel = 'Use as draft' }: AskAssistantProps) {
+export function AskAssistant({ open, onClose, title, context, tools, scope, suggestions = [], initialQuestion, onUseDraft, useDraftLabel = 'Use as draft', onApplyFix }: AskAssistantProps) {
   const { userName } = useApp();
   const http = useAssistantHttp();
   const [doLog] = useMutateAction(logAssistantCall);
+  const [doLogFix] = useMutateAction(logAssistantFix);
+  // per proposal card (key = entry id : proposal id): the operator's edited
+  // reason, and what happened when they clicked Apply
+  const [fixReason, setFixReason] = useState<Record<string, string>>({});
+  const [fixState, setFixState] = useState<Record<string, FixState>>({});
   const [question, setQuestion] = useState('');
   const [entries, setEntries] = useState<Entry[]>([]);
   const [history, setHistory] = useState<ApiMessage[]>([]);
@@ -66,6 +87,7 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
     if (lastLabel.current !== context.label) {
       lastLabel.current = context.label;
       setEntries([]); setHistory([]); setNotice(''); setQuestion('');
+      setFixReason({}); setFixState({});
       if (initialQuestion) setPendingAuto(initialQuestion);
     }
   }, [open, context.label, initialQuestion]);
@@ -87,7 +109,7 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
     setBusy(true); setNotice(''); setQuestion('');
     setEntries(prev => [...prev, { id: ++seq.current, role: 'user', text }]);
     try {
-      const a = await askAssistant(http, { context, tools, history, question: text });
+      const a = await askAssistant(http, { context, tools, history, question: text, allowFixes: !!onApplyFix });
       // the trail: who asked what, at what cost — never the answer. The
       // question is scrubbed (emails, phones, handles) and capped, since an
       // operator can type member data into it. Written BEFORE the unmount
@@ -97,14 +119,14 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
       try {
         await doLog({
           scope: scope.table, row_pk: String(scope.rowPk), actor: userName,
-          detail: JSON.stringify({ kind: context.kind, label: scrubText(context.label), question: scrubText(text).slice(0, 300), model: a.model, stop_reason: a.stopReason, usage: a.usage, tools: a.toolsRan }),
+          detail: JSON.stringify({ kind: context.kind, label: scrubText(context.label), question: scrubText(text).slice(0, 300), model: a.model, stop_reason: a.stopReason, usage: a.usage, tools: a.toolsRan, proposed: a.proposals.map(f => f.kind) }),
         });
       } catch {
         logged = false;
       }
       if (!mounted.current) return;
       setHistory(a.history);
-      setEntries(prev => [...prev, { id: ++seq.current, role: 'assistant', text: a.text, meta: { model: a.model, usage: a.usage, toolsRan: a.toolsRan } }]);
+      setEntries(prev => [...prev, { id: ++seq.current, role: 'assistant', text: a.text, meta: { model: a.model, usage: a.usage, toolsRan: a.toolsRan }, proposals: a.proposals }]);
       if (!logged) setNotice('Answered, but the audit row for this question could not be written.');
     } catch (e: unknown) {
       if (mounted.current) setEntries(prev => [...prev, { id: ++seq.current, role: 'error', text: normalizeAssistantError(e).message }]);
@@ -122,13 +144,54 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
     }
   };
 
+  // Apply = the operator's click, nothing else. The caller's handler runs
+  // the control (with its own guards: status re-checked, reason required,
+  // one hash per order) and says what happened; on success the trail gets
+  // an assistant_fix_applied row and the conversation forgets its facts,
+  // so the next question is answered from the refreshed records.
+  const applyFix = async (entryId: number, fix: ProposedFix) => {
+    if (!onApplyFix || busy) return;
+    const key = `${entryId}:${fix.id}`;
+    if (fixState[key]?.status === 'busy' || fixState[key]?.status === 'applied') return;
+    const reason = (fixReason[key] ?? fix.reason).trim();
+    if (!reason) { setFixState(s => ({ ...s, [key]: { status: 'refused', message: 'A reason is required — it goes into the audit trail.' } })); return; }
+    setFixState(s => ({ ...s, [key]: { status: 'busy', message: '' } }));
+    let result: { ok: boolean; message: string };
+    try {
+      result = await onApplyFix({ ...fix, reason });
+    } catch (e: unknown) {
+      result = { ok: false, message: e instanceof Error ? e.message : 'The fix could not be applied.' };
+    }
+    if (!mounted.current) return;
+    if (result.ok) {
+      setHistory([]);
+      try {
+        await doLogFix({
+          row_pk: String(scope.rowPk), actor: userName,
+          detail: JSON.stringify({
+            kind: fix.kind, what: describeFix(fix), payment_id: fix.payment_id, method: fix.method, tx_hash: fix.tx_hash, amount_usd: fix.amount_usd,
+            reason: scrubText(reason).slice(0, 300), result: result.message.slice(0, 200),
+          }),
+        });
+      } catch {
+        result = { ...result, message: `${result.message} (The audit row for this applied proposal could not be written.)` };
+      }
+      if (!mounted.current) return;
+      setNotice('Applied. The next question starts from the refreshed records.');
+    }
+    setFixState(s => ({ ...s, [key]: { status: result.ok ? 'applied' : 'refused', message: result.message } }));
+  };
+
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="w-full sm:max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-4 pt-4 pb-2 text-left">
           <DialogTitle className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-cyan-300" /> {title}</DialogTitle>
           <DialogDescription className="text-xs">
-            Read-only. It explains what the app recorded and names the screen to act on; it cannot change anything. Check every figure against the screen before acting. Member contact details are not sent; emails, phone numbers and handles inside notes are scrubbed — keep them out of your question too.
+            {onApplyFix
+              ? 'It explains what the app recorded and can propose a fix as a card under its answer. Nothing changes until you click Apply, which runs the same audited control as this sheet under your name — read the reason first, it goes into the trail. '
+              : 'Read-only. It explains what the app recorded and names the screen to act on; it cannot change anything. '}
+            Check every figure against the screen before acting. Member contact details are not sent; emails, phone numbers and handles inside notes are scrubbed — keep them out of your question too.
           </DialogDescription>
         </DialogHeader>
 
@@ -156,6 +219,35 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
               {e.role === 'assistant' && (
                 <div className="rounded-lg border px-3 py-2 space-y-2">
                   <div className="whitespace-pre-wrap">{e.text}</div>
+                  {onApplyFix && e.proposals && e.proposals.length > 0 && (
+                    <div className="space-y-2">
+                      {e.proposals.map(f => {
+                        const key = `${e.id}:${f.id}`;
+                        const st = fixState[key];
+                        const locked = st?.status === 'busy' || st?.status === 'applied';
+                        return (
+                          <div key={key} className="rounded border border-cyan-400/40 bg-cyan-400/5 p-2 space-y-1.5">
+                            <div className="text-xs font-semibold">Proposed fix {f.id}: {describeFix(f)}</div>
+                            <Textarea
+                              rows={2}
+                              className="text-xs"
+                              value={fixReason[key] ?? f.reason}
+                              onChange={ev => setFixReason(m => ({ ...m, [key]: ev.target.value }))}
+                              disabled={locked}
+                              placeholder="Reason (audited)"
+                            />
+                            <div className="flex flex-wrap items-center gap-2">
+                              {st?.status === 'applied'
+                                ? <span className="text-xs font-medium text-emerald-300">Applied</span>
+                                : <Button size="sm" className="h-7 text-xs" disabled={busy || locked} onClick={() => applyFix(e.id, f)}>{st?.status === 'busy' ? 'Applying…' : 'Apply'}</Button>}
+                              <span className="text-[10px] text-muted-foreground">runs the same audited control as this sheet, under your name</span>
+                            </div>
+                            {st?.message && <p className={`text-xs ${st.status === 'refused' ? 'text-amber-300' : 'text-muted-foreground'}`}>{st.message}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   <div className="flex flex-wrap items-center gap-2">
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => copy(e.text)}>Copy</Button>
                     {onUseDraft && (

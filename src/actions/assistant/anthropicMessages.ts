@@ -10,7 +10,10 @@ import { action } from '@uibakery/data';
  * builds it and is the only caller.
  *
  * READ-ONLY BY CONSTRUCTION: the assistant's tools are load actions the
- * pages already use; no write action is ever exposed to the model.
+ * pages already use plus the Verify button's on-chain lookup; no write
+ * action is ever exposed to the model. A proposed fix is applied by the
+ * operator's click in the dialog, through the order sheet's own handler.
+
  */
 function anthropicMessages() {
   return action('anthropicMessages', 'HTTP', {

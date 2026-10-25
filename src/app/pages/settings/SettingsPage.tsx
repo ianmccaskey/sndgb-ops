@@ -518,7 +518,7 @@ export function SettingsPage() {
         <CardHeader className="pb-2"><CardTitle className="text-base">Assistant (Claude)</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <p className="text-xs text-muted-foreground">
-            "Ask" on the order sheet, "Explain these results" on Import and "Draft tracking email" in the ship dialog are read-only: the assistant explains reconciliation states, red import rows and an order's audited history, and drafts notes and emails you still review and submit. It has no way to change data.
+            "Ask" on the order sheet, "Explain these results" on Import and "Draft tracking email" in the ship dialog are read-only: the assistant explains reconciliation states, red import rows and an order's audited history, and drafts notes and emails you still review and submit. It has no way to change data itself. On the order sheet it can also propose a crypto payment fix as a card under its answer — nothing changes until you click Apply, which runs the same audited control as the sheet under your name.
           </p>
           <p className="text-xs text-muted-foreground">
             The API key is a header stored on the workspace's <span className="font-mono">Anthropic API</span> HTTP datasource — nothing in this app holds it (see <span className="font-mono">src/actions/assistant/DATASOURCE.md</span>). Member contact details are never sent and emails, phone numbers and handles inside notes are scrubbed (a name you typed into a note still travels with the note); every question is logged to the audit trail under your name.

@@ -50,8 +50,15 @@ fails (datasource missing, base URL wrong, key rejected).
 
 ## The one rule
 
-The assistant is READ-ONLY. Its tools are load actions; no write action
-is ever exposed to the model, and a draft it produces is text the
-operator pastes or a field the operator still submits. Do not add a
-write tool — the safety gates in this app (confirm-cancel, reject-by-
-hand, reason fields, over-buy confirmation) are the product, not toil.
+The assistant is READ-ONLY. Its tools are load actions and the Verify
+button's on-chain lookup (read, no write); no write action is ever
+exposed to the model, and a draft it produces is text the operator
+pastes or a field the operator still submits. A PROPOSED FIX (order
+sheet, since 2026-10-25) is a draft in the shape of a control: the model
+records it with `propose_fix`, the dialog shows a card with an editable
+reason and an Apply button, and the click runs the order sheet's own
+handler for that control under the operator's name — same guards, same
+audit rows, plus `assistant_fix_applied`. Do not add a write tool and do
+not let a proposal apply without the click — the safety gates in this
+app (confirm-cancel, reject-by-hand, reason fields, over-buy
+confirmation) are the product, not toil.

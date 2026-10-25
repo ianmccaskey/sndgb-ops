@@ -64,6 +64,10 @@ import { Field } from '@/components/Field';
 import { TrackingLink } from '@/components/TrackingLink';
 import { AskAssistant } from '@/components/AskAssistant';
 import { orderFacts } from '@/lib/assistant';
+import type { ProposedFix } from '@/lib/assistant';
+
+/** What a payment control reports back — to the sheet's message line and to an assistant proposal card. */
+type FixResult = { ok: boolean; message: string };
 import { useAssistantTools } from '@/lib/useAssistantTools';
 import { Sparkles } from 'lucide-react';
 
@@ -481,8 +485,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   // Inline on-chain verification — same lookup + same write-if-still-pending
   // action as the Reconciliation page, so a hash just added (or re-opened)
   // can be confirmed without leaving the order.
-  const verifyNow = async (p: PaymentRow) => {
-    if (!o || !p.tx_hash) return;
+  const verifyNow = async (p: PaymentRow): Promise<FixResult> => {
+    if (!o || !p.tx_hash) return { ok: false, message: 'Nothing to verify — the payment has no hash.' };
     setSaving(true); setPayMsg('');
     try {
       const res = await lookupTxPayment(p.method, p.tx_hash, settings);
@@ -504,12 +508,16 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       // rejected in another tab) — the stale result was NOT written.
       const wrote = Array.isArray(recorded) ? recorded.length > 0 : !!recorded;
       const nativeOnly = res.amountUsd === 0 && res.nativeAmount != null && res.nativeAmount > 0;
-      setPayMsg(!wrote ? 'Skipped — the payment is no longer pending.'
+      const message = !wrote ? 'Skipped — the payment is no longer pending.'
         : nativeOnly ? `Native ${res.nativeAmount} ${res.nativeSymbol} found — needs USD pricing; set an order override below to count it.`
-        : `Verified on-chain: ${fmtUSD(res.amountUsd)}.`);
+        : `Verified on-chain: ${fmtUSD(res.amountUsd)}.`;
+      setPayMsg(message);
       reloadPayments(); reloadOrder();
+      return { ok: wrote, message };
     } catch (e: unknown) {
-      setPayMsg(e instanceof Error ? e.message : 'Verification failed');
+      const message = e instanceof Error ? e.message : 'Verification failed';
+      setPayMsg(message);
+      return { ok: false, message };
     } finally {
       setSaving(false);
     }
@@ -518,50 +526,61 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   // Undo a MISTAKEN rejection (same network — the reopen buttons only offer
   // different ones). Explicit and audited: a reason is required, and the
   // payment goes back to pending to re-earn verification on-chain.
-  const undoRejection = async (p: PaymentRow) => {
-    if (!o) return;
-    if (!undoReason.trim()) { setPayMsg('A reason is required — why was the rejection wrong? (audited)'); return; }
+  const undoRejectionWith = async (p: PaymentRow, reason: string): Promise<FixResult> => {
+    if (!o) return { ok: false, message: 'No order is open.' };
+    const why = reason.trim();
+    if (!why) { const message = 'A reason is required — why was the rejection wrong? (audited)'; setPayMsg(message); return { ok: false, message }; }
     setSaving(true); setPayMsg('');
     try {
       const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
       const res = await doUndoRejection({
-        payment_id: p.id, order_id: o.id, reason: undoReason.trim(), actor: userName,
-        note: `${ts} rejection undone (${undoReason.trim()}) — back to pending for on-chain verification.`,
+        payment_id: p.id, order_id: o.id, reason: why, actor: userName,
+        note: `${ts} rejection undone (${why}) — back to pending for on-chain verification.`,
       }) as { reopened: string }[] | { reopened: string };
       const reopened = Number(Array.isArray(res) ? res[0]?.reopened : res?.reopened);
-      if (!reopened) {
-        setPayMsg('Could not undo — the hash may now live on another non-rejected payment.');
-      } else {
-        setPayMsg('Rejection undone — the payment is pending again; click Verify next to it.');
-        setUndoingId(null); setUndoReason('');
-      }
+      const message = reopened
+        ? 'Rejection undone — the payment is pending again; click Verify next to it.'
+        : 'Could not undo — the payment is not rejected on this order, or its hash now lives on another non-rejected payment.';
+      setPayMsg(message);
       reloadPayments(); reloadOrder();
+      return { ok: reopened > 0, message };
     } catch (e: unknown) {
-      setPayMsg(e instanceof Error ? e.message : 'Failed to undo rejection');
+      const message = e instanceof Error ? e.message : 'Failed to undo rejection';
+      setPayMsg(message);
+      return { ok: false, message };
     } finally {
       setSaving(false);
     }
   };
+  // the row's own Undo control: reason from its inline field, cleared on success
+  const undoRejection = async (p: PaymentRow) => {
+    const r = await undoRejectionWith(p, undoReason);
+    if (r.ok) { setUndoingId(null); setUndoReason(''); }
+  };
 
-  const reopenOnNetwork = async (p: PaymentRow, method: string) => {
-    if (!o) return;
+  // `why` is extra context for the note (an assistant proposal's evidence);
+  // the row's own buttons pass none
+  const reopenOnNetwork = async (p: PaymentRow, method: string, why = ''): Promise<FixResult> => {
+    if (!o) return { ok: false, message: 'No order is open.' };
     setSaving(true); setPayMsg('');
     try {
       const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
       const res = await doReopenNetwork({
         payment_id: p.id, order_id: o.id, method,
-        note: `${ts} re-opened as pending on ${method.toUpperCase()}: hash was recorded under the wrong network (${p.method}).`,
+        note: `${ts} re-opened as pending on ${method.toUpperCase()}: hash was recorded under the wrong network (${p.method}).${why ? ` ${why} [assistant-proposed]` : ''}`,
         actor: userName,
       }) as { reopened: string }[] | { reopened: string };
       const reopened = Number(Array.isArray(res) ? res[0]?.reopened : res?.reopened);
-      if (!reopened) {
-        setPayMsg('Could not re-open — the hash may already live on another non-rejected payment, or its format does not match that network.');
-      } else {
-        setPayMsg(`Re-opened as pending on ${method.toUpperCase()} — click Verify next to it to confirm on-chain.`);
-      }
+      const message = reopened
+        ? `Re-opened as pending on ${method.toUpperCase()} — click Verify next to it to confirm on-chain.`
+        : 'Could not re-open — the payment is not rejected on this order, its hash may already live on another non-rejected payment, or its format does not match that network.';
+      setPayMsg(message);
       reloadPayments(); reloadOrder();
+      return { ok: reopened > 0, message };
     } catch (e: unknown) {
-      setPayMsg(e instanceof Error ? e.message : 'Failed to re-open payment');
+      const message = e instanceof Error ? e.message : 'Failed to re-open payment';
+      setPayMsg(message);
+      return { ok: false, message };
     } finally {
       setSaving(false);
     }
@@ -1288,8 +1307,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     }
   };
 
-  const rejectPayment = async (p: PaymentRow) => {
-    if (!rejectReason.trim()) { setPayMsg('A reason is required — rejections are audited.'); return; }
+  const rejectPaymentWith = async (p: PaymentRow, reason: string): Promise<FixResult> => {
+    const why = reason.trim();
+    if (!why) { const message = 'A reason is required — rejections are audited.'; setPayMsg(message); return { ok: false, message }; }
     setSaving(true); setPayMsg('');
     try {
       // Guarded by the status this row showed when Reject was clicked — if
@@ -1297,38 +1317,55 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       // state is reloaded for a deliberate second look.
       const res = await doPayStatus({
         payment_id: p.id, status: 'rejected', amount_usd: 0,
-        notes: rejectReason.trim(), actor: userName, expected_status: p.status,
+        notes: why, actor: userName, expected_status: p.status,
       }) as unknown[] | null;
       const wrote = Array.isArray(res) ? res.length > 0 : !!res;
-      if (!wrote) {
-        setPayMsg('This payment changed while you were looking at it (likely just verified) — review the fresh state before rejecting.');
-      } else {
-        setRejectingId(null); setRejectReason('');
-      }
+      const message = wrote
+        ? 'Rejected — it no longer counts toward this order.'
+        : 'This payment changed while you were looking at it (likely just verified) — review the fresh state before rejecting.';
+      if (!wrote) setPayMsg(message);
       reloadPayments(); reloadOrder();
+      return { ok: wrote, message };
     } catch (e: unknown) {
-      setPayMsg(e instanceof Error ? e.message : 'Failed to reject payment');
+      const message = e instanceof Error ? e.message : 'Failed to reject payment';
+      setPayMsg(message);
+      return { ok: false, message };
     } finally {
       setSaving(false);
     }
   };
+  // the row's own Reject control: reason from its inline field, cleared on success
+  const rejectPayment = async (p: PaymentRow) => {
+    const r = await rejectPaymentWith(p, rejectReason);
+    if (r.ok) { setRejectingId(null); setRejectReason(''); }
+  };
 
-  const addHash = async () => {
-    if (!o) return;
-    const h = normalizeTxHash(newHashMethod, newHash);
-    if (!h) { setPayMsg(`That doesn't look like a valid ${newHashMethod.toUpperCase()} transaction hash (bare hash or explorer URL).`); return; }
+  const addHashWith = async (method: string, raw: string): Promise<FixResult> => {
+    if (!o) return { ok: false, message: 'No order is open.' };
+    const h = normalizeTxHash(method, raw);
+    if (!h) { const message = `That doesn't look like a valid ${method.toUpperCase()} transaction hash (bare hash or explorer URL).`; setPayMsg(message); return { ok: false, message }; }
     setSaving(true); setPayMsg('');
     try {
-      const res = await doAddHash({ order_id: o.id, method: newHashMethod, tx_hash: h, actor: userName }) as { inserted: string }[] | { inserted: string };
+      const res = await doAddHash({ order_id: o.id, method, tx_hash: h, actor: userName }) as { inserted: string }[] | { inserted: string };
       const inserted = Number(Array.isArray(res) ? res[0]?.inserted : res?.inserted);
-      if (!inserted) { setPayMsg('That hash is already recorded on a non-rejected payment — or was rejected on this very order.'); }
-      else { setPayMsg('Added as pending — click Verify next to it to confirm on-chain.'); setNewHash(''); }
+      const message = inserted
+        ? 'Added as pending — click Verify next to it to confirm on-chain.'
+        : 'That hash is already recorded on a non-rejected payment — or was rejected on this very order.';
+      setPayMsg(message);
       reloadPayments();
+      return { ok: inserted > 0, message };
     } catch (e: unknown) {
-      setPayMsg(e instanceof Error ? e.message : 'Failed to add hash');
+      const message = e instanceof Error ? e.message : 'Failed to add hash';
+      setPayMsg(message);
+      return { ok: false, message };
     } finally {
       setSaving(false);
     }
+  };
+  // the sheet's own Add control: hash and network from its fields, cleared on success
+  const addHash = async () => {
+    const r = await addHashWith(newHashMethod, newHash);
+    if (r.ok) setNewHash('');
   };
 
   const pushTxRefs = async () => {
@@ -1439,22 +1476,69 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     }
   };
 
-  const saveOverride = async () => {
-    if (!o) return;
-    const amt = Number(overrideAmt);
-    if (!(amt >= 0) || !overrideReason.trim()) {
-      setError('Override needs an amount and a reason — overrides are audited.');
-      return;
+  const saveOverrideWith = async (amt: number, reason: string): Promise<FixResult> => {
+    if (!o) return { ok: false, message: 'No order is open.' };
+    if (!(amt >= 0) || !reason.trim()) {
+      const message = 'Override needs an amount and a reason — overrides are audited.';
+      setError(message);
+      return { ok: false, message };
     }
     setSaving(true); setError('');
     try {
-      await doOverride({ order_id: o.id, amount_usd: amt, reason: overrideReason.trim(), created_by: userName });
-      setOverrideAmt(''); setOverrideReason('');
+      await doOverride({ order_id: o.id, amount_usd: amt, reason: reason.trim(), created_by: userName });
       reloadOrder();
+      return { ok: true, message: `Override saved — the order now counts ${fmtUSD(amt)} as its TOTAL received.` };
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to save override');
+      const message = e instanceof Error ? e.message : 'Failed to save override';
+      setError(message);
+      return { ok: false, message };
     } finally {
       setSaving(false);
+    }
+  };
+  // the admin section's own Override control: amount and reason from its fields, cleared on success
+  const saveOverride = async () => {
+    const r = await saveOverrideWith(Number(overrideAmt), overrideReason);
+    if (r.ok) { setOverrideAmt(''); setOverrideReason(''); }
+  };
+
+  // The assistant's proposed fixes land HERE, through the same handlers the
+  // controls above call — never through a path of their own. The payment is
+  // looked up in the sheet's CURRENT list (a proposal names an id the model
+  // read from the facts; one that changed status since is refused by the
+  // handler's own guard), and only this order's payments qualify. The
+  // operator-confirmed reason carries an [assistant-proposed] marker into
+  // the note the control writes; the dialog audits the apply separately.
+  const applyAssistantFix = async (fix: ProposedFix): Promise<FixResult> => {
+    if (!o) return { ok: false, message: 'No order is open.' };
+    const reason = `${fix.reason.trim()} [assistant-proposed]`;
+    const payment = fix.payment_id == null ? undefined : payments.find(p => Number(p.id) === fix.payment_id);
+    const needsPayment = fix.kind !== 'add_hash' && fix.kind !== 'set_override';
+    if (needsPayment && !payment) return { ok: false, message: `Payment #${fix.payment_id} is not on this order — nothing was changed.` };
+    switch (fix.kind) {
+      case 'verify_payment':
+        if (!payment || payment.status !== 'pending' || !payment.tx_hash || !['eth', 'sol', 'base'].includes(payment.method)) {
+          return { ok: false, message: `Payment #${fix.payment_id} is not a pending crypto payment with a hash — only those can be verified on-chain.` };
+        }
+        return verifyNow(payment);
+      case 'reject_payment':
+        if (!payment || payment.status === 'rejected') return { ok: false, message: `Payment #${fix.payment_id} is already rejected.` };
+        return rejectPaymentWith(payment, reason);
+      case 'undo_rejection':
+        if (!payment || payment.status !== 'rejected') return { ok: false, message: `Payment #${fix.payment_id} is not rejected.` };
+        return undoRejectionWith(payment, reason);
+      case 'reopen_on_network':
+        if (!payment || !fix.method) return { ok: false, message: 'A target network is required.' };
+        if (payment.status !== 'rejected') return { ok: false, message: `Payment #${fix.payment_id} is not rejected — re-opening on another network applies to rejected payments only (reject it first).` };
+        return reopenOnNetwork(payment, fix.method, fix.reason.trim());
+      case 'add_hash':
+        if (!fix.method || !fix.tx_hash) return { ok: false, message: 'A hash and its network are required.' };
+        return addHashWith(fix.method, fix.tx_hash);
+      case 'set_override':
+        if (fix.amount_usd == null) return { ok: false, message: 'An amount is required.' };
+        return saveOverrideWith(fix.amount_usd, reason);
+      default:
+        return { ok: false, message: 'Unknown fix kind.' };
     }
   };
 
@@ -1482,20 +1566,26 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
               title={`Ask about ${o.order_number}`}
               context={{
                 kind: 'order',
-                label: `order ${o.order_number} (${o.recon_status || 'awaiting'})`,
+                // the label keys the dialog's "new subject" reset — the order
+                // only, so an applied fix that changes the recon status does
+                // not wipe the conversation it came from (status is in facts)
+                label: `order ${o.order_number}`,
                 facts: orderFacts({ order: o, items, payments, credits, refunds, shipments: shipRows, campaign: selectedCampaign }),
               }}
               tools={assistantTools}
               scope={{ table: 'orders', rowPk: o.id }}
               suggestions={[
                 'Why is this order in its current reconciliation state, and what are my options?',
+                'Check the crypto payments on-chain and propose what to fix',
                 'What happened to this order, in order?',
                 'Draft an admin note summarizing where this order stands',
                 'Draft a tracking email for the latest shipment',
               ]}
               onUseDraft={(t) => setAdminNote(prev => (prev ? `${prev}\n${t}` : t))}
               useDraftLabel="Add to admin note"
+              onApplyFix={applyAssistantFix}
             />
+
             {/* section jump nav — this sheet is ~10 sections deep; blind
                 scrolling on a phone was the audit's #3 finding (2026-09-10) */}
             <div className="sticky top-0 z-10 -mx-6 px-4 mt-3 bg-card/95 backdrop-blur-sm border-b flex gap-1 py-1.5 overflow-x-auto">

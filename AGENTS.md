@@ -56,17 +56,28 @@ where the code fails to honour one; do not propose replacing the decision.
 - **Direct ship is routing only** (no customer surcharge); **split-kit fees are
   per-line snapshots**; **cash processor fee is a true gross-up** defined by
   the storefront and imported as stated.
-- **The assistant is read-only.** `src/lib/assistant.ts` + `AskAssistant`
-  explain records and draft text; its only tools are load actions
-  (`readAuditTrail`, `listOrderRecon`) pinned to the selected campaign, a
-  draft is text the operator pastes or a field they still submit, member
-  fields are never sent (hand-picked facts, `redact()` over facts and tool
-  results drops member-field keys and scrubs emails/phones/handles from
-  strings; the tracking-email draft sends the first name only), and every
-  question is audited (`assistant_asked`, question scrubbed). Never give it a write action and never
-  automate the manual confirmations it explains — they are the safety
-  design, not toil. The key lives on the `Anthropic API` datasource only.
-  Settled with the owner 2026-10-13.
+- **The assistant is read-only: it proposes, the operator applies.**
+  `src/lib/assistant.ts` + `AskAssistant` explain records and draft text;
+  its tools are read tools pinned to the selected campaign
+  (`readAuditTrail`, `listOrderRecon`, and the Verify button's on-chain
+  lookup `lookupTxPayment` without its write), a draft is text the
+  operator pastes or a field they still submit, member fields are never
+  sent (hand-picked facts, `redact()` over facts and tool results drops
+  member-field keys and scrubs emails/phones/handles from strings; the
+  tracking-email draft sends the first name only), and every question is
+  audited (`assistant_asked`, question scrubbed). On the order sheet only
+  it may also PROPOSE a crypto payment fix (`propose_fix`: verify, reject,
+  undo rejection, re-open on another network, add hash, set override) — a
+  card with an editable reason and an Apply button, nothing more. Apply is
+  the operator's click: it runs the sheet's OWN handler for that control
+  (same guards — reason required, status re-checked, one hash per order,
+  this order's payments only), under the operator's name, and is audited
+  again as `assistant_fix_applied`. Never give the model a write tool,
+  never let a proposal apply without the click, and never automate the
+  manual confirmations it explains — they are the safety design, not
+  toil. The key lives on the `Anthropic API` datasource only. Settled
+  with the owner 2026-10-13; proposals added at the owner's request
+  2026-10-25.
 
 - **Group stock is funded equally by the partners, not by the profit
   split.** Stock-plan commits and group-stock adjustments sit inside
