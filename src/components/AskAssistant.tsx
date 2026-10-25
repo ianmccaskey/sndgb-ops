@@ -149,10 +149,13 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
   // one hash per order) and says what happened; on success the trail gets
   // an assistant_fix_applied row and the conversation forgets its facts,
   // so the next question is answered from the refreshed records.
+  // one apply at a time: proposals are ordered (reject, then re-open) and
+  // each one re-reads the sheet's state, so they must not overlap
+  const applying = Object.values(fixState).some(s => s.status === 'busy');
   const applyFix = async (entryId: number, fix: ProposedFix) => {
-    if (!onApplyFix || busy) return;
+    if (!onApplyFix || busy || applying) return;
     const key = `${entryId}:${fix.id}`;
-    if (fixState[key]?.status === 'busy' || fixState[key]?.status === 'applied') return;
+    if (fixState[key]?.status === 'applied') return;
     const reason = (fixReason[key] ?? fix.reason).trim();
     if (!reason) { setFixState(s => ({ ...s, [key]: { status: 'refused', message: 'A reason is required — it goes into the audit trail.' } })); return; }
     setFixState(s => ({ ...s, [key]: { status: 'busy', message: '' } }));
@@ -239,7 +242,7 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
                             <div className="flex flex-wrap items-center gap-2">
                               {st?.status === 'applied'
                                 ? <span className="text-xs font-medium text-emerald-300">Applied</span>
-                                : <Button size="sm" className="h-7 text-xs" disabled={busy || locked} onClick={() => applyFix(e.id, f)}>{st?.status === 'busy' ? 'Applying…' : 'Apply'}</Button>}
+                                : <Button size="sm" className="h-7 text-xs" disabled={busy || locked || applying} onClick={() => applyFix(e.id, f)}>{st?.status === 'busy' ? 'Applying…' : 'Apply'}</Button>}
                               <span className="text-[10px] text-muted-foreground">runs the same audited control as this sheet, under your name</span>
                             </div>
                             {st?.message && <p className={`text-xs ${st.status === 'refused' ? 'text-amber-300' : 'text-muted-foreground'}`}>{st.message}</p>}
@@ -282,11 +285,12 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
             rows={2}
             placeholder="Ask about this… (Ctrl+Enter to send)"
             className="text-sm"
-            disabled={busy}
+            disabled={busy || applying}
           />
           <div className="flex items-center justify-between gap-2">
             <span className="text-[10px] text-muted-foreground">Each question is logged under your name (scrubbed, first 300 characters).</span>
-            <Button size="sm" disabled={busy || !question.trim()} onClick={() => ask(question)}>{busy ? 'Asking…' : 'Ask'}</Button>
+            <Button size="sm" disabled={busy || applying || !question.trim()} onClick={() => ask(question)}>{busy ? 'Asking…' : 'Ask'}</Button>
+
           </div>
         </div>
       </DialogContent>
