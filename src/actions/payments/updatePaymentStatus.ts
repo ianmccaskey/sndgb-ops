@@ -29,6 +29,7 @@ function updatePaymentStatus() {
         FROM lck
         WHERE id = {{params.payment_id}}::bigint
           AND (COALESCE({{params.expected_status}}::text, '') = '' OR status = {{params.expected_status}}::text::payment_status)
+          AND (COALESCE({{params.expected_method}}::text, '') = '' OR method = {{params.expected_method}}::text::payment_method)
         RETURNING id, order_id, amount_usd, status
       ), wo_clear AS (
         -- a manual flip to 'verified' lands money: auto-clear any standing

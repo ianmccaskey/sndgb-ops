@@ -485,7 +485,10 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   // Inline on-chain verification — same lookup + same write-if-still-pending
   // action as the Reconciliation page, so a hash just added (or re-opened)
   // can be confirmed without leaving the order.
-  const verifyNow = async (p: PaymentRow): Promise<FixResult> => {
+  // `why` is an assistant proposal's evidence: it goes into the payment's
+  // note with the [assistant-proposed] marker so the control's own row
+  // carries the attribution; the Verify button passes none
+  const verifyNow = async (p: PaymentRow, why = ''): Promise<FixResult> => {
     if (!o || !p.tx_hash) return { ok: false, message: 'Nothing to verify — the payment has no hash.' };
     setSaving(true); setPayMsg('');
     try {
@@ -501,14 +504,18 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         native_symbol: res.nativeSymbol || '',
         value_at_pay_usd: '',
         status,
-        notes: res.note,
+        notes: why ? `${res.note ? `${res.note} ` : ''}${why} [assistant-proposed]` : res.note,
+        // the row must still be the pending payment on the network the
+        // lookup ran against — re-opened elsewhere mid-lookup = no write
+        expected_method: p.method,
         actor: userName,
       }) as unknown[] | null;
-      // Zero rows = the payment stopped being pending mid-lookup (e.g. it was
-      // rejected in another tab) — the stale result was NOT written.
+      // Zero rows = the payment stopped being pending on this network
+      // mid-lookup (e.g. it was rejected in another tab) — the stale result
+      // was NOT written.
       const wrote = Array.isArray(recorded) ? recorded.length > 0 : !!recorded;
       const nativeOnly = res.amountUsd === 0 && res.nativeAmount != null && res.nativeAmount > 0;
-      const message = !wrote ? 'Skipped — the payment is no longer pending.'
+      const message = !wrote ? 'Skipped — the payment is no longer pending on this network.'
         : nativeOnly ? `Native ${res.nativeAmount} ${res.nativeSymbol} found — needs USD pricing; set an order override below to count it.`
         : `Verified on-chain: ${fmtUSD(res.amountUsd)}.`;
       setPayMsg(message);
@@ -1312,17 +1319,18 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     if (!why) { const message = 'A reason is required — rejections are audited.'; setPayMsg(message); return { ok: false, message }; }
     setSaving(true); setPayMsg('');
     try {
-      // Guarded by the status this row showed when Reject was clicked — if
-      // the verifier changed it mid-flight, nothing is written and the fresh
-      // state is reloaded for a deliberate second look.
+      // Guarded by the status AND network this row showed when Reject was
+      // clicked — if the verifier changed it mid-flight, or it was re-opened
+      // on another chain, nothing is written and the fresh state is
+      // reloaded for a deliberate second look.
       const res = await doPayStatus({
         payment_id: p.id, status: 'rejected', amount_usd: 0,
-        notes: why, actor: userName, expected_status: p.status,
+        notes: why, actor: userName, expected_status: p.status, expected_method: p.method,
       }) as unknown[] | null;
       const wrote = Array.isArray(res) ? res.length > 0 : !!res;
       const message = wrote
         ? 'Rejected — it no longer counts toward this order.'
-        : 'This payment changed while you were looking at it (likely just verified) — review the fresh state before rejecting.';
+        : 'This payment changed while you were looking at it (verified, or moved to another network) — review the fresh state before rejecting.';
       if (!wrote) setPayMsg(message);
       reloadPayments(); reloadOrder();
       return { ok: wrote, message };
@@ -1532,7 +1540,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
         if (!payment || payment.status !== 'pending' || !payment.tx_hash || !['eth', 'sol', 'base'].includes(payment.method)) {
           return { ok: false, message: `Payment #${fix.payment_id} is not a pending crypto payment with a hash — only those can be verified on-chain.` };
         }
-        return verifyNow(payment);
+        return verifyNow(payment, fix.reason.trim());
       case 'reject_payment':
         if (!payment || payment.status === 'rejected') return { ok: false, message: `Payment #${fix.payment_id} is already rejected.` };
         return rejectPaymentWith(payment, reason);

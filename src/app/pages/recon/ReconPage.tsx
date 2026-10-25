@@ -88,10 +88,14 @@ export function ReconPage() {
         value_at_pay_usd: '',
         status,
         notes: res.note,
+        // still pending on the network the lookup ran against, or no write
+        expected_method: p.method,
         actor: userName,
       }) as unknown[] | null;
-      // Zero rows = the payment stopped being pending mid-lookup (e.g. it was
-      // rejected in the correction flow) — the stale result was NOT written.
+      // Zero rows = the payment stopped being pending on this network
+      // mid-lookup (e.g. it was rejected in the correction flow) — the stale
+      // result was NOT written.
+
       const wrote = Array.isArray(recorded) ? recorded.length > 0 : !!recorded;
       const nativeOnly = res.amountUsd === 0 && res.nativeAmount != null && res.nativeAmount > 0;
       setVerifying(v => ({

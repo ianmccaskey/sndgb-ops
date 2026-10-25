@@ -32,6 +32,7 @@ function recordChainVerification() {
         FROM lck
         WHERE id = {{params.payment_id}}::bigint
           AND status = 'pending'
+          AND (COALESCE({{params.expected_method}}::text, '') = '' OR method = {{params.expected_method}}::text::payment_method)
         RETURNING id, order_id, amount_usd, status
       ), wo_clear AS (
         -- money (or a real-but-unpriced native tx) just landed: a standing
