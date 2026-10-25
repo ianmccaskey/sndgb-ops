@@ -35,7 +35,12 @@ export type AutoReconState = {
 
 type Api = {
   state: AutoReconState;
-  /** resolves to the summary, or null when a run was already active (nothing started) */
+  /**
+   * resolves to the summary — or to null when a run was already active, in
+   * which case the request is QUEUED (one per campaign, latest trigger
+   * wins) and runs as soon as the active one finishes; the state then
+   * reports that later run
+   */
   run: (groupBuyId: number, trigger: string) => Promise<AutoReconSummary | null>;
   dismiss: () => void;
 };
@@ -60,11 +65,20 @@ export function AutoReconProvider({ children }: { children: React.ReactNode }) {
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [state, setState] = useState<AutoReconState>(IDLE);
   const activeRef = useRef(false);
+  // requests that arrived while a run was active — an import finishing
+  // while the Reconciliation page's pass runs, a campaign switch mid-run.
+  // Dropping them would leave just-imported hashes unchecked, so they are
+  // kept (one per campaign) and drained in order when the run ends.
+  const queuedRef = useRef<Map<number, string>>(new Map());
+  const runRef = useRef<(groupBuyId: number, trigger: string) => Promise<AutoReconSummary | null>>(async () => null);
   const envRef = useRef({ userName, settings, doPending, doRailCandidates, doLogRun, doRecord, doRepoint, doUpdateRail, doAppendNote });
   envRef.current = { userName, settings, doPending, doRailCandidates, doLogRun, doRecord, doRepoint, doUpdateRail, doAppendNote };
 
   const run = useCallback(async (groupBuyId: number, trigger: string): Promise<AutoReconSummary | null> => {
-    if (activeRef.current) return null;
+    if (activeRef.current) {
+      queuedRef.current.set(groupBuyId, trigger);
+      return null;
+    }
     activeRef.current = true;
     setState({ running: true, groupBuyId, trigger, summary: null, error: null });
     try {
@@ -90,10 +104,18 @@ export function AutoReconProvider({ children }: { children: React.ReactNode }) {
       return null;
     } finally {
       activeRef.current = false;
+      const next = queuedRef.current.entries().next();
+      if (!next.done) {
+        const [gb, tr] = next.value;
+        queuedRef.current.delete(gb);
+        void runRef.current(gb, `${tr}, queued`);
+      }
     }
   }, []);
+  runRef.current = run;
 
   const dismiss = useCallback(() => { setState(s => (s.running ? s : IDLE)); }, []);
+
 
   return <Ctx.Provider value={{ state, run, dismiss }}>{children}</Ctx.Provider>;
 }
