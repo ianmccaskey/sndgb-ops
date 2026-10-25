@@ -707,7 +707,7 @@ export function ProductsPage() {
               ) : aFor === 'both_stock' ? (
                 <p className="text-xs text-muted-foreground">
                   <span className="font-medium">Group stock</span> at vendor cost + freight
-                  {aExpectedUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(aExpectedUsd)}</span> for this line)</>}: the kits join what you order from the vendor and the amount comes out of <span className="font-medium">net profit before the split</span> — no receivable, nothing to mark received. Same economics as a Stock Planner commit, and the way to top up a product whose planner line is already committed. If this is the product's first demand, its one-time testing cost also hits P&L.
+                  {aExpectedUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(aExpectedUsd)}</span> for this line)</>}: the kits join what you order from the vendor and the amount comes out of net profit, <span className="font-medium">funded equally by the partners (50/50), not by the profit split</span> — no receivable, nothing to mark received. Same economics as a Stock Planner commit, and the way to top up a product whose planner line is already committed. If this is the product's first demand, its one-time testing cost also hits P&L.
                 </p>
               ) : aFor !== 'both' ? (
                 <p className="text-xs text-muted-foreground">

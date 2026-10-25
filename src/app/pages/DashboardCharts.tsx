@@ -4,6 +4,7 @@ import {
   AreaChart, Area, PieChart, Pie, Cell, Legend,
 } from 'recharts';
 import { fmtUSD, fmtNum } from '@/lib/fmt';
+import { equalPct, partyPayouts } from '@/lib/payout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 /*
@@ -169,7 +170,7 @@ export type PnlData = {
   product_revenue_usd: string; admin_fee_revenue_usd: string; shipping_fee_revenue_usd: string;
   insurance_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string; expenses_usd: string; label_costs_usd: string;
   comps_usd: string; writeoffs_usd: string; adj_both_usd: string; net_profit_usd: string;
-  shipping_expenses_usd: string; shipping_net_usd: string;
+  shipping_expenses_usd: string; shipping_net_usd: string; stock_cost_usd: string;
   splits: { party: string; pct: string }[] | null;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
 };
@@ -195,6 +196,9 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
   // Personal adjustments come out of THAT party's payout; 'both' is already
   // deducted from net by the view.
   const adjByParty = new Map((pnl.adjustments || []).map(a => [a.beneficiary, Number(a.value_usd)]));
+  // group stock is funded equally by the partners, not by the split —
+  // the same computation the Financials pages use (src/lib/payout.ts)
+  const payouts = partyPayouts(net, Number(pnl.stock_cost_usd || 0), splits, party => adjByParty.get(party) || 0);
   // An adjustment whose beneficiary matches no CURRENT split party would be
   // deducted from no one — that must be a loud warning, never a silent omission
   // (split renames/deletes can orphan previously valid attributions).
@@ -272,13 +276,15 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
         {splits.length > 0 && (
           <div className="text-sm space-y-1 border-t pt-2">
             {splits.map(s => {
-              const personal = adjByParty.get(s.party) || 0;
+              const pay = payouts[s.party];
+              const personal = pay.personal;
               return (
-                <div key={s.party} className="flex justify-between">
+                <div key={s.party} className="flex justify-between"
+                  title={`${Number(s.pct)}% of net before group stock${pay.stockShare ? `, minus an equal ${equalPct(splits)}% share of group stock (${fmtUSD(pay.stockShare)})` : ''}`}>
                   <span className="text-muted-foreground">
-                    {s.party} ({Number(s.pct)}%){personal > 0 ? ` − ${fmtUSD(personal, { cents: false })} adj` : personal < 0 ? ` + ${fmtUSD(-personal, { cents: false })} adj credit` : ''}
+                    {s.party} ({Number(s.pct)}%){pay.stockShare ? ` − ${fmtUSD(pay.stockShare, { cents: false })} stock` : ''}{personal > 0 ? ` − ${fmtUSD(personal, { cents: false })} adj` : personal < 0 ? ` + ${fmtUSD(-personal, { cents: false })} adj credit` : ''}
                   </span>
-                  <span>{fmtUSD(net * Number(s.pct) / 100 - personal, { cents: false })}</span>
+                  <span>{fmtUSD(pay.payout, { cents: false })}</span>
                 </div>
               );
             })}

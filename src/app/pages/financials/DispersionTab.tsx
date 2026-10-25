@@ -2,6 +2,7 @@ import React from 'react';
 import { fmtUSD, fmtNum, fmtDate } from '@/lib/fmt';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { equalPct, equalShares, partyPayouts } from '@/lib/payout';
 
 /*
  * Profit dispersion: the full story of where profit comes from and where it
@@ -24,6 +25,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
  * stock_retail/stock_cost terms cancel exactly) — verified against live
  * data, and re-checked at render: any drift ≥ 1¢ shows a red banner
  * instead of silently lying.
+ *
+ * PAYOUTS (src/lib/payout.ts, policy 2026-10-24): group stock sits inside
+ * NET but is NOT borne by the profit split — the partners fund it equally
+ * (50/50 with two parties). A party gets pct × (NET + group stock), minus
+ * an equal share of group stock, minus personal deductions. The ledgers
+ * below show those three steps; the parties still sum to NET − personal.
  */
 
 export type Pnl = {
@@ -48,21 +55,6 @@ export type DispAdjustment = {
 type ExpenseRow = { category: string; total_usd: string };
 
 const num = (v: string | number | null | undefined) => Number(v || 0);
-// all splitting in integer CENTS; the LAST party absorbs rounding residue so
-// per-row shares always sum to the row total exactly (established convention)
-const cents = (usd: number) => Math.round(usd * 100);
-
-function prorate(totalUsd: number, splits: { party: string; pct: string }[]): Record<string, number> {
-  const totalC = cents(totalUsd);
-  const out: Record<string, number> = {};
-  let used = 0;
-  splits.forEach((s, i) => {
-    const share = i === splits.length - 1 ? totalC - used : Math.floor(totalC * Number(s.pct) / 100);
-    out[s.party] = share / 100;
-    used += share;
-  });
-  return out;
-}
 
 export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: {
   pnl: Pnl | undefined;
@@ -134,8 +126,9 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
     { label: 'Giveaways at GB price (adjustments for both)', amount: -num(pnl?.adj_both_usd) },
     { label: 'At-cost sales (margin waived)', amount: -num(pnl?.at_cost_margin_usd), hint: 'Outside-customer sales at vendor cost + freight — the margin they would have earned is waived so the sale nets zero' },
     { label: 'Direct-ship freight (internal, to vendors)', amount: -num(pnl?.direct_freight_usd) },
-    { label: 'Group stock (at cost + freight, pre-split)', amount: -num(pnl?.stock_cost_usd), hint: 'Stock-plan commits and group-stock adjustments — the group buys its own kits out of profit before the split' },
+    { label: 'Group stock (at cost + freight)', amount: -num(pnl?.stock_cost_usd), hint: `Stock-plan commits and group-stock adjustments — the group buys its own kits out of profit. Funded EQUALLY by the partners (${equalPct(splits)}% each), not by the profit split — see the payout ledgers` },
   ];
+  const stockCost = num(pnl?.stock_cost_usd);
   const composedNet = gross + bridge.reduce((s, b) => s + b.amount, 0);
   const drift = Math.abs(composedNet - viewNet) >= 0.005;
 
@@ -148,8 +141,9 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
     - num(pnl?.comps_usd) - num(pnl?.credits_usd) - num(pnl?.writeoffs_usd) - num(pnl?.adj_both_usd);
 
   // ---- per-party stock contributions --------------------------------------
-  // group-stock rows (planner commits + direct) split by the profit split;
-  // personal rows belong 100% to their party
+  // group-stock rows (planner commits + direct) are funded EQUALLY by the
+  // split parties (50/50 today — src/lib/payout.ts); personal rows belong
+  // 100% to their party
   const stockRows = adjustments
     .filter(a => a.stock || (a.pricing === 'cost' && a.beneficiary !== 'both' && a.beneficiary !== 'unattributed'))
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
@@ -160,7 +154,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
   const isOrphaned = (a: DispAdjustment) => !a.stock && !splits.some(s => s.party === a.beneficiary);
   const hasOrphans = stockRows.some(isOrphaned);
   const rowShares = (a: DispAdjustment): Record<string, number> => {
-    if (a.stock) return prorate(rowValue(a), splits);
+    if (a.stock) return equalShares(rowValue(a), splits);
     return Object.fromEntries(splits.map(s => [s.party, s.party === a.beneficiary ? rowValue(a) : 0]));
   };
   const orphanedTotal = stockRows.filter(isOrphaned).reduce((s, a) => s + rowValue(a), 0);
@@ -185,6 +179,9 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
 
   const personalItems = (party: string) => adjustments.filter(a =>
     a.beneficiary === party && (a.pricing === 'gb' || a.pricing === 'cost'));
+
+  // the ONE payout computation every party figure on this tab reads from
+  const payouts = partyPayouts(viewNet, stockCost, splits, personalDeduction);
 
   let running = gross;
 
@@ -231,9 +228,10 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
           {splits.map(s => (
             <Card key={s.party}>
               <CardContent className="py-3 space-y-0.5">
-                <div className="flex items-baseline justify-between gap-2">
+                <div className="flex items-baseline justify-between gap-2"
+                  title={`${Number(s.pct)}% of net before group stock (${fmtUSD(viewNet + stockCost)}) = ${fmtUSD(payouts[s.party]?.base || 0)}, minus an equal ${equalPct(splits)}% share of group stock (${fmtUSD(payouts[s.party]?.stockShare || 0)})`}>
                   <span className="text-xl font-bold">{s.party}</span>
-                  <span className="text-2xl font-bold text-emerald-300 whitespace-nowrap">{fmtUSD(viewNet * Number(s.pct) / 100)}</span>
+                  <span className="text-2xl font-bold text-emerald-300 whitespace-nowrap">{fmtUSD(payouts[s.party]?.beforePersonal || 0)}</span>
                 </div>
                 <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
                   title="Informational only: gross − comps − credits − write-offs − GB-price giveaways, × split share. The shipping pot (not profit by policy), stock (group and personal), at-cost waivers, direct freight, and non-shipping expenses are deliberately excluded — this is not a payout figure.">
@@ -243,7 +241,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
               </CardContent>
             </Card>
           ))}
-          <p className="text-[10px] text-muted-foreground px-1">Net × split share, before personal deductions — final payouts below.</p>
+          <p className="text-[10px] text-muted-foreground px-1">Split share of net before group stock, minus an equal share of group stock ({equalPct(splits)}% each), before personal deductions — final payouts below.</p>
         </div>
       </div>
 
@@ -346,8 +344,8 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
       {/* per-party ledgers: base share -> personal deductions -> final payout */}
       <div className="grid gap-4 lg:grid-cols-2">
         {splits.map(s => {
-          const base = viewNet * Number(s.pct) / 100;
-          const personal = personalDeduction(s.party);
+          const pay = payouts[s.party];
+          const personal = pay.personal;
           const items = personalItems(s.party);
           const itemsSum = items.reduce((sum, a) => sum + (a.pricing === 'cost' ? num(a.expected_usd) : num(a.value_usd)), 0);
           // the payout total comes from the P&L view's aggregation, the
@@ -355,17 +353,21 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
           // disagree (concurrent edit between loads), say so loudly rather
           // than looking reconciled while showing stale line items
           const desync = adjustmentsReady && Math.abs(itemsSum - personal) >= 0.005;
-          const groupShare = contribTotals[s.party]?.group || 0;
           return (
             <Card key={s.party}>
               <CardHeader className="pb-2"><CardTitle className="text-base">{s.party} — payout ledger</CardTitle></CardHeader>
               <CardContent className="text-sm space-y-1">
-                <div className="flex justify-between"><span className="text-muted-foreground">Net share ({Number(s.pct)}% of {fmtUSD(viewNet)})</span><span>{fmtUSD(base)}</span></div>
-                <div className="flex justify-between text-xs text-muted-foreground"
-                  title="Already taken out of net profit BEFORE the split — shown for contribution tracking, not deducted again">
-                  <span>…of group stock, {Number(s.pct)}% share (pre-split, informational)</span>
-                  <span>{fmtUSD(groupShare)}</span>
+                <div className="flex justify-between"
+                  title="Net profit with group stock added back — the split applies to profit BEFORE the group bought its stock">
+                  <span className="text-muted-foreground">Net share before group stock ({Number(s.pct)}% of {fmtUSD(viewNet + stockCost)})</span><span>{fmtUSD(pay.base)}</span>
                 </div>
+                {stockCost !== 0 && (
+                  <div className="flex justify-between"
+                    title={`Group stock is funded equally by the ${splits.length} partners, not by the profit split — ${equalPct(splits)}% of ${fmtUSD(stockCost)}`}>
+                    <span className="text-muted-foreground">Group stock, equal share ({equalPct(splits)}% of {fmtUSD(stockCost)})</span>
+                    <span className="text-rose-400">−{fmtUSD(pay.stockShare)}</span>
+                  </div>
+                )}
                 {!adjustmentsReady && <p className={itemizedNoteClass}>{itemizedNote}</p>}
                 {desync && (
                   <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs text-amber-200">
@@ -386,7 +388,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
                 })}
                 <div className="flex justify-between font-semibold border-t pt-1">
                   <span>Final payout</span>
-                  <span className={base - personal >= 0 ? 'text-emerald-300' : 'text-rose-400'}>{fmtUSD(base - personal)}</span>
+                  <span className={pay.payout >= 0 ? 'text-emerald-300' : 'text-rose-400'}>{fmtUSD(pay.payout)}</span>
                 </div>
               </CardContent>
             </Card>
@@ -398,18 +400,18 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
       <div className="grid gap-4 lg:grid-cols-2">
         {splits.map(s => {
           const t = contribTotals[s.party] || { group: 0, personal: 0 };
-          const base = viewNet * Number(s.pct) / 100;
+          const base = payouts[s.party]?.base || 0;
           return (
             <Card key={s.party}>
               <CardHeader className="pb-2"><CardTitle className="text-base">{s.party} — stock contributions</CardTitle></CardHeader>
               <CardContent className="text-sm space-y-1">
                 {!adjustmentsReady && <p className={itemizedNoteClass}>{itemizedNote}</p>}
-                <div className="flex justify-between"><span className="text-muted-foreground">Group stock ({Number(s.pct)}% of {fmtUSD(num(pnl?.stock_cost_usd))})</span><span>{fmtUSD(t.group)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Group stock ({equalPct(splits)}% of {fmtUSD(stockCost)}, equal share)</span><span>{fmtUSD(t.group)}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Personal stock (at cost + freight)</span><span>{fmtUSD(t.personal)}</span></div>
                 <div className="flex justify-between font-semibold border-t pt-1"><span>Total in stock</span><span>{fmtUSD(t.group + t.personal)}</span></div>
                 <p className="text-[11px] text-muted-foreground">
-                  {fmtUSD(t.group + t.personal)} of {s.party}'s {fmtUSD(base)} net share is held as product instead of cash.
-                  Group-stock share uses the current split ({Number(s.pct)}%).
+                  {fmtUSD(t.group + t.personal)} of {s.party}'s {fmtUSD(base)} share of net before group stock is held as product instead of cash.
+                  Group stock is funded equally by the partners ({equalPct(splits)}% each), whatever the profit split.
                 </p>
               </CardContent>
             </Card>
@@ -483,7 +485,7 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
             </div>
           )}
           <p className="text-[11px] text-muted-foreground mt-2">
-            Group-stock rows (planner commits and direct group-stock adjustments) split by the CURRENT profit split ({(pnl?.splits || []).map(s => `${s.party} ${Number(s.pct)}%`).join(' / ')}) — split snapshots are not stored, so changing the split re-derives these shares; this is a current-split view, not a historical record. Personal rows belong entirely to their party. Values are the cost+freight snapshots taken when each row was created.
+            Group-stock rows (planner commits and direct group-stock adjustments) are funded EQUALLY by the current split parties ({splits.map(s => `${s.party} ${equalPct(splits)}%`).join(' / ')}), whatever the profit split — adding or removing a party re-derives these shares; this is a current-parties view, not a historical record. Personal rows belong entirely to their party. Values are the cost+freight snapshots taken when each row was created.
           </p>
         </CardContent>
       </Card>

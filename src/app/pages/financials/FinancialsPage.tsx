@@ -12,6 +12,7 @@ import listFreightByVendor from '@/actions/financials/listFreightByVendor';
 import { useApp } from '@/app/AppContext';
 import { rows, firstRow } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
+import { equalPct, partyPayouts } from '@/lib/payout';
 import { getEvmBalances, getEvmBalancesAt, type WalletBalances } from '@/lib/moralis';
 import getCampaignFirstOrder from '@/actions/financials/getCampaignFirstOrder';
 import { getSolBalances } from '@/lib/helius';
@@ -377,15 +378,25 @@ export function FinancialsPage() {
                 {' '}— no current split party matches, so this value is deducted from NO ONE's payout. Reassign on the Products page.
               </div>
             )}
-            {(pnl?.splits || []).map(s => {
-              const personal = Number((pnl?.adjustments || []).find(a => a.beneficiary === s.party)?.value_usd || 0);
-              return (
-                <div key={s.party} className="flex justify-between text-muted-foreground">
-                  <span>{s.party} ({Number(s.pct)}%){personal > 0 ? ` − ${fmtUSD(personal)} personal adjustments` : personal < 0 ? ` + ${fmtUSD(-personal)} adjustment credit` : ''}</span>
-                  <span>{fmtUSD(netProfit * Number(s.pct) / 100 - personal)}</span>
-                </div>
-              );
-            })}
+            {(() => {
+              // same computation as the Dispersion tab and the dashboard
+              // (src/lib/payout.ts): group stock is funded equally by the
+              // partners, not by the profit split
+              const splits = pnl?.splits || [];
+              const payouts = partyPayouts(netProfit, Number(pnl?.stock_cost_usd || 0), splits,
+                party => Number((pnl?.adjustments || []).find(a => a.beneficiary === party)?.value_usd || 0));
+              return splits.map(s => {
+                const pay = payouts[s.party];
+                const personal = pay.personal;
+                return (
+                  <div key={s.party} className="flex justify-between text-muted-foreground"
+                    title={`${Number(s.pct)}% of net before group stock = ${fmtUSD(pay.base)}${pay.stockShare ? ` − ${fmtUSD(pay.stockShare)} equal share of group stock` : ''}${personal ? ` − ${fmtUSD(personal)} personal` : ''}`}>
+                    <span>{s.party} ({Number(s.pct)}%){pay.stockShare ? ` − ${fmtUSD(pay.stockShare)} group stock (${equalPct(splits)}%)` : ''}{personal > 0 ? ` − ${fmtUSD(personal)} personal adjustments` : personal < 0 ? ` + ${fmtUSD(-personal)} adjustment credit` : ''}</span>
+                    <span>{fmtUSD(pay.payout)}</span>
+                  </div>
+                );
+              });
+            })()}
           </CardContent>
         </Card>
 

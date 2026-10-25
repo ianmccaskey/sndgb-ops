@@ -68,6 +68,14 @@ where the code fails to honour one; do not propose replacing the decision.
   design, not toil. The key lives on the `Anthropic API` datasource only.
   Settled with the owner 2026-10-13.
 
+- **Group stock is funded equally by the partners, not by the profit
+  split.** Stock-plan commits and group-stock adjustments sit inside
+  `v_group_buy_pnl.net_profit_usd`, but a party's payout is
+  `pct × (net + group stock) − group stock / N − personal deductions`
+  (`src/lib/payout.ts`, used by the Financials overview, the Dispersion
+  tab and the dashboard — never re-derive it inline). N is the number of
+  split parties, so 50/50 today. Settled with the owner 2026-10-24.
+
 ## Verifying changes
 
 Serena's LSP diagnostics are the only type check. SQL actions are probed on
