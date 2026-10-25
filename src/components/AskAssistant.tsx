@@ -74,6 +74,10 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
   const seq = useRef(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const lastLabel = useRef<string | null>(null);
+  // the context sent in the FIRST turn of the current conversation: later
+  // turns reuse it (the model reasons from those facts, and a proposal's
+  // snapshot must come from them), a reset picks up the live facts again
+  const convoContext = useRef<AssistantContext | null>(null);
   // the ship dialog mounts this conditionally: a request resolving after
   // close must not touch state
   const mounted = useRef(true);
@@ -108,8 +112,10 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
     if (!text || busy) return;
     setBusy(true); setNotice(''); setQuestion('');
     setEntries(prev => [...prev, { id: ++seq.current, role: 'user', text }]);
+    const ctx = history.length === 0 ? context : (convoContext.current ?? context);
+    if (history.length === 0) convoContext.current = context;
     try {
-      const a = await askAssistant(http, { context, tools, history, question: text, allowFixes: !!onApplyFix });
+      const a = await askAssistant(http, { context: ctx, tools, history, question: text, allowFixes: !!onApplyFix });
       // the trail: who asked what, at what cost — never the answer. The
       // question is scrubbed (emails, phones, handles) and capped, since an
       // operator can type member data into it. Written BEFORE the unmount
@@ -156,7 +162,10 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
     if (!onApplyFix || busy || applying) return;
     const key = `${entryId}:${fix.id}`;
     if (fixState[key]?.status === 'applied') return;
-    const reason = (fixReason[key] ?? fix.reason).trim();
+    // the operator may have typed member data into the reason: scrubbed
+    // ONCE here, and that one value goes to the control's note AND to the
+    // assistant audit row
+    const reason = scrubText(fixReason[key] ?? fix.reason).replace(/\s+/g, ' ').trim();
     if (!reason) { setFixState(s => ({ ...s, [key]: { status: 'refused', message: 'A reason is required — it goes into the audit trail.' } })); return; }
     setFixState(s => ({ ...s, [key]: { status: 'busy', message: '' } }));
     let result: { ok: boolean; message: string };
@@ -165,21 +174,25 @@ export function AskAssistant({ open, onClose, title, context, tools, scope, sugg
     } catch (e: unknown) {
       result = { ok: false, message: e instanceof Error ? e.message : 'The fix could not be applied.' };
     }
-    if (!mounted.current) return;
+    // the trail BEFORE the unmount check (as the question audit does): a
+    // change that landed is recorded as assistant-proposed even if the
+    // sheet closed while the control ran
     if (result.ok) {
-      setHistory([]);
       try {
         await doLogFix({
           row_pk: String(scope.rowPk), actor: userName,
           detail: JSON.stringify({
             kind: fix.kind, what: describeFix(fix), payment_id: fix.payment_id, method: fix.method, tx_hash: fix.tx_hash, amount_usd: fix.amount_usd,
-            reason: scrubText(reason).slice(0, 300), result: result.message.slice(0, 200),
+            expected: fix.expected, reason: reason.slice(0, 300), result: result.message.slice(0, 200),
           }),
         });
       } catch {
         result = { ...result, message: `${result.message} (The audit row for this applied proposal could not be written.)` };
       }
-      if (!mounted.current) return;
+    }
+    if (!mounted.current) return;
+    if (result.ok) {
+      setHistory([]);
       setNotice('Applied. The next question starts from the refreshed records.');
     }
     setFixState(s => ({ ...s, [key]: { status: result.ok ? 'applied' : 'refused', message: result.message } }));

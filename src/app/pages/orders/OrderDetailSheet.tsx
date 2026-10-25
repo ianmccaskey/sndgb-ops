@@ -1515,7 +1515,19 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     const payment = fix.payment_id == null ? undefined : payments.find(p => Number(p.id) === fix.payment_id);
     const needsPayment = fix.kind !== 'add_hash' && fix.kind !== 'set_override';
     if (needsPayment && !payment) return { ok: false, message: `Payment #${fix.payment_id} is not on this order — nothing was changed.` };
+    // the proposal was reasoned from a snapshot of this payment (status,
+    // network, hash); a payment that moved since — verified by another tab,
+    // re-opened, rejected — is refused here rather than acted on with stale
+    // evidence, and the SQL guard below gets the status the operator saw
+    if (payment) {
+      if (!fix.expected) return { ok: false, message: 'This proposal carries no snapshot of the payment it names — nothing was changed. Ask again for a fresh look.' };
+      const same = payment.status === fix.expected.status && payment.method === fix.expected.method && (payment.tx_hash || null) === fix.expected.tx_hash;
+      if (!same) {
+        return { ok: false, message: `Payment #${fix.payment_id} changed since this was proposed (it was ${fix.expected.status} on ${fix.expected.method.toUpperCase()}, it is now ${payment.status} on ${payment.method.toUpperCase()}) — nothing was changed. Ask again for a fresh look.` };
+      }
+    }
     switch (fix.kind) {
+
       case 'verify_payment':
         if (!payment || payment.status !== 'pending' || !payment.tx_hash || !['eth', 'sol', 'base'].includes(payment.method)) {
           return { ok: false, message: `Payment #${fix.payment_id} is not a pending crypto payment with a hash — only those can be verified on-chain.` };

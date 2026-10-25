@@ -83,6 +83,9 @@ export const FIX_KINDS = ['verify_payment', 'reject_payment', 'undo_rejection', 
 export type FixKind = typeof FIX_KINDS[number];
 export const MAX_FIXES_PER_ANSWER = 3;
 
+/** The payment as the model saw it in the facts — Apply refuses if it has changed since. */
+export type FixSnapshot = { status: string; method: string; tx_hash: string | null };
+
 export type ProposedFix = {
   /** 1-based within one answer, in the order the model wants them applied */
   id: number;
@@ -93,6 +96,8 @@ export type ProposedFix = {
   amount_usd: number | null;
   /** the model's evidence; the operator may edit it before applying */
   reason: string;
+  /** set for the payment kinds: the payment's state in the facts the model reasoned from */
+  expected: FixSnapshot | null;
 };
 
 const EVM_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
@@ -561,15 +566,22 @@ function addUsage(acc: AssistantUsage, u: Rec | undefined): void {
 // caller's closures carry the campaign), redacts the result.
 // ---------------------------------------------------------------------------
 
-/** Proposals collected over one answer; allowFixes mirrors whether the caller offered propose_fix. */
-type FixSink = { allowFixes: boolean; proposals: ProposedFix[] };
+/**
+ * Proposals collected over one answer; allowFixes mirrors whether the
+ * caller offered propose_fix; payments are the order's payments AS SENT IN
+ * THE FACTS, so a proposal binds to the state the model reasoned from.
+ */
+type FixSink = { allowFixes: boolean; proposals: ProposedFix[]; payments: Rec[] };
 
 /**
  * The model's propose_fix input, validated field by field against the kind
- * (strict mode guarantees the shape, not the cross-field rules). The reason
- * is scrubbed like every other string that enters the trail.
+ * (strict mode guarantees the shape, not the cross-field rules). A payment
+ * kind must name a payment from the facts, in a status the kind applies
+ * to; that snapshot travels with the proposal and Apply refuses a payment
+ * that has moved since. The reason is scrubbed like every other string
+ * that enters the trail.
  */
-function validateFix(inp: Rec, id: number): { fix?: ProposedFix; error?: string } {
+function validateFix(inp: Rec, id: number, payments: Rec[]): { fix?: ProposedFix; error?: string } {
   const kind = String(inp.kind ?? '') as FixKind;
   if (!FIX_KINDS.includes(kind)) return { error: `kind must be one of ${FIX_KINDS.join(', ')}` };
   const reason = typeof inp.reason === 'string' ? scrubText(inp.reason).replace(/\s+/g, ' ').trim() : '';
@@ -597,9 +609,23 @@ function validateFix(inp: Rec, id: number): { fix?: ProposedFix; error?: string 
     if (amount == null) return { error: 'set_override needs amount_usd' };
   } else if (amount != null) return { error: 'amount_usd is only for set_override' };
 
+  let expected: FixSnapshot | null = null;
+  if (needsPayment) {
+    const row = payments.find(p => Number(p.id) === paymentId);
+    if (!row) return { error: `payment_id ${paymentId} is not one of this order's payments in the facts — only those can be proposed` };
+    expected = { status: String(row.status ?? ''), method: String(row.method ?? ''), tx_hash: row.tx_hash == null ? null : String(row.tx_hash) };
+    // the same status rules the sheet's handlers enforce, caught here so
+    // the model can rethink instead of handing the operator a dead button
+    if (kind === 'verify_payment' && expected.status !== 'pending') return { error: `payment ${paymentId} is ${expected.status}, not pending — only a pending payment can be verified` };
+    if (kind === 'verify_payment' && !expected.tx_hash) return { error: `payment ${paymentId} has no tx hash — nothing to verify on-chain` };
+    if (kind === 'reject_payment' && expected.status === 'rejected') return { error: `payment ${paymentId} is already rejected` };
+    if ((kind === 'undo_rejection' || kind === 'reopen_on_network') && expected.status !== 'rejected') return { error: `payment ${paymentId} is ${expected.status}, not rejected — ${kind} applies to rejected payments only` };
+    if (kind === 'reopen_on_network' && expected.method === method) return { error: `payment ${paymentId} is already recorded on ${method} — reopen_on_network needs a different network` };
+  }
+
   return {
     fix: {
-      id, kind, reason,
+      id, kind, reason, expected,
       payment_id: needsPayment ? paymentId : null,
       method: needsMethod ? method : null,
       tx_hash: kind === 'add_hash' ? ((method === 'eth' || method === 'base') ? (txHash as string).toLowerCase() : txHash) : null,
@@ -662,7 +688,7 @@ async function runTool(name: string, input: unknown, tools: AssistantTools, sink
     if (name === 'propose_fix') {
       if (!sink.allowFixes) return { content: 'Proposals are not available on this screen — name the screen and the control instead.', isError: true };
       if (sink.proposals.length >= MAX_FIXES_PER_ANSWER) return { content: `At most ${MAX_FIXES_PER_ANSWER} proposals per answer — put the rest in words.`, isError: true };
-      const v = validateFix(inp, sink.proposals.length + 1);
+      const v = validateFix(inp, sink.proposals.length + 1, sink.payments);
       if (!v.fix) return { content: v.error || 'invalid proposal', isError: true };
       sink.proposals.push(v.fix);
       return {
@@ -707,7 +733,15 @@ export async function askAssistant(http: AssistantHttp, args: {
   const toolDefs = (Object.keys(TOOL_DEFS) as ToolName[])
     .filter(k => (k === 'propose_fix' ? !!args.allowFixes : typeof args.tools[k] === 'function'))
     .map(k => TOOL_DEFS[k]);
-  const sink: FixSink = { allowFixes: !!args.allowFixes, proposals: [] };
+  // the payments the model reasons from are the ones in the facts of THIS
+  // context — the dialog keeps the first turn's context for the whole
+  // conversation, so a snapshot is what the model actually saw
+  const factPayments = args.context.facts.payments;
+  const sink: FixSink = {
+    allowFixes: !!args.allowFixes,
+    proposals: [],
+    payments: Array.isArray(factPayments) ? factPayments.filter((p): p is Rec => p != null && typeof p === 'object') : [],
+  };
 
   const usage: AssistantUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
   const toolsRan: string[] = [];
