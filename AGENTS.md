@@ -76,6 +76,14 @@ where the code fails to honour one; do not propose replacing the decision.
   tab and the dashboard — never re-derive it inline). N is the number of
   split parties, so 50/50 today. Settled with the owner 2026-10-24.
 
+- **A COA product is digital, with no freight and no testing cost of its
+  own** (`1790102000`): "COA - <sku>" rows are flagged digital on insert
+  whatever the writer passed (the ordering-app sync passes nothing), an
+  update that would make one physical is refused, and a COA campaign line
+  with testing cost or freight is refused with the reason. A COA is a
+  digital copy of a lab report; the product it certifies carries the
+  testing cost. Settled with the owner 2026-10-25.
+
 ## Verifying changes
 
 Serena's LSP diagnostics are the only type check. SQL actions are probed on
