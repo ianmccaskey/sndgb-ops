@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useLoadAction, useMutateAction } from '@uibakery/data';
 import listOrderRecon from '@/actions/recon/listOrderRecon';
 import listRailRecon from '@/actions/recon/listRailRecon';
@@ -6,6 +6,8 @@ import listPendingCryptoPayments from '@/actions/recon/listPendingCryptoPayments
 import recordChainVerification from '@/actions/payments/recordChainVerification';
 import addManualPaymentByNumber from '@/actions/payments/addManualPaymentByNumber';
 import { useApp } from '@/app/AppContext';
+import { useAutoRecon } from '@/app/AutoRecon';
+import { AutoReconCard } from '@/components/AutoReconCard';
 import { rows } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
 import { lookupTxPayment } from '@/lib/verifyPayment';
@@ -18,7 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { StatusPill } from '@/components/StatusPill';
 import { TxHash } from '@/components/TxHash';
 import { OrderDetailSheet } from '@/app/pages/orders/OrderDetailSheet';
-import { Scale, Zap } from 'lucide-react';
+import { Scale } from 'lucide-react';
 import { Field } from '@/components/Field';
 
 type ReconRow = {
@@ -57,7 +59,6 @@ export function ReconPage() {
   const [doManual] = useMutateAction(addManualPaymentByNumber);
 
   const [verifying, setVerifying] = useState<Record<number, string>>({});
-  const [bulkRunning, setBulkRunning] = useState(false);
 
   // manual payment form
   const [mOrder, setMOrder] = useState('');
@@ -68,6 +69,23 @@ export function ReconPage() {
   const [mSaving, setMSaving] = useState(false);
 
   const reloadAll = () => { reloadRecon(); reloadRails(); reloadPending(); };
+
+  // The auto-reconcile pass runs once per campaign when this page opens
+  // with pending crypto payments, and on demand; the app-level provider
+  // keeps it to one run at a time across pages. Whatever started a run,
+  // the lists here refresh when it ends.
+  const autoRecon = useAutoRecon();
+  const autoRanFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (!enabled || groupBuyId == null || rawPending == null) return;
+    if (autoRanFor.current === groupBuyId) return;
+    autoRanFor.current = groupBuyId;
+    if (pending.length > 0) void autoRecon.run(groupBuyId, 'recon page');
+  }, [enabled, groupBuyId, rawPending]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!autoRecon.state.running && autoRecon.state.summary) reloadAll();
+  }, [autoRecon.state.running]); // eslint-disable-line react-hooks/exhaustive-deps
+  const runAutoNow = () => { if (groupBuyId != null) void autoRecon.run(groupBuyId, 'manual'); };
 
   const verifyOne = async (p: PendingPayment) => {
     setVerifying(v => ({ ...v, [p.payment_id]: 'checking…' }));
@@ -109,17 +127,6 @@ export function ReconPage() {
     }
   };
 
-  const verifyAll = async () => {
-    setBulkRunning(true);
-    for (let i = 0; i < pending.length; i++) {
-      await verifyOne(pending[i]);
-      // pace bulk runs so the provider's per-second rate limit is rarely
-      // hit at all — the fetch layer's 429 backoff is the safety net
-      if (i < pending.length - 1) await new Promise(r => setTimeout(r, 300));
-    }
-    setBulkRunning(false);
-    reloadAll();
-  };
 
   const addManual = async () => {
     const amt = Number(mAmount);
@@ -363,14 +370,10 @@ export function ReconPage() {
         </TabsContent>
 
         <TabsContent value="pending" className="mt-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">
-              Each row is a tx hash imported with an order that hasn't been checked on-chain yet.
-            </p>
-            <Button size="sm" onClick={verifyAll} disabled={bulkRunning || pending.length === 0}>
-              <Zap className="w-4 h-4 mr-1" /> {bulkRunning ? 'Verifying…' : `Verify all (${pending.length})`}
-            </Button>
-          </div>
+          <AutoReconCard state={autoRecon.state} onRun={runAutoNow} canRun={groupBuyId != null} onOpenOrder={setOpenOrderId} />
+          <p className="text-sm text-muted-foreground">
+            Each row is a tx hash imported with an order that hasn't been checked on-chain yet — the pass above checks them all; Verify checks one by hand.
+          </p>
           <div className="border rounded-lg overflow-x-auto">
             <Table>
               <TableHeader>

@@ -79,7 +79,22 @@ where the code fails to honour one; do not propose replacing the decision.
   with the owner 2026-10-13; proposals added at the owner's request
   2026-10-25.
 
+- **Auto-reconcile acts only on what the chain settles.** The pass
+  (`src/lib/autoRecon.ts`, run by `AutoReconProvider` after every import
+  and when Reconciliation opens) verifies pending crypto hashes, re-points
+  a pending hash to the ONE other network that shows it paying our wallet
+  (`repointPendingPaymentNetwork`, evidence in the audit row), and corrects
+  an order's rail through the shared `src/lib/railCorrection.ts` (the
+  order sheet's button runs the same code). It never rejects, overrides,
+  prices a native coin, moves a hash between orders, or touches a
+  storefront order's rail (the mapper owns it) — those stay with the
+  operator, listed under "needs you" where the assistant may propose them.
+  Flag a place where the pass would act on ambiguous evidence (two
+  networks, a hash another order holds); do not propose widening it to
+  rejections or overrides. Settled with the owner 2026-10-25.
+
 - **Group stock is funded equally by the partners, not by the profit
+
   split.** Stock-plan commits and group-stock adjustments sit inside
   `v_group_buy_pnl.net_profit_usd`, but a party's payout is
   `pct × (net + group stock) − group stock / N − personal deductions`

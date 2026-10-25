@@ -9,6 +9,8 @@ import resolveImportFailure from '@/actions/orders/resolveImportFailure';
 import listImportFailureContext from '@/actions/orders/listImportFailureContext';
 import { useApp } from '@/app/AppContext';
 import { useImportRunner, importSourceKey, lastResultFor } from '@/app/ImportRunner';
+import { useAutoRecon } from '@/app/AutoRecon';
+import { AutoReconCard } from '@/components/AutoReconCard';
 import { rows } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
 import { parseOrderPaste, ParseResult } from '@/lib/parseOrderImport';
@@ -50,6 +52,8 @@ export function ImportPage() {
   // next moves named); tools pinned to this campaign
   const [askOpen, setAskOpen] = useState(false);
   const assistantTools = useAssistantTools(groupBuyId);
+  // the pass the runner starts after every finished import
+  const autoRecon = useAutoRecon();
 
   const enabled = groupBuyId != null;
   // The durable failure basin: open failures recorded by past runs (this
@@ -359,6 +363,13 @@ export function ImportPage() {
           )}
         </p>
       </div>
+
+      {/* what the auto-reconcile pass did with the hashes this run imported —
+          shown while the campaign matches the run it followed */}
+      {groupBuyId != null && autoRecon.state.groupBuyId === groupBuyId && autoRecon.state.trigger === 'after import'
+        && (autoRecon.state.running || autoRecon.state.summary != null || autoRecon.state.error != null) && (
+        <AutoReconCard state={autoRecon.state} />
+      )}
 
       {(failures.length > 0 || failureMsg || failuresError) && (
         <Card className={failures.length > 0 ? 'border-rose-400/40' : failuresError != null ? 'border-amber-400/40' : undefined}>

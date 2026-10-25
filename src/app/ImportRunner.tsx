@@ -12,6 +12,8 @@ import syncOrderStatus from '@/actions/orders/syncOrderStatus';
 import recordImportFailure from '@/actions/orders/recordImportFailure';
 import resolveImportFailuresForOrders from '@/actions/orders/resolveImportFailuresForOrders';
 import { useApp } from '@/app/AppContext';
+import { useAutoRecon } from '@/app/AutoRecon';
+import { autoReconLine } from '@/components/AutoReconCard';
 import { ParsedOrder } from '@/lib/parseOrderImport';
 import { B44Cancellation, ClaimRelease } from '@/lib/mapB44Order';
 import { Loader2, CheckCircle2, XCircle, X } from 'lucide-react';
@@ -183,6 +185,9 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   const [doSyncStatus] = useMutateAction(syncOrderStatus);
   const [doRecordFailure] = useMutateAction(recordImportFailure);
   const [doAutoResolve] = useMutateAction(resolveImportFailuresForOrders);
+  // the auto-reconcile pass follows every finished run (new hashes just
+  // imported pending; stale claims released) — app-level, one at a time
+  const autoRecon = useAutoRecon();
 
   const [job, setJob] = useState<ImportJob>(IDLE);
   // The loop lives across renders; the ref (not state) is the concurrency
@@ -192,8 +197,8 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   // startImport is a stable callback, so the long-running loop must read the
   // CURRENT user and mutate functions at execution time — a first-render
   // closure would freeze 'Admin' (useUser resolves late) into audit rows.
-  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve });
-  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve };
+  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve, autoRecon });
+  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve, autoRecon };
 
   const importOne = async (o: ParsedOrder, gbId: number, cancelledOnStorefront: Set<string>): Promise<ImportRowResult> => {
     const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict } = envRef.current;
@@ -550,6 +555,9 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
       .finally(() => {
         activeRef.current = false;
         setJob(j => ({ ...j, running: false, finished: true }));
+        // then the pass: verify what just imported, re-point what the
+        // chain says is elsewhere, fix rails — its own card reports it
+        void envRef.current.autoRecon.run(args.groupBuyId, 'after import');
       });
     return true;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -568,6 +576,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
  */
 export function ImportProgressWidget() {
   const { job, dismiss } = useImportRunner();
+  const auto = useAutoRecon();
   const location = useLocation();
   if (location.pathname === '/import') return null;
   if (!job.running && !job.finished) return null;
@@ -603,6 +612,12 @@ export function ImportProgressWidget() {
         <span>{failed > 0 ? `${failed} failed so far` : 'no failures'}</span>
         <Link to="/import" className="text-cyan-300 hover:underline">details →</Link>
       </div>
+      {!job.running && auto.state.groupBuyId === job.forGroupBuyId && auto.state.trigger === 'after import'
+        && (auto.state.running || auto.state.summary || auto.state.error) && (
+        <div className="mt-1.5 text-xs text-muted-foreground border-t pt-1.5">
+          Auto-reconcile: {auto.state.running ? 'running…' : auto.state.error ? auto.state.error : auto.state.summary ? autoReconLine(auto.state.summary) : ''}
+        </div>
+      )}
     </div>
   );
 }

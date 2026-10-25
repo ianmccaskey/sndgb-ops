@@ -1,5 +1,7 @@
 import type { AssistantHttp } from './useAssistantHttp';
 import { dbText } from './rows';
+import { CRYPTO_METHODS, hashFitsNetwork, shortHash } from './chains';
+import type { CryptoMethod } from './chains';
 
 /*
  * The read-only "Ask about this" assistant.
@@ -60,8 +62,10 @@ export const RECON_RAILS = ['all', 'crypto', 'eth', 'sol', 'base', 'cash'] as co
 export type ReconStatus = typeof RECON_STATUSES[number];
 export type ReconRail = typeof RECON_RAILS[number];
 
-export const CRYPTO_METHODS = ['eth', 'sol', 'base'] as const;
-export type CryptoMethod = typeof CRYPTO_METHODS[number];
+// the network list and hash-shape rules live in src/lib/chains.ts (shared
+// with the auto-reconcile pass); re-exported for the dialog and the sheet
+export { CRYPTO_METHODS, hashFitsNetwork, shortHash };
+export type { CryptoMethod };
 
 /** What the read-only on-chain lookup reports (src/lib/verifyPayment.ts shape). */
 export type TxLookup = { amountUsd: number; nativeAmount: number | null; nativeSymbol: string | null; note: string };
@@ -100,22 +104,8 @@ export type ProposedFix = {
   expected: FixSnapshot | null;
 };
 
-const EVM_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
-const SOL_SIG_RE = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
-
-/** Does a bare hash have the shape of a transaction on that network? */
-export function hashFitsNetwork(method: string, hash: string): boolean {
-  if (method === 'eth' || method === 'base') return EVM_HASH_RE.test(hash);
-  if (method === 'sol') return SOL_SIG_RE.test(hash);
-  return false;
-}
-
-/** Hashes in operator-facing copy: first 10 and last 6 characters. */
-export function shortHash(h: string): string {
-  return h.length > 20 ? `${h.slice(0, 10)}…${h.slice(-6)}` : h;
-}
-
 /** One line naming a proposal, for the card and the audit detail. */
+
 export function describeFix(f: ProposedFix): string {
   const m = (f.method || '').toUpperCase();
   switch (f.kind) {
