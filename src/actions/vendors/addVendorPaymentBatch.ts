@@ -25,6 +25,10 @@ import { action } from '@uibakery/data';
  * params.sends  jsonb [{wallet_id, amount_usd, method, tx_ref}]
  * params.freight_usd / allow_over_freight / confirmed_freight_owed as in
  * the single-row recorder this replaces.
+ * params.other_usd / allow_over_other / confirmed_other_owed (1790102400):
+ * money for OTHER-item adjustments (not campaign products) — a line with
+ * no product, no kits and no freight, capped against the vendor's Other
+ * items owed minus what such lines already paid, same override contract.
  *
  * Guards (in the function):
  *  - a line's product must be THIS vendor's in THIS campaign; one line per
@@ -59,7 +63,10 @@ function addVendorPaymentBatch() {
         {{params.allow_over_freight}}::text,
         {{params.confirmed_freight_owed}}::text,
         {{params.sends}}::text,
-        {{params.actor}}::text
+        {{params.actor}}::text,
+        {{params.other_usd}}::text,
+        {{params.allow_over_other}}::text,
+        {{params.confirmed_other_owed}}::text
       ) r
     `,
   });

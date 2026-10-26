@@ -48,9 +48,12 @@ function addAdjustment() {
   return action('addAdjustment', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      INSERT INTO admin_adjustments (group_buy_product_id, qty, reason, created_by, beneficiary, pricing, expected_usd, preordered, stock)
+      INSERT INTO admin_adjustments (group_buy_product_id, group_buy_id, qty, reason, created_by, beneficiary, pricing, expected_usd, preordered, stock)
       SELECT
         gbp.id,
+        -- the campaign key on every row (1790102300); the product's own
+        -- campaign, which the WHERE below already pins to params.group_buy_id
+        gbp.group_buy_id,
         ({{params.qty}})::numeric,
         -- reason is required on every row EXCEPT group stock, where the
         -- row's own classification is the reason: the "P² Stock" button

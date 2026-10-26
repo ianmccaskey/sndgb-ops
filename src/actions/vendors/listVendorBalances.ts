@@ -8,8 +8,9 @@ function listVendorBalances() {
              owed_usd, product_owed_usd, freight_demand_usd, kits_demand,
              paid_usd, kits_paid, freight_paid_usd, balance_usd, pay_status,
              -- Other-item adjustments owed to this vendor (1790102300),
-             -- already inside owed_usd / balance_usd
-             other_owed_usd
+             -- already inside owed_usd / balance_usd, and what the batch
+             -- recorder's Other-items lines have paid of it (1790102400)
+             other_owed_usd, other_paid_usd
       FROM v_vendor_balances
       WHERE group_buy_id = {{params.group_buy_id}}::bigint
       ORDER BY vendor_code

@@ -139,11 +139,15 @@ where the code fails to honour one; do not propose replacing the decision.
   is owed qty × cost (`v_vendor_balances.other_owed_usd`, inside
   `owed_usd`). It adds NO demand, MOQ, kits, freight or testing cost — the
   typed cost is the landed cost. `admin_adjustments.group_buy_id` is now on
-  every row, so campaign scoping never needs the product join; the
-  `admin_adjustments_other_shape` CHECK keeps the two shapes apart. Every
-  payout consumer adds `other_stock_usd` to `stock_cost_usd` as the group
-  stock figure (`src/lib/payout.ts` callers). Settled with the owner
-  2026-10-26.
+  every row (filled from the product by the `admin_adjustments_fill_campaign`
+  trigger for every writer, `1790102400`), so campaign scoping never needs
+  the product join; the `admin_adjustments_other_shape` CHECK keeps the two
+  shapes apart. Every payout consumer adds `other_stock_usd` to
+  `stock_cost_usd` as the group stock figure (`src/lib/payout.ts` callers).
+  The vendor is paid for Other items through the payment batch's "Other
+  items $" line — a `vendor_payments` row with no product, kits or freight
+  (`v_vendor_balances.other_paid_usd`), capped like kits and freight.
+  Settled with the owner 2026-10-26.
 
 ## Verifying changes
 

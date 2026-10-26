@@ -28,8 +28,8 @@ type Balance = {
   balance_usd: string; pay_status: string;
   product_owed_usd: string; freight_demand_usd: string; kits_demand: string;
   kits_paid: string; freight_paid_usd: string;
-  /** Other-item adjustments owed to the vendor (1790102300), inside owed_usd */
-  other_owed_usd: string;
+  /** Other-item adjustments owed to the vendor (1790102300), inside owed_usd, and what Other-items payment lines paid of it */
+  other_owed_usd: string; other_paid_usd: string;
 };
 type Send = { id: number; wallet_name: string; chain: string; amount_usd: string; method: string | null; tx_ref: string | null };
 type Payment = {
@@ -92,6 +92,10 @@ export function VendorsPage() {
   const blankLine = (): PayLine => ({ product: '', kits: '', value: '', valueDirty: false });
   const [pLines, setPLines] = useState<PayLine[]>([blankLine()]);
   const [pFreight, setPFreight] = useState('');
+  // money for OTHER-item adjustments (not campaign products): a line with
+  // no product, kits or freight (1790102400), capped against the vendor's
+  // Other items owed minus what such lines already paid
+  const [pOther, setPOther] = useState('');
   // the SENDS that carried the money: one per on-chain transfer, each from
   // its own wallet (rail) — a payment made as "$20,000 on SOL + $13,025 on
   // ETH" is two sends on one batch (Ian, 2026-10-26). Their total must
@@ -147,7 +151,9 @@ export function VendorsPage() {
   };
 
   const linesTotal = pLines.reduce((sum, l) => sum + (Number(l.value) > 0 ? Number(l.value) : 0), 0);
-  const paymentTotal = Math.round((linesTotal + (Number(pFreight) > 0 ? Number(pFreight) : 0)) * 100) / 100;
+  const paymentTotal = Math.round((linesTotal + (Number(pFreight) > 0 ? Number(pFreight) : 0) + (Number(pOther) > 0 ? Number(pOther) : 0)) * 100) / 100;
+  const pVendorBal = balances.find(b => String(b.vendor_id) === pVendor);
+  const otherOwed = pVendorBal ? Math.round((Number(pVendorBal.other_owed_usd) - Number(pVendorBal.other_paid_usd)) * 100) / 100 : null;
 
   const setSend = (i: number, patch: Partial<PaySend>) =>
     setPSends(ss => ss.map((s, j) => (j === i ? { ...s, ...patch } : s)));
@@ -166,7 +172,8 @@ export function VendorsPage() {
   const recordPayment = async () => {
     const active = pLines.filter(l => l.product || l.kits.trim() || l.value.trim());
     if (!pVendor || !pDate) { setPError('Vendor and date are required.'); return; }
-    if (active.length === 0 && !(Number(pFreight) > 0)) { setPError('Add at least one product line (or freight).'); return; }
+    if (active.length === 0 && !(Number(pFreight) > 0) && !(Number(pOther) > 0)) { setPError('Add at least one product line, freight, or Other items money.'); return; }
+    if (pOther.trim() !== '' && (!/^\d+(?:\.\d{1,2})?$/.test(pOther.trim()) || !(Number(pOther) >= 0))) { setPError('Other items must be a dollar amount with at most 2 decimals.'); return; }
     for (const l of active) {
       if (!l.product) { setPError('Every line needs a product.'); return; }
       if (!/^\d+(?:\.\d{1,2})?$/.test(l.kits.trim()) || !(Number(l.kits) > 0)) { setPError('Every line needs a positive kit count (max 2 decimals).'); return; }
@@ -221,6 +228,12 @@ export function VendorsPage() {
         : `the freight ledger is already over-paid by ${fmtUSD(-freightOwed!)}`;
       if (!window.confirm(`Freight ${fmtUSD(Number(pFreight))} exceeds the ledger: ${ledgerLine}.\n\nVendor-added fees are a valid reason. Record anyway? The vendor breakdown will flag the freight as over-paid.`)) return;
     }
+    // Other-items money beyond what the Other adjustments say is owed:
+    // same confirm-then-anchor contract as kits and freight
+    const otherOver = Number(pOther) > 0 && otherOwed !== null && Number(pOther) > otherOwed;
+    if (otherOver) {
+      if (!window.confirm(`Other items ${fmtUSD(Number(pOther))} exceeds what the Other adjustments still owe this vendor (${fmtUSD(Math.max(otherOwed!, 0))}).\n\nRecord anyway? The vendor breakdown will show the excess as over-paid.`)) return;
+    }
     setPSaving(true); setPError('');
     try {
       // ONE batch: lines + freight + sends insert together or not at all,
@@ -237,6 +250,9 @@ export function VendorsPage() {
         freight_usd: pFreight.trim(),
         allow_over_freight: freightOver ? 'true' : '',
         confirmed_freight_owed: freightOver ? String(freightOwed ?? '') : '',
+        other_usd: pOther.trim(),
+        allow_over_other: otherOver ? 'true' : '',
+        confirmed_other_owed: otherOver ? String(otherOwed ?? '') : '',
         sends: JSON.stringify(sends.map(s => ({
           wallet_id: s.wallet, amount_usd: s.amount.trim(), method: s.method.trim(), tx_ref: s.ref.trim(),
         }))),
@@ -244,7 +260,7 @@ export function VendorsPage() {
       }) as { batch_id: number | string | null; refused: { what: string; why: string }[] | null }[] | null;
       const row = Array.isArray(res) ? res[0] : null;
       if (row && row.batch_id != null) {
-        setPLines([blankLine()]); setPFreight(''); setPSends([blankSend()]); setPNote('');
+        setPLines([blankLine()]); setPFreight(''); setPOther(''); setPSends([blankSend()]); setPNote('');
       } else {
         const why = (row?.refused || []).map(r => `${r.what}: ${r.why}`).join('; ');
         setPError('Not recorded — nothing was written. ' + (why || 'The server refused the payment.'));
@@ -307,10 +323,10 @@ export function VendorsPage() {
                   <TableCell className="font-medium">{b.vendor_code}</TableCell>
                   <TableCell className="text-right">
                     {fmtUSD(b.owed_usd)}
-                    {Number(b.other_owed_usd) > 0 && (
+                    {(Number(b.other_owed_usd) > 0 || Number(b.other_paid_usd) > 0) && (
                       <span className="block text-[10px] text-muted-foreground font-normal whitespace-nowrap"
-                        title="Admin adjustments for items that are not campaign products, bought from this vendor at a typed cost — no kits, no freight; pay them like any vendor money (a payment with no product line)">
-                        incl. {fmtUSD(b.other_owed_usd)} other items
+                        title="Admin adjustments for items that are not campaign products, bought from this vendor at a typed cost — no kits, no freight. Pay them with the payment form's Other items $ line.">
+                        other items {fmtUSD(b.other_paid_usd)}/{fmtUSD(b.other_owed_usd)} paid
                       </span>
                     )}
                   </TableCell>
@@ -490,6 +506,10 @@ export function VendorsPage() {
               <Field label="Freight $ · optional" className="w-40">
                 <Input inputMode="decimal" value={pFreight} disabled={pSaving} onChange={e => setPFreight(e.target.value)} className="h-9 w-full" />
               </Field>
+              <Field label="Other items $ · optional" className="w-40"
+                hint={otherOwed !== null && (otherOwed !== 0 || Number(pOther) > 0) ? `${fmtUSD(Math.max(otherOwed, 0))} still owed` : 'adjustments not in the campaign'}>
+                <Input inputMode="decimal" value={pOther} disabled={pSaving} onChange={e => setPOther(e.target.value)} className="h-9 w-full" />
+              </Field>
             </div>
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Sends · wallet · amount · token · tx ref</p>
             {pSends.map((s, i) => (
@@ -601,7 +621,7 @@ export function VendorsPage() {
                             onClick={async () => {
                               // Deleting a payment moves real balances — the
                               // whole batch goes (every line and every send).
-                              const lineText = batchLines.map(q => `  ${q.sku_code || 'freight'} — ${fmtUSD(q.amount_usd)}${q.kits_qty != null ? ` (${fmtNum(q.kits_qty)} kits)` : ''}`).join('\n');
+                              const lineText = batchLines.map(q => `  ${q.sku_code || (q.freight_usd != null ? 'freight' : 'other items')} — ${fmtUSD(q.amount_usd)}${q.kits_qty != null ? ` (${fmtNum(q.kits_qty)} kits)` : ''}`).join('\n');
                               const sendText = (p.sends || []).map(s => `  ${s.wallet_name} — ${fmtUSD(s.amount_usd)}${s.method ? ` ${s.method}` : ''}`).join('\n');
                               if (!window.confirm(`Remove this vendor payment batch?\n\n${p.vendor_code} — ${fmtUSD(batchTotal)} on ${fmtDate(p.paid_on)}\n\nLines:\n${lineText}\n\nSends:\n${sendText}\n\nEvery line and send is preserved in the audit log for reconstruction.`)) return;
                               const res = await doDeleteBatch({ batch_id: p.batch_id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
@@ -618,7 +638,7 @@ export function VendorsPage() {
                       <TableCell className={batched ? 'pl-6 text-muted-foreground' : ''}>{batched ? '↳' : fmtDate(p.paid_on)}</TableCell>
                       <TableCell className={batched ? 'text-muted-foreground' : 'font-medium'}>{p.vendor_code}</TableCell>
                       <TableCell className="text-right">{fmtUSD(p.amount_usd)}</TableCell>
-                      <TableCell>{p.sku_code || (p.freight_usd != null ? 'freight' : '—')}</TableCell>
+                      <TableCell>{p.sku_code || (p.freight_usd != null ? 'freight' : batched ? 'other items' : '—')}</TableCell>
                       <TableCell className="text-right">{p.kits_qty != null ? fmtNum(p.kits_qty) : '—'}</TableCell>
                       <TableCell className="text-right">{p.freight_usd != null ? fmtUSD(p.freight_usd) : '—'}</TableCell>
                       <TableCell className="text-muted-foreground">{batched ? 'see sends' : (p.wallet_name || '—')}</TableCell>
