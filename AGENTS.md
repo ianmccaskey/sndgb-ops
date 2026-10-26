@@ -147,7 +147,11 @@ where the code fails to honour one; do not propose replacing the decision.
   The vendor is paid for Other items through the payment batch's "Other
   items $" line — a `vendor_payments` row with no product, kits or freight
   (`v_vendor_balances.other_paid_usd`), capped like kits and freight.
-  Settled with the owner 2026-10-26.
+  `v_vendor_balances` (and the wallet-coverage owed query) are keyed by
+  the union of product lines, Other adjustments and payments
+  (`1790102500`), so a vendor stays visible while money is owed or paid
+  even after its last product line moves. Settled with the owner
+  2026-10-26.
 
 ## Verifying changes
 

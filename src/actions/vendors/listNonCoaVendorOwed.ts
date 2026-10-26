@@ -50,15 +50,25 @@ function listNonCoaVendorOwed() {
         LEFT JOIN group_buy_products gbp ON gbp.id = vp.group_buy_product_id
         LEFT JOIN products pr ON pr.id = gbp.product_id
         GROUP BY v.code, vp.group_buy_id
+      ), keys AS (
+        -- a (vendor, campaign) pair counts while ANY of its money exists —
+        -- product lines, direct freight, Other items or payments — so a
+        -- vendor whose last product line moved elsewhere keeps its Other
+        -- liability visible (1790102500)
+        SELECT vendor_code, group_buy_id FROM prod
+        UNION SELECT vendor_code, group_buy_id FROM dfr
+        UNION SELECT vendor_code, group_buy_id FROM oth
+        UNION SELECT vendor_code, group_buy_id FROM pay
       ), per AS (
-        SELECT prod.vendor_code,
-               prod.noncoa_demand_usd + COALESCE(dfr.direct_usd, 0) + COALESCE(oth.other_usd, 0) AS noncoa_demand_usd,
+        SELECT k.vendor_code,
+               COALESCE(prod.noncoa_demand_usd, 0) + COALESCE(dfr.direct_usd, 0) + COALESCE(oth.other_usd, 0) AS noncoa_demand_usd,
                COALESCE(pay.paid_usd, 0) - COALESCE(pay.paid_coa_usd, 0) AS noncoa_paid_usd,
-               GREATEST(prod.noncoa_demand_usd + COALESCE(dfr.direct_usd, 0) + COALESCE(oth.other_usd, 0) - (COALESCE(pay.paid_usd, 0) - COALESCE(pay.paid_coa_usd, 0)), 0) AS owed_usd
-        FROM prod
-        LEFT JOIN pay ON pay.vendor_code = prod.vendor_code AND pay.group_buy_id = prod.group_buy_id
-        LEFT JOIN dfr ON dfr.vendor_code = prod.vendor_code AND dfr.group_buy_id = prod.group_buy_id
-        LEFT JOIN oth ON oth.vendor_code = prod.vendor_code AND oth.group_buy_id = prod.group_buy_id
+               GREATEST(COALESCE(prod.noncoa_demand_usd, 0) + COALESCE(dfr.direct_usd, 0) + COALESCE(oth.other_usd, 0) - (COALESCE(pay.paid_usd, 0) - COALESCE(pay.paid_coa_usd, 0)), 0) AS owed_usd
+        FROM keys k
+        LEFT JOIN prod ON prod.vendor_code = k.vendor_code AND prod.group_buy_id = k.group_buy_id
+        LEFT JOIN pay ON pay.vendor_code = k.vendor_code AND pay.group_buy_id = k.group_buy_id
+        LEFT JOIN dfr ON dfr.vendor_code = k.vendor_code AND dfr.group_buy_id = k.group_buy_id
+        LEFT JOIN oth ON oth.vendor_code = k.vendor_code AND oth.group_buy_id = k.group_buy_id
       )
       SELECT vendor_code,
              ROUND(SUM(noncoa_demand_usd), 2) AS demand_usd,
