@@ -112,7 +112,9 @@ where the code fails to honour one; do not propose replacing the decision.
 
 - **A vendor payment is one batch: product lines plus the sends that
   carried the money, on any mix of rails** (`1790102100`). The Vendors
-  page records through `addVendorPaymentBatch` only: lines (kits and $
+  page records through `addVendorPaymentBatch` → `record_vendor_payment_batch()`
+  (`1790102200`, plpgsql so the 42002 lock is its own statement and the
+  cap reads see every earlier batch) only: lines (kits and $
   per product) and freight say what was bought, sends (wallet, amount,
   token, tx ref) say which wallet each transfer left from, and the batch
   inserts whole or not at all with every refusal named. A batched line
