@@ -22,8 +22,8 @@ function deleteProfitSplit() {
         AND NOT EXISTS (
           SELECT 1
           FROM admin_adjustments a
-          JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
-          WHERE gbp.group_buy_id = ps.group_buy_id
+          -- product rows and Other-item rows alike (1790102300)
+          WHERE a.group_buy_id = ps.group_buy_id
             AND a.beneficiary = ps.party
             AND (a.pricing = 'gb' OR (a.pricing = 'cost' AND a.beneficiary <> 'both'))
         )

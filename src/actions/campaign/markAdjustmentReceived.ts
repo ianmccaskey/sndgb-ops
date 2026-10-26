@@ -6,7 +6,7 @@ import { action } from '@uibakery/data';
  * just closes the receivable so the Products page stops showing it as
  * awaiting. One-way: the recovery path for a mistaken click is
  * deleteAdjustment + re-add. Zero rows = refused (not an at-cost row, or
- * already received).
+ * already received). Product rows and Other-item rows (1790102300) alike.
  */
 function markAdjustmentReceived() {
   return action('markAdjustmentReceived', 'SQL', {
@@ -15,12 +15,10 @@ function markAdjustmentReceived() {
       WITH upd AS (
         UPDATE admin_adjustments a
         SET received_at = now(), received_by = {{params.actor}}::text
-        FROM group_buy_products gbp
         WHERE a.id = {{params.adjustment_id}}::bigint
-          AND gbp.id = a.group_buy_product_id
           -- CAMPAIGN-SCOPED like every adjustment mutation: a stale or
           -- forged id must not close another campaign's receivable
-          AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
+          AND a.group_buy_id = {{params.group_buy_id}}::bigint
           AND a.pricing = 'cost'
           -- personal at-cost stock has no receivable to receive, and
           -- group stock settles out of net profit — nothing arrives

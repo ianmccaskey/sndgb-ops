@@ -170,7 +170,7 @@ export type PnlData = {
   product_revenue_usd: string; admin_fee_revenue_usd: string; shipping_fee_revenue_usd: string;
   insurance_revenue_usd: string; tip_revenue_usd: string; total_revenue_usd: string; expenses_usd: string; label_costs_usd: string;
   comps_usd: string; writeoffs_usd: string; adj_both_usd: string; net_profit_usd: string;
-  shipping_expenses_usd: string; shipping_net_usd: string; stock_cost_usd: string;
+  shipping_expenses_usd: string; shipping_net_usd: string; stock_cost_usd: string; other_stock_usd: string;
   splits: { party: string; pct: string }[] | null;
   adjustments: { beneficiary: string; value_usd: string; count: string }[] | null;
 };
@@ -198,7 +198,7 @@ export function PnlBlock({ pnl }: { pnl: PnlData }) {
   const adjByParty = new Map((pnl.adjustments || []).map(a => [a.beneficiary, Number(a.value_usd)]));
   // group stock is funded equally by the partners, not by the split —
   // the same computation the Financials pages use (src/lib/payout.ts)
-  const payouts = partyPayouts(net, Number(pnl.stock_cost_usd || 0), splits, party => adjByParty.get(party) || 0);
+  const payouts = partyPayouts(net, Number(pnl.stock_cost_usd || 0) + Number(pnl.other_stock_usd || 0), splits, party => adjByParty.get(party) || 0);
   // An adjustment whose beneficiary matches no CURRENT split party would be
   // deducted from no one — that must be a loud warning, never a silent omission
   // (split renames/deletes can orphan previously valid attributions).

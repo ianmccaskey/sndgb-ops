@@ -28,6 +28,8 @@ type Balance = {
   balance_usd: string; pay_status: string;
   product_owed_usd: string; freight_demand_usd: string; kits_demand: string;
   kits_paid: string; freight_paid_usd: string;
+  /** Other-item adjustments owed to the vendor (1790102300), inside owed_usd */
+  other_owed_usd: string;
 };
 type Send = { id: number; wallet_name: string; chain: string; amount_usd: string; method: string | null; tx_ref: string | null };
 type Payment = {
@@ -303,7 +305,15 @@ export function VendorsPage() {
                 <React.Fragment key={b.vendor_id}>
                 <TableRow>
                   <TableCell className="font-medium">{b.vendor_code}</TableCell>
-                  <TableCell className="text-right">{fmtUSD(b.owed_usd)}</TableCell>
+                  <TableCell className="text-right">
+                    {fmtUSD(b.owed_usd)}
+                    {Number(b.other_owed_usd) > 0 && (
+                      <span className="block text-[10px] text-muted-foreground font-normal whitespace-nowrap"
+                        title="Admin adjustments for items that are not campaign products, bought from this vendor at a typed cost — no kits, no freight; pay them like any vendor money (a payment with no product line)">
+                        incl. {fmtUSD(b.other_owed_usd)} other items
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">{fmtUSD(b.paid_usd)}</TableCell>
                   <TableCell className={`text-right font-medium ${parseFloat(b.balance_usd) < 0 ? 'text-rose-400' : ''}`}>
                     {fmtUSD(b.balance_usd)}

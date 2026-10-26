@@ -39,6 +39,8 @@ export type Pnl = {
   product_profit_usd: string; expenses_usd: string; label_costs_usd: string; net_profit_usd: string;
   direct_freight_usd: string; split_fees_usd: string; at_cost_margin_usd: string;
   stock_cost_usd: string; stock_retail_usd: string;
+  /** group stock of OTHER items (not campaign products, 1790102300): cost only, out of net */
+  other_stock_usd: string;
   comps_usd: string; credits_usd: string; writeoffs_usd: string; adj_both_usd: string;
   shipping_expenses_usd: string;
   shipping_net_usd: string;
@@ -127,8 +129,11 @@ export function DispersionTab({ pnl, expenses, adjustments, adjustmentsState }: 
     { label: 'At-cost sales (margin waived)', amount: -num(pnl?.at_cost_margin_usd), hint: 'Outside-customer sales at vendor cost + freight — the margin they would have earned is waived so the sale nets zero' },
     { label: 'Direct-ship freight (internal, to vendors)', amount: -num(pnl?.direct_freight_usd) },
     { label: 'Group stock (at cost + freight)', amount: -num(pnl?.stock_cost_usd), hint: `Stock-plan commits and group-stock adjustments — the group buys its own kits out of profit. Funded EQUALLY by the partners (${equalPct(splits)}% each), not by the profit split — see the payout ledgers` },
+    { label: 'Group stock — other items (at cost)', amount: -num(pnl?.other_stock_usd), hint: `Items that are not campaign products, bought from a vendor for the group at a typed cost. Funded EQUALLY by the partners (${equalPct(splits)}% each) like every group-stock row` },
   ];
-  const stockCost = num(pnl?.stock_cost_usd);
+  // group stock the partners fund equally: campaign-product rows AND
+  // other-item rows (1790102300)
+  const stockCost = num(pnl?.stock_cost_usd) + num(pnl?.other_stock_usd);
   const composedNet = gross + bridge.reduce((s, b) => s + b.amount, 0);
   const drift = Math.abs(composedNet - viewNet) >= 0.005;
 

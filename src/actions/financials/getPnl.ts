@@ -23,19 +23,21 @@ function getPnl() {
         SELECT t.group_buy_id,
                jsonb_agg(jsonb_build_object('beneficiary', t.beneficiary, 'value_usd', t.value_usd, 'count', t.cnt) ORDER BY t.beneficiary) AS adjustments
         FROM (
-          SELECT gbp.group_buy_id, a.beneficiary,
+          SELECT a.group_buy_id, a.beneficiary,
                  -- gb-priced units deduct at GB price; PERSONAL at-cost
                  -- stock deducts at the snapshotted cost+freight (that is
-                 -- what the wallet paid and what the party owes their share)
+                 -- what the wallet paid and what the party owes their share).
+                 -- Other-item rows (1790102300, no product) are always at
+                 -- cost, so they take the snapshot branch
                  SUM(CASE WHEN a.pricing = 'cost' THEN COALESCE(a.expected_usd, 0)
                           ELSE a.qty * gbp.gb_price_usd END) AS value_usd,
                  COUNT(*) AS cnt
           FROM admin_adjustments a
-          JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
+          LEFT JOIN group_buy_products gbp ON gbp.id = a.group_buy_product_id
           -- customer at-cost rows (beneficiary 'both') are margin-waived
           -- sales with a receivable, not payout adjustments
           WHERE a.pricing = 'gb' OR (a.pricing = 'cost' AND a.beneficiary <> 'both')
-          GROUP BY gbp.group_buy_id, a.beneficiary
+          GROUP BY a.group_buy_id, a.beneficiary
         ) t
         GROUP BY t.group_buy_id
       ) adj ON adj.group_buy_id = pnl.group_buy_id

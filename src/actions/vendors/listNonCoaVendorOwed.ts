@@ -33,6 +33,14 @@ function listNonCoaVendorOwed() {
         FROM v_direct_freight
         WHERE sku_code NOT ILIKE 'COA%'
         GROUP BY vendor_code, group_buy_id
+      ), oth AS (
+        -- Other-item adjustments (1790102300): bought from the vendor
+        -- outside the product list, never a COA — vendor money too
+        SELECT v.code AS vendor_code, a.group_buy_id, SUM(COALESCE(a.expected_usd, 0)) AS other_usd
+        FROM admin_adjustments a
+        JOIN vendors v ON v.id = a.vendor_id
+        WHERE a.group_buy_product_id IS NULL
+        GROUP BY v.code, a.group_buy_id
       ), pay AS (
         SELECT v.code AS vendor_code, vp.group_buy_id,
                COALESCE(SUM(vp.amount_usd), 0) AS paid_usd,
@@ -44,12 +52,13 @@ function listNonCoaVendorOwed() {
         GROUP BY v.code, vp.group_buy_id
       ), per AS (
         SELECT prod.vendor_code,
-               prod.noncoa_demand_usd + COALESCE(dfr.direct_usd, 0) AS noncoa_demand_usd,
+               prod.noncoa_demand_usd + COALESCE(dfr.direct_usd, 0) + COALESCE(oth.other_usd, 0) AS noncoa_demand_usd,
                COALESCE(pay.paid_usd, 0) - COALESCE(pay.paid_coa_usd, 0) AS noncoa_paid_usd,
-               GREATEST(prod.noncoa_demand_usd + COALESCE(dfr.direct_usd, 0) - (COALESCE(pay.paid_usd, 0) - COALESCE(pay.paid_coa_usd, 0)), 0) AS owed_usd
+               GREATEST(prod.noncoa_demand_usd + COALESCE(dfr.direct_usd, 0) + COALESCE(oth.other_usd, 0) - (COALESCE(pay.paid_usd, 0) - COALESCE(pay.paid_coa_usd, 0)), 0) AS owed_usd
         FROM prod
         LEFT JOIN pay ON pay.vendor_code = prod.vendor_code AND pay.group_buy_id = prod.group_buy_id
         LEFT JOIN dfr ON dfr.vendor_code = prod.vendor_code AND dfr.group_buy_id = prod.group_buy_id
+        LEFT JOIN oth ON oth.vendor_code = prod.vendor_code AND oth.group_buy_id = prod.group_buy_id
       )
       SELECT vendor_code,
              ROUND(SUM(noncoa_demand_usd), 2) AS demand_usd,

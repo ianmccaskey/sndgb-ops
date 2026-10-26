@@ -14,28 +14,42 @@ import { action } from '@uibakery/data';
  * Unreceived, uncommitted at-cost rows delete freely (the sale fell
  * through before anything real happened: demand, waiver, and receivable
  * all leave together). GB-priced adjustments delete as before.
- * CAMPAIGN-SCOPED like every destructive action: a stale or forged id
- * from another campaign must not touch that campaign's demand or P&L —
- * doubly important now that this is the documented undo path for
- * stock-plan commits.
+ *
+ * An OTHER-item row (1790102300, no product) has no demand and no kit
+ * attribution to protect: it deletes unless its receivable was received.
+ * The vendor's owed figure drops with it — if the item was already paid
+ * for, the Vendors page shows the over-payment, which is the truth.
+ *
+ * CAMPAIGN-SCOPED like every destructive action (a.group_buy_id now lives
+ * on every row): a stale or forged id from another campaign must not
+ * touch that campaign's demand or P&L — doubly important now that this is
+ * the documented undo path for stock-plan commits. Audited with the full
+ * removed row.
  */
 function deleteAdjustment() {
   return action('deleteAdjustment', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
-      DELETE FROM admin_adjustments a
-      USING group_buy_products gbp
-      WHERE a.id = {{params.id}}::bigint
-        AND gbp.id = a.group_buy_product_id
-        AND gbp.group_buy_id = {{params.group_buy_id}}::bigint
-        AND NOT (a.pricing = 'cost' AND a.received_at IS NOT NULL)
-        AND NOT (a.pricing = 'cost' AND NOT a.preordered AND (
-              gbp.ordered_from_vendor_at IS NOT NULL
-              OR EXISTS (
-                SELECT 1 FROM vendor_payments vp
-                WHERE vp.group_buy_product_id = gbp.id
-              )))
-      RETURNING a.id
+      WITH del AS (
+        DELETE FROM admin_adjustments a
+        WHERE a.id = {{params.id}}::bigint
+          AND a.group_buy_id = {{params.group_buy_id}}::bigint
+          AND NOT (a.pricing = 'cost' AND a.received_at IS NOT NULL)
+          AND NOT (a.pricing = 'cost' AND NOT a.preordered AND a.group_buy_product_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM group_buy_products gbp
+                WHERE gbp.id = a.group_buy_product_id
+                  AND (gbp.ordered_from_vendor_at IS NOT NULL
+                       OR EXISTS (
+                         SELECT 1 FROM vendor_payments vp
+                         WHERE vp.group_buy_product_id = gbp.id
+                       ))))
+        RETURNING a.*
+      )
+      INSERT INTO audit_log (table_name, row_pk, action, actor, old_data)
+      SELECT 'admin_adjustments', del.id::text, 'adjustment_deleted', COALESCE(NULLIF({{params.actor}}::text, ''), 'operator'),
+             to_jsonb(del.*)
+      FROM del
+      RETURNING row_pk AS id
     `,
   });
 }

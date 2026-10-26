@@ -129,6 +129,22 @@ where the code fails to honour one; do not propose replacing the decision.
   the at-cost reallocation still write single unbatched rows. Settled
   with the owner 2026-10-26.
 
+- **An "Other" admin adjustment is an at-cost purchase of something the
+  campaign does not sell** (`1790102300`): a typed name, unit vendor cost
+  and one of the campaign's vendors instead of a `group_buy_product_id`,
+  written only by `addOtherAdjustment`. It takes the same three at-cost
+  assignments a product row can (party → that party's payout; both +
+  stock → net profit via `v_group_buy_pnl.other_stock_usd`, funded equally
+  by the partners; both → an outside-customer receivable), and the vendor
+  is owed qty × cost (`v_vendor_balances.other_owed_usd`, inside
+  `owed_usd`). It adds NO demand, MOQ, kits, freight or testing cost — the
+  typed cost is the landed cost. `admin_adjustments.group_buy_id` is now on
+  every row, so campaign scoping never needs the product join; the
+  `admin_adjustments_other_shape` CHECK keeps the two shapes apart. Every
+  payout consumer adds `other_stock_usd` to `stock_cost_usd` as the group
+  stock figure (`src/lib/payout.ts` callers). Settled with the owner
+  2026-10-26.
+
 ## Verifying changes
 
 Serena's LSP diagnostics are the only type check. SQL actions are probed on

@@ -11,6 +11,7 @@ import upsertCampaignProduct from '@/actions/campaign/upsertCampaignProduct';
 import markOrderedFromVendor from '@/actions/campaign/markOrderedFromVendor';
 import listAdjustments from '@/actions/campaign/listAdjustments';
 import addAdjustment from '@/actions/campaign/addAdjustment';
+import addOtherAdjustment from '@/actions/campaign/addOtherAdjustment';
 import deleteAdjustment from '@/actions/campaign/deleteAdjustment';
 import markAdjustmentReceived from '@/actions/campaign/markAdjustmentReceived';
 import reallocateAtCostAdjustment from '@/actions/campaign/reallocateAtCostAdjustment';
@@ -45,10 +46,15 @@ type CampaignProduct = {
   direct_freight_usd: string; direct_box_kits: string; split_fee_usd: string;
 };
 type Adjustment = {
-  id: number; group_buy_product_id: number; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string;
+  id: number; group_buy_product_id: number | null; sku_code: string; qty: string; reason: string; created_by: string; created_at: string; beneficiary: string; value_usd: string;
   pricing: string; expected_usd: string | null; received_at: string | null; preordered: boolean;
   stock_plan_item_id: number | null; stock: boolean;
+  // an OTHER item (1790102300): not a campaign product — typed name, unit
+  // vendor cost and vendor; sku_code carries the name
+  other_name: string | null; other_unit_cost_usd: string | null; vendor_id: number | null; vendor_code: string | null;
 };
+// product-picker sentinel for an item that is not a campaign product
+const OTHER_ITEM = '__other';
 type SplitParty = { party: string; pct: string };
 
 export function ProductsPage() {
@@ -96,6 +102,7 @@ export function ProductsPage() {
   const [doUpsertCampaign] = useMutateAction(upsertCampaignProduct);
   const [doMarkOrdered] = useMutateAction(markOrderedFromVendor);
   const [doAddAdj] = useMutateAction(addAdjustment);
+  const [doAddOther] = useMutateAction(addOtherAdjustment);
   const [doDelAdj] = useMutateAction(deleteAdjustment);
   const [doMarkReceived] = useMutateAction(markAdjustmentReceived);
   const [doReallocate] = useMutateAction(reallocateAtCostAdjustment);
@@ -201,6 +208,16 @@ export function ProductsPage() {
   const [aFor, setAFor] = useState('both');
   const [aPricing, setAPricing] = useState('gb'); // 'gb' | 'cost' | 'cost_pre' (at-cost; _pre = vendor order already placed)
   const [aError, setAError] = useState('');
+  // "Other" item (Ian, 2026-10-26): not a campaign product — a typed name,
+  // the vendor it comes from and its unit vendor cost; always at cost
+  const aIsOther = aProduct === OTHER_ITEM;
+  const [aOtherName, setAOtherName] = useState('');
+  const [aOtherCost, setAOtherCost] = useState('');
+  const [aOtherVendor, setAOtherVendor] = useState('');
+  // only vendors with a product line in THIS campaign can carry an Other
+  // item (the vendor balance row the cost lands on is keyed by those lines)
+  const campaignVendorCodes = new Set(campaign.map(c => c.vendor_code));
+  const campaignVendors = vendors.filter(v => v.active && campaignVendorCodes.has(v.code));
 
   const saveCampaignProduct = async () => {
     const price = Number(cPrice);
@@ -325,14 +342,46 @@ export function ProductsPage() {
   };
 
   // at-cost preview: what the outside customer owes (cost + freight per kit)
-  const aIsCost = aPricing === 'cost' || aPricing === 'cost_pre';
+  const aIsCost = aIsOther || aPricing === 'cost' || aPricing === 'cost_pre';
   const aCostProduct = campaign.find(c => String(c.group_buy_product_id) === aProduct);
-  const aExpectedUsd = aIsCost && aCostProduct && Number(aQty) > 0
-    ? Math.round(Number(aQty) * (Number(aCostProduct.unit_cost_usd) + Number(aCostProduct.freight_usd)) * 100) / 100
-    : null;
+  const aOtherCostOk = /^\d+(?:\.\d{1,2})?$/.test(aOtherCost.trim()) && Number(aOtherCost) > 0;
+  const aExpectedUsd = aIsOther
+    ? (aOtherCostOk && /^\d+$/.test(aQty.trim()) && Number(aQty) > 0 ? Math.round(Number(aQty) * Number(aOtherCost) * 100) / 100 : null)
+    : aIsCost && aCostProduct && Number(aQty) > 0
+      ? Math.round(Number(aQty) * (Number(aCostProduct.unit_cost_usd) + Number(aCostProduct.freight_usd)) * 100) / 100
+      : null;
+
+  // "Other" item: typed name, vendor and unit cost instead of a campaign
+  // product; assigned like any at-cost row (outside customer receivable /
+  // group stock from net profit / personal from that party's payout). The
+  // vendor is owed qty × cost; nothing joins demand, MOQ, kits or freight.
+  const addOther = async (asStock: boolean) => {
+    const qty = Number(aQty);
+    const forStock = asStock || aFor === 'both_stock';
+    if (!aOtherName.trim() || !aOtherVendor || !aOtherCostOk || !(qty > 0)) {
+      setAError('An Other item needs a name, a vendor, a unit vendor cost (max 2 decimals) and a positive qty.');
+      return;
+    }
+    if (!/^\d+$/.test(aQty.trim())) { setAError('Other items are bought in whole units.'); return; }
+    if (!forStock && !aReason.trim()) { setAError('Reason is required — it is optional only for group stock / P² Stock.'); return; }
+    setAError('');
+    try {
+      const res = await doAddOther({
+        group_buy_id: groupBuyId, vendor_id: aOtherVendor, other_name: aOtherName.trim(), unit_cost_usd: aOtherCost.trim(),
+        qty: aQty.trim(), beneficiary: forStock ? 'both' : aFor, stock: forStock ? 'true' : '',
+        reason: aReason.trim(), created_by: userName,
+      });
+      const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+      if (!wrote) throw new Error('Other item refused: the vendor must be active with a product line in this campaign, cost and qty positive, and a person must be one of this campaign\'s split parties.');
+      setAQty(''); setAReason(''); setAOtherName(''); setAOtherCost(''); setAFor('both');
+      reloadAdj(); reloadCampaign();
+    } catch (e: unknown) {
+      setAError(e instanceof Error ? e.message : 'Failed to add the Other item');
+    }
+  };
 
   const deleteAdjOnly = async (a: Adjustment) => {
-    const res = await doDelAdj({ id: a.id, group_buy_id: groupBuyId }) as unknown[] | null;
+    const res = await doDelAdj({ id: a.id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
     if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
       setAError('Not removed — an at-cost row is locked once its payment is received or its product is vendor-committed (marked ordered / has vendor payments): the kits may already be bought.');
       return false;
@@ -379,6 +428,7 @@ export function ProductsPage() {
   };
 
   const addAdj = async () => {
+    if (aIsOther) return addOther(false);
     const qty = Number(aQty);
     if (!aProduct || !qty || !aReason.trim()) {
       setAError('Product, non-zero qty, and reason are all required — adjustments are audited.');
@@ -426,6 +476,7 @@ export function ProductsPage() {
   // optional (the row records 'P² stock' when blank), and "Max available"
   // never applies: that cap flags sold-out CUSTOMER demand, not stock buys.
   const addP2Stock = async () => {
+    if (aIsOther) return addOther(true);
     const qty = Number(aQty);
     if (!aProduct || !(qty > 0)) {
       setAError('P² Stock needs a campaign product and a positive qty.');
@@ -455,9 +506,11 @@ export function ProductsPage() {
   };
 
   // what P² Stock would cost for the typed line, whatever the Pricing select says
-  const p2StockUsd = aCostProduct && /^\d+$/.test(aQty.trim()) && Number(aQty) > 0
-    ? Math.round(Number(aQty) * (Number(aCostProduct.unit_cost_usd) + Number(aCostProduct.freight_usd)) * 100) / 100
-    : null;
+  const p2StockUsd = aIsOther
+    ? aExpectedUsd
+    : aCostProduct && /^\d+$/.test(aQty.trim()) && Number(aQty) > 0
+      ? Math.round(Number(aQty) * (Number(aCostProduct.unit_cost_usd) + Number(aCostProduct.freight_usd)) * 100) / 100
+      : null;
 
   return (
     <div className="p-4 sm:p-6 space-y-5">
@@ -698,16 +751,43 @@ export function ProductsPage() {
             <CardContent className="space-y-2">
               <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
                 <Field label="Campaign product">
-                  <Select value={aProduct} onValueChange={setAProduct}>
+                  <Select value={aProduct} onValueChange={v => {
+                    setAProduct(v);
+                    // an Other item is always at cost; preselect its vendor
+                    // when the campaign has exactly one
+                    if (v === OTHER_ITEM) {
+                      if (aPricing === 'cost_pre') setAPricing('cost');
+                      if (!aOtherVendor && campaignVendors.length === 1) setAOtherVendor(String(campaignVendors[0].id));
+                    }
+                  }}>
                     <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
                     <SelectContent>
                       {campaign.map(c => <SelectItem key={c.group_buy_product_id} value={String(c.group_buy_product_id)}>{c.sku_code}</SelectItem>)}
+                      <SelectItem value={OTHER_ITEM}>Other (not in this campaign)</SelectItem>
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field label="Qty" hint="+ adds, − removes">
+                <Field label="Qty" hint={aIsOther ? 'whole units' : '+ adds, − removes'}>
                   <Input inputMode="numeric" value={aQty} onChange={e => setAQty(e.target.value)} className="h-9" />
                 </Field>
+                {aIsOther ? (
+                  <>
+                    <Field label="Item name" className="col-span-2">
+                      <Input placeholder="e.g. 'BAC water 30ml'" value={aOtherName} onChange={e => setAOtherName(e.target.value)} className="h-9" />
+                    </Field>
+                    <Field label="Vendor" hint="a vendor of this campaign">
+                      <Select value={aOtherVendor} onValueChange={setAOtherVendor}>
+                        <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                        <SelectContent>
+                          {campaignVendors.map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="Vendor cost $ / unit" hint="landed cost, no freight added">
+                      <Input inputMode="decimal" value={aOtherCost} onChange={e => setAOtherCost(e.target.value)} className="h-9" />
+                    </Field>
+                  </>
+                ) : (
                 <Field label="Pricing">
                   <Select value={aPricing} onValueChange={v => {
                     setAPricing(v);
@@ -723,12 +803,13 @@ export function ProductsPage() {
                     </SelectContent>
                   </Select>
                 </Field>
+                )}
                 <Field label="For" hint="whose profit pays">
                   <Select value={aFor} onValueChange={setAFor}>
                     <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="both">{aIsCost ? 'Outside customer' : 'Both'}</SelectItem>
-                      {aPricing === 'cost' && <SelectItem value="both_stock">Both (group stock)</SelectItem>}
+                      {(aPricing === 'cost' || aIsOther) && <SelectItem value="both_stock">Both (group stock)</SelectItem>}
                       {splitParties.map(p => <SelectItem key={p.party} value={p.party}>{aIsCost ? `${p.party} (personal)` : p.party}</SelectItem>)}
                     </SelectContent>
                   </Select>
@@ -749,7 +830,13 @@ export function ProductsPage() {
                 <span className="font-medium">P² Stock</span> records group stock from the product and qty alone
                 {p2StockUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(p2StockUsd)}</span> for this line)</>}: at vendor cost + freight, for both partners, no reason required, and the product's Max available does not apply. Pricing and For are ignored.
               </p>
-              {aPricing === 'gb' ? (
+              {aIsOther ? (
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-medium">Other item</span> — not a campaign product, so it adds no demand, MOQ, kits or freight; the vendor is simply owed qty × cost
+                  {aExpectedUsd != null && <> (<span className="font-medium text-foreground">{fmtUSD(aExpectedUsd)}</span> for this line)</>}, shown on the Vendors page and paid like any vendor money. "For" assigns it like an at-cost row:
+                  {' '}<span className="font-medium">Outside customer</span> owes the cost until you mark it received; <span className="font-medium">Both (group stock)</span> comes out of net profit, funded equally by the partners; <span className="font-medium">a person</span> has it deducted from their payout.
+                </p>
+              ) : aPricing === 'gb' ? (
                 <p className="text-xs text-muted-foreground">
                   "For" decides whose profit pays for these units at GB price: a person's adjustments come out of their split payout; "Both" comes out of total profit before the split.
                 </p>
@@ -797,7 +884,15 @@ export function ProductsPage() {
               <TableBody>
                 {adjustments.map(a => (
                   <TableRow key={a.id}>
-                    <TableCell className="font-medium">{a.sku_code}</TableCell>
+                    <TableCell className="font-medium">
+                      {a.sku_code}
+                      {a.group_buy_product_id == null && (
+                        <span className="ml-1.5 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                          title={`Not a campaign product — ${a.vendor_code || 'vendor'} is owed ${fmtUSD(a.other_unit_cost_usd)} per unit; no demand, kits or freight`}>
+                          other · {a.vendor_code}
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
                     <TableCell>
                       {a.pricing === 'cost' && a.stock ? (

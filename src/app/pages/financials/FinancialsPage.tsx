@@ -291,6 +291,12 @@ export function FinancialsPage() {
                 <span className="text-rose-400">−{fmtUSD(pnl?.stock_cost_usd)}</span>
               </div>
             )}
+            {Number(pnl?.other_stock_usd) > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground" title="Other-item adjustments for the group (not campaign products) at the typed vendor cost, taken out of net profit BEFORE the split — funded equally by the partners">Group stock — other items (at cost, pre-split)</span>
+                <span className="text-rose-400">−{fmtUSD(pnl?.other_stock_usd)}</span>
+              </div>
+            )}
             {/* sign-aware and shown for ANY non-zero delta: a lowered GB
                 price or risen cost can push it negative, and hiding it
                 would leave the visible lines composing to the wrong net */}
@@ -383,7 +389,7 @@ export function FinancialsPage() {
               // (src/lib/payout.ts): group stock is funded equally by the
               // partners, not by the profit split
               const splits = pnl?.splits || [];
-              const payouts = partyPayouts(netProfit, Number(pnl?.stock_cost_usd || 0), splits,
+              const payouts = partyPayouts(netProfit, Number(pnl?.stock_cost_usd || 0) + Number(pnl?.other_stock_usd || 0), splits,
                 party => Number((pnl?.adjustments || []).find(a => a.beneficiary === party)?.value_usd || 0));
               return splits.map(s => {
                 const pay = payouts[s.party];
