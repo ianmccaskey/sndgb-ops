@@ -80,34 +80,47 @@ CREATE INDEX vendor_payments_batch_idx ON vendor_payments (batch_id) WHERE batch
 -- Batch balance: sends total = lines total, at least one of each. Deferred
 -- so a batch, its lines and its sends can be written in one transaction in
 -- any order; checked once per touched batch at commit.
-CREATE OR REPLACE FUNCTION vendor_payment_batch_balanced() RETURNS trigger
+CREATE OR REPLACE FUNCTION vendor_payment_batch_check(p_batch BIGINT) RETURNS void
 LANGUAGE plpgsql AS $fn$
 DECLARE
-  v_batch BIGINT;
   v_lines NUMERIC;
   v_sends NUMERIC;
   v_line_n INT;
   v_send_n INT;
 BEGIN
-  v_batch := CASE WHEN TG_OP = 'DELETE' THEN OLD.batch_id ELSE NEW.batch_id END;
-  IF v_batch IS NULL THEN
-    RETURN NULL;
+  IF p_batch IS NULL THEN
+    RETURN;
   END IF;
   -- the batch itself may already be gone (whole-batch delete cascades):
   -- nothing left to balance
-  IF NOT EXISTS (SELECT 1 FROM vendor_payment_batches b WHERE b.id = v_batch) THEN
-    RETURN NULL;
+  IF NOT EXISTS (SELECT 1 FROM vendor_payment_batches b WHERE b.id = p_batch) THEN
+    RETURN;
   END IF;
   SELECT COALESCE(SUM(vp.amount_usd), 0), COUNT(*) INTO v_lines, v_line_n
-  FROM vendor_payments vp WHERE vp.batch_id = v_batch;
+  FROM vendor_payments vp WHERE vp.batch_id = p_batch;
   SELECT COALESCE(SUM(s.amount_usd), 0), COUNT(*) INTO v_sends, v_send_n
-  FROM vendor_payment_sends s WHERE s.batch_id = v_batch;
+  FROM vendor_payment_sends s WHERE s.batch_id = p_batch;
   IF v_line_n = 0 OR v_send_n = 0 OR v_lines <> v_sends THEN
     RAISE EXCEPTION USING
       ERRCODE = 'check_violation',
       MESSAGE = format('vendor payment batch %s is not balanced: lines %s (%s) vs sends %s (%s) — a batch is recorded and removed as a whole',
-                       v_batch, v_lines, v_line_n, v_sends, v_send_n),
+                       p_batch, v_lines, v_line_n, v_sends, v_send_n),
       CONSTRAINT = 'vendor_payment_batch_balanced';
+  END IF;
+END
+$fn$;
+
+CREATE OR REPLACE FUNCTION vendor_payment_batch_balanced() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+  -- a row that LEAVES a batch (delete, or batch_id re-pointed / cleared)
+  -- unbalances the batch it left as surely as one that joins unbalances
+  -- the batch it joins: check both sides of an update
+  IF TG_OP IN ('DELETE', 'UPDATE') THEN
+    PERFORM vendor_payment_batch_check(OLD.batch_id);
+  END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE') AND (TG_OP = 'INSERT' OR NEW.batch_id IS DISTINCT FROM OLD.batch_id OR NEW.amount_usd IS DISTINCT FROM OLD.amount_usd) THEN
+    PERFORM vendor_payment_batch_check(NEW.batch_id);
   END IF;
   RETURN NULL;
 END
