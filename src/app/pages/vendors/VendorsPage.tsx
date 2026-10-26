@@ -4,6 +4,7 @@ import listVendors from '@/actions/vendors/listVendors';
 import listVendorBalances from '@/actions/vendors/listVendorBalances';
 import listVendorPayments from '@/actions/vendors/listVendorPayments';
 import listVendorProductProgress from '@/actions/vendors/listVendorProductProgress';
+import listVendorOtherItems from '@/actions/vendors/listVendorOtherItems';
 import addVendorPaymentBatch from '@/actions/vendors/addVendorPaymentBatch';
 import deleteVendorPayment from '@/actions/vendors/deleteVendorPayment';
 import deleteVendorPaymentBatch from '@/actions/vendors/deleteVendorPaymentBatch';
@@ -41,6 +42,16 @@ type Payment = {
   batch_id: number | null; sends: Send[] | null;
 };
 type Wallet = { id: number; name: string; chain: string; active: boolean };
+// an OTHER-item adjustment (1790102300): bought from the vendor at a typed
+// cost, not a campaign product — owed at the vendor level, no kits ledger
+type OtherItem = {
+  id: number; vendor_id: number; vendor_code: string; other_name: string;
+  other_unit_cost_usd: string; qty: string; expected_usd: string;
+  beneficiary: string; stock: boolean; received_at: string | null; reason: string; created_at: string;
+};
+// payment-line product value for an Other item
+const OTHER_LINE = 'other:';
+const isOtherLine = (product: string) => product.startsWith(OTHER_LINE);
 type ProductProgress = {
   group_buy_product_id: number; vendor_code: string; sku_code: string;
   kits_demand: string; kits_paid: string; vendor_order_value_usd: string; per_kit_cost_usd: string;
@@ -69,12 +80,14 @@ export function VendorsPage() {
   const [rawPayments, , , reloadPayments] = useLoadAction(listVendorPayments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets] = useLoadAction(listWallets, [], {});
   const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawOther] = useLoadAction(listVendorOtherItems, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
 
   const vendors = rows<Vendor>(rawVendors);
   const balances = rows<Balance>(rawBalances);
   const payments = rows<Payment>(rawPayments);
   const wallets = rows<Wallet>(rawWallets);
   const productProgress = rows<ProductProgress>(rawProgress);
+  const otherItems = rows<OtherItem>(rawOther);
 
   const [doPayBatch] = useMutateAction(addVendorPaymentBatch);
   const [doSaveVendor] = useMutateAction(saveVendor);
@@ -134,17 +147,30 @@ export function VendorsPage() {
 
   const vendorCode = vendors.find(v => String(v.id) === pVendor)?.code || '';
   const vendorProducts = productProgress.filter(pp => pp.vendor_code === vendorCode);
+  // the vendor's Other items are pickable as payment lines too (value
+  // "other:<id>"): units × typed unit cost, recorded as the batch's
+  // Other-items money (no kits ledger to attribute to)
+  const vendorOtherItems = otherItems.filter(o => String(o.vendor_id) === pVendor);
+  const otherOf = (product: string) => vendorOtherItems.find(o => OTHER_LINE + o.id === product);
 
   const setLine = (i: number, patch: Partial<PayLine>) => {
     setPLines(ls => ls.map((l, j) => {
       if (j !== i) return l;
       const next = { ...l, ...patch };
+      // an Other item just picked: its units prefill from the adjustment
+      if (patch.product !== undefined && isOtherLine(next.product) && !next.kits.trim()) {
+        const o = otherOf(next.product);
+        if (o) next.kits = String(Number(o.qty));
+      }
       // kits or product changed and the operator has not hand-edited the
-      // value: recompute kits × per-kit vendor cost
+      // value: recompute kits × per-kit vendor cost (units × unit cost for
+      // an Other item)
       if (!next.valueDirty && (patch.kits !== undefined || patch.product !== undefined)) {
-        const pp = vendorProducts.find(v => String(v.group_buy_product_id) === next.product);
         const kits = Number(next.kits);
-        next.value = pp && kits > 0 ? (Math.round(kits * Number(pp.per_kit_cost_usd) * 100) / 100).toFixed(2) : '';
+        const o = isOtherLine(next.product) ? otherOf(next.product) : undefined;
+        const pp = o ? undefined : vendorProducts.find(v => String(v.group_buy_product_id) === next.product);
+        const unit = o ? Number(o.other_unit_cost_usd) : pp ? Number(pp.per_kit_cost_usd) : null;
+        next.value = unit !== null && kits > 0 ? (Math.round(kits * unit * 100) / 100).toFixed(2) : '';
       }
       return next;
     }));
@@ -154,6 +180,10 @@ export function VendorsPage() {
   const paymentTotal = Math.round((linesTotal + (Number(pFreight) > 0 ? Number(pFreight) : 0) + (Number(pOther) > 0 ? Number(pOther) : 0)) * 100) / 100;
   const pVendorBal = balances.find(b => String(b.vendor_id) === pVendor);
   const otherOwed = pVendorBal ? Math.round((Number(pVendorBal.other_owed_usd) - Number(pVendorBal.other_paid_usd)) * 100) / 100 : null;
+  // Other-items money in this payment: the picked Other-item lines plus
+  // the lump field — one figure the server caps against otherOwed
+  const otherLinesUsd = Math.round(pLines.filter(l => isOtherLine(l.product)).reduce((s, l) => s + (Number(l.value) > 0 ? Number(l.value) : 0), 0) * 100) / 100;
+  const otherTotal = Math.round((otherLinesUsd + (Number(pOther) > 0 ? Number(pOther) : 0)) * 100) / 100;
 
   const setSend = (i: number, patch: Partial<PaySend>) =>
     setPSends(ss => ss.map((s, j) => (j === i ? { ...s, ...patch } : s)));
@@ -179,6 +209,10 @@ export function VendorsPage() {
       if (!/^\d+(?:\.\d{1,2})?$/.test(l.kits.trim()) || !(Number(l.kits) > 0)) { setPError('Every line needs a positive kit count (max 2 decimals).'); return; }
       if (!/^\d+(?:\.\d{1,2})?$/.test(l.value.trim()) || !(Number(l.value) > 0)) { setPError('Every line needs a positive $ value (max 2 decimals).'); return; }
     }
+    // Other-item lines are money for the vendor's Other adjustments: they
+    // travel as the batch's Other-items figure, not as product lines
+    const productLines = active.filter(l => !isOtherLine(l.product));
+    const otherLines = active.filter(l => isOtherLine(l.product));
     if (pFreight.trim() !== '' && (!/^\d+(?:\.\d{1,2})?$/.test(pFreight.trim()) || !(Number(pFreight) >= 0))) { setPError('Freight must be a dollar amount with at most 2 decimals.'); return; }
     const sends = pSends
       .map((s, i) => ({ ...s, amount: sendAmount(i) }))
@@ -203,7 +237,7 @@ export function VendorsPage() {
       const pp = vendorProducts.find(v => String(v.group_buy_product_id) === l.product);
       return pp ? Math.round((Number(pp.kits_demand) - Number(pp.kits_paid)) * 100) / 100 : null;
     };
-    const overLines = new Set(active.filter(l => {
+    const overLines = new Set(productLines.filter(l => {
       const owed = kitsOwed(l);
       return owed !== null && Number(l.kits) > owed;
     }));
@@ -230,10 +264,16 @@ export function VendorsPage() {
     }
     // Other-items money beyond what the Other adjustments say is owed:
     // same confirm-then-anchor contract as kits and freight
-    const otherOver = Number(pOther) > 0 && otherOwed !== null && Number(pOther) > otherOwed;
+    const otherOver = otherTotal > 0 && otherOwed !== null && otherTotal > otherOwed;
     if (otherOver) {
-      if (!window.confirm(`Other items ${fmtUSD(Number(pOther))} exceeds what the Other adjustments still owe this vendor (${fmtUSD(Math.max(otherOwed!, 0))}).\n\nRecord anyway? The vendor breakdown will show the excess as over-paid.`)) return;
+      if (!window.confirm(`Other items ${fmtUSD(otherTotal)} exceeds what the Other adjustments still owe this vendor (${fmtUSD(Math.max(otherOwed!, 0))}).\n\nRecord anyway? The vendor breakdown will show the excess as over-paid.`)) return;
     }
+    // the picked items are named on the batch so the log says what the
+    // Other-items money was for (paid-ness itself is tracked per vendor)
+    const otherNote = otherLines.length > 0
+      ? 'other items: ' + otherLines.map(l => `${otherOf(l.product)?.other_name || '?'} ×${l.kits.trim()}`).join(', ')
+      : '';
+    const noteWithOther = [pNote.trim(), otherNote].filter(Boolean).join(' | ');
     setPSaving(true); setPError('');
     try {
       // ONE batch: lines + freight + sends insert together or not at all,
@@ -241,8 +281,8 @@ export function VendorsPage() {
       // every problem; the owed figures reload so pressing Record again
       // raises the override confirmation when that was the reason.
       const res = await doPayBatch({
-        vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate, note: pNote,
-        lines: JSON.stringify(active.map(l => ({
+        vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate, note: noteWithOther,
+        lines: JSON.stringify(productLines.map(l => ({
           group_buy_product_id: l.product, kits_qty: l.kits.trim(), amount_usd: l.value.trim(),
           allow_over: overLines.has(l) ? 'true' : '',
           confirmed_owed: overLines.has(l) ? String(kitsOwed(l) ?? '') : '',
@@ -250,7 +290,7 @@ export function VendorsPage() {
         freight_usd: pFreight.trim(),
         allow_over_freight: freightOver ? 'true' : '',
         confirmed_freight_owed: freightOver ? String(freightOwed ?? '') : '',
-        other_usd: pOther.trim(),
+        other_usd: otherTotal > 0 ? otherTotal.toFixed(2) : '',
         allow_over_other: otherOver ? 'true' : '',
         confirmed_other_owed: otherOver ? String(otherOwed ?? '') : '',
         sends: JSON.stringify(sends.map(s => ({
@@ -380,6 +420,33 @@ export function VendorsPage() {
                   </TableCell>
                   <TableCell><StatusPill value={b.pay_status} /></TableCell>
                 </TableRow>
+                {/* Other-item adjustments bought from this vendor: owed at
+                    the vendor level (the "other items paid/owed" line on
+                    the vendor row), no kits or freight of their own */}
+                {withLines && otherItems.filter(o => o.vendor_code === b.vendor_code).map(o => (
+                  <TableRow key={`oi-${o.id}`} className="bg-muted/30 hover:bg-muted/40">
+                    <TableCell className="pl-8 text-sm text-muted-foreground">
+                      ↳ {o.other_name}
+                      <span className="ml-1.5 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
+                        title={`Not a campaign product — ${fmtNum(o.qty)} × ${fmtUSD(o.other_unit_cost_usd)} typed cost; no demand, kits or freight`}>
+                        other
+                      </span>
+                      <span className={`ml-1.5 rounded text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap ${adjChipClass(o.stock ? 'group stock' : o.beneficiary === 'both' ? 'outside sale' : 'personal')}`}
+                        title={o.stock ? 'Group stock — out of net profit, funded equally by the partners' : o.beneficiary === 'both' ? (o.received_at ? 'Outside customer — received' : 'Outside customer — awaiting their payment') : `Personal — deducted from ${o.beneficiary}'s payout`}>
+                        {o.stock ? 'group stock' : o.beneficiary === 'both' ? 'outside sale' : `personal: ${o.beneficiary}`}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right text-sm text-muted-foreground">
+                      {fmtUSD(o.expected_usd)}
+                      <span className="block text-[10px] whitespace-nowrap">{fmtNum(o.qty)} × {fmtUSD(o.other_unit_cost_usd)}</span>
+                    </TableCell>
+                    <TableCell />
+                    <TableCell />
+                    <TableCell className="text-right text-[10px] text-muted-foreground whitespace-nowrap">{fmtNum(o.qty)} units</TableCell>
+                    <TableCell />
+                    <TableCell />
+                  </TableRow>
+                ))}
                 {withLines && productProgress.filter(pp => pp.vendor_code === b.vendor_code).map(pp => {
                   const left = Number(pp.kits_demand) - Number(pp.kits_paid);
                   const adj = Number(pp.adj_kits);
@@ -478,7 +545,7 @@ export function VendorsPage() {
                 <Input type="date" value={pDate} disabled={pSaving} onChange={e => setPDate(e.target.value)} className="h-9 w-full" />
               </Field>
             </div>
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Product lines · kits paid for</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Product lines · kits paid for{vendorOtherItems.length > 0 ? ' · Other items pickable too' : ''}</p>
             {pLines.map((l, i) => (
               <div key={i} className="flex flex-wrap gap-2 items-center">
                 <Select value={l.product} disabled={pSaving} onValueChange={v => setLine(i, { product: v })}>
@@ -489,9 +556,16 @@ export function VendorsPage() {
                         {pp.sku_code} ({fmtNum(Number(pp.kits_demand) - Number(pp.kits_paid))} left @ {fmtUSD(pp.per_kit_cost_usd)})
                       </SelectItem>
                     ))}
+                    {/* the vendor's Other-item adjustments: paid as the
+                        batch's Other-items money, named on the note */}
+                    {vendorOtherItems.map(o => (
+                      <SelectItem key={OTHER_LINE + o.id} value={OTHER_LINE + o.id}>
+                        {o.other_name} · other ({fmtNum(o.qty)} × {fmtUSD(o.other_unit_cost_usd)})
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-                <Input placeholder="Kits" inputMode="decimal" value={l.kits} disabled={pSaving} onChange={e => setLine(i, { kits: e.target.value })} className="h-9 w-20" />
+                <Input placeholder={isOtherLine(l.product) ? 'Units' : 'Kits'} inputMode="decimal" value={l.kits} disabled={pSaving} onChange={e => setLine(i, { kits: e.target.value })} className="h-9 w-20" />
                 <Input placeholder="Value $" inputMode="decimal" value={l.value} disabled={pSaving} onChange={e => setLine(i, { value: e.target.value, valueDirty: e.target.value.trim() !== '' })} className="h-9 w-28" />
                 {pLines.length > 1 && (
                   <Button size="sm" variant="ghost" className="h-9 px-2 text-rose-400" disabled={pSaving} onClick={() => setPLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
@@ -506,8 +580,8 @@ export function VendorsPage() {
               <Field label="Freight $ · optional" className="w-40">
                 <Input inputMode="decimal" value={pFreight} disabled={pSaving} onChange={e => setPFreight(e.target.value)} className="h-9 w-full" />
               </Field>
-              <Field label="Other items $ · optional" className="w-40"
-                hint={otherOwed !== null && (otherOwed !== 0 || Number(pOther) > 0) ? `${fmtUSD(Math.max(otherOwed, 0))} still owed` : 'adjustments not in the campaign'}>
+              <Field label="Other items $ · lump, optional" className="w-44"
+                hint={otherOwed !== null && (otherOwed !== 0 || otherTotal > 0) ? `${fmtUSD(Math.max(otherOwed, 0))} still owed${otherLinesUsd > 0 ? ` · ${fmtUSD(otherLinesUsd)} in lines above` : ''}` : 'or pick Other items as lines above'}>
                 <Input inputMode="decimal" value={pOther} disabled={pSaving} onChange={e => setPOther(e.target.value)} className="h-9 w-full" />
               </Field>
             </div>
