@@ -110,6 +110,23 @@ where the code fails to honour one; do not propose replacing the decision.
   digital copy of a lab report; the product it certifies carries the
   testing cost. Settled with the owner 2026-10-25.
 
+- **A vendor payment is one batch: product lines plus the sends that
+  carried the money, on any mix of rails** (`1790102100`). The Vendors
+  page records through `addVendorPaymentBatch` only: lines (kits and $
+  per product) and freight say what was bought, sends (wallet, amount,
+  token, tx ref) say which wallet each transfer left from, and the batch
+  inserts whole or not at all with every refusal named. A batched line
+  carries no wallet (CHECK) — its money is on its sends — and the
+  deferred trigger `vendor_payment_batch_balanced` keeps sends equal to
+  lines for every writer, so a batch is removed only as a whole
+  (`deleteVendorPaymentBatch`, audited with every row). Kits and freight
+  owed keep reading the LINES (`v_vendor_balances`, per-product
+  progress, the kit caps); money out of a wallet reads
+  `v_vendor_outflows` (unbatched rows with a wallet, plus every send) —
+  never `vendor_payments.wallet_id` directly. The stock-plan commit and
+  the at-cost reallocation still write single unbatched rows. Settled
+  with the owner 2026-10-26.
+
 ## Verifying changes
 
 Serena's LSP diagnostics are the only type check. SQL actions are probed on

@@ -24,6 +24,10 @@ function deleteVendorPayment() {
           -- campaign-scoped like the list that displays it: a stale or
           -- cross-campaign id must not delete another campaign's payment
           AND vp.group_buy_id = {{params.group_buy_id}}::bigint
+          -- a line of a BATCH (1790102100) leaves only with its batch —
+          -- deleteVendorPaymentBatch; the DB would refuse the unbalanced
+          -- batch anyway, this just makes it a clean zero-row refusal
+          AND vp.batch_id IS NULL
         RETURNING vp.*
       ), unstamp AS (
         UPDATE stock_plan_items i

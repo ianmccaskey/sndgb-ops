@@ -55,7 +55,10 @@ function listRailRecon() {
                -- after the snapshot shows as drift until the next snapshot
                -- proves it — conservative and self-healing.
                COALESCE(SUM(vp.amount_usd) FILTER (WHERE wsnap.taken_at IS NOT NULL AND vp.created_at <= wsnap.taken_at), 0) AS vendor_paid_asof_usd
-        FROM vendor_payments vp
+        -- v_vendor_outflows (1790102100): unbatched payment rows with a
+        -- wallet PLUS every send of a batched payment — a payment sent on
+        -- two rails shows up under each rail with its own amount
+        FROM v_vendor_outflows vp
         JOIN wallets w2 ON w2.id = vp.wallet_id
         LEFT JOIN LATERAL (
           SELECT s.taken_at

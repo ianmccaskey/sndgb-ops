@@ -87,7 +87,7 @@ function upsertOrderItem() {
           -- the row hasn't been manually overridden by an operator. The
           -- NULLIF-before-cast is load-bearing: a raw ''::boolean cast can
           -- fail at plan time regardless of CASE branching (same trap as
-          -- addVendorPayment's kits/freight params).
+          -- addVendorPaymentBatch's lines/freight params).
           direct_ship = CASE
             WHEN NULLIF({{params.direct_ship}}::text, '')::boolean IS NOT NULL
                  AND order_items.direct_ship_source = 'upstream'

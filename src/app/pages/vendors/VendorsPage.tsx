@@ -4,8 +4,9 @@ import listVendors from '@/actions/vendors/listVendors';
 import listVendorBalances from '@/actions/vendors/listVendorBalances';
 import listVendorPayments from '@/actions/vendors/listVendorPayments';
 import listVendorProductProgress from '@/actions/vendors/listVendorProductProgress';
-import addVendorPayment from '@/actions/vendors/addVendorPayment';
+import addVendorPaymentBatch from '@/actions/vendors/addVendorPaymentBatch';
 import deleteVendorPayment from '@/actions/vendors/deleteVendorPayment';
+import deleteVendorPaymentBatch from '@/actions/vendors/deleteVendorPaymentBatch';
 import saveVendor from '@/actions/vendors/saveVendor';
 import listWallets from '@/actions/financials/listWallets';
 import { useApp } from '@/app/AppContext';
@@ -28,12 +29,16 @@ type Balance = {
   product_owed_usd: string; freight_demand_usd: string; kits_demand: string;
   kits_paid: string; freight_paid_usd: string;
 };
+type Send = { id: number; wallet_name: string; chain: string; amount_usd: string; method: string | null; tx_ref: string | null };
 type Payment = {
   id: number; paid_on: string; amount_usd: string; method: string | null;
   receipt_ref: string | null; note: string | null; vendor_code: string; wallet_name: string | null;
   kits_qty: string | null; freight_usd: string | null; sku_code: string | null;
+  // a line of a batched payment (1790102100): the money is on the batch's
+  // sends, repeated on every line of the batch; the log shows them once
+  batch_id: number | null; sends: Send[] | null;
 };
-type Wallet = { id: number; name: string };
+type Wallet = { id: number; name: string; chain: string; active: boolean };
 type ProductProgress = {
   group_buy_product_id: number; vendor_code: string; sku_code: string;
   kits_demand: string; kits_paid: string; vendor_order_value_usd: string; per_kit_cost_usd: string;
@@ -69,22 +74,29 @@ export function VendorsPage() {
   const wallets = rows<Wallet>(rawWallets);
   const productProgress = rows<ProductProgress>(rawProgress);
 
-  const [doPay] = useMutateAction(addVendorPayment);
+  const [doPayBatch] = useMutateAction(addVendorPaymentBatch);
   const [doSaveVendor] = useMutateAction(saveVendor);
   const [doDeletePayment] = useMutateAction(deleteVendorPayment);
+  const [doDeleteBatch] = useMutateAction(deleteVendorPaymentBatch);
 
   const [pVendor, setPVendor] = useState('');
   const [pDate, setPDate] = useState('');
-  const [pWallet, setPWallet] = useState('');
-  const [pMethod, setPMethod] = useState('USDC');
-  const [pRef, setPRef] = useState('');
   const [pNote, setPNote] = useState('');
   // one payment = one or more product lines; each line's value auto-computes
   // from kits × the product's current per-kit vendor cost, editable for
-  // discounts. Every line is recorded as its own guarded payment row.
+  // discounts. The whole payment (lines, freight, sends) is recorded as ONE
+  // batch, all or nothing.
   type PayLine = { product: string; kits: string; value: string; valueDirty: boolean };
-  const [pLines, setPLines] = useState<PayLine[]>([{ product: '', kits: '', value: '', valueDirty: false }]);
+  const blankLine = (): PayLine => ({ product: '', kits: '', value: '', valueDirty: false });
+  const [pLines, setPLines] = useState<PayLine[]>([blankLine()]);
   const [pFreight, setPFreight] = useState('');
+  // the SENDS that carried the money: one per on-chain transfer, each from
+  // its own wallet (rail) — a payment made as "$20,000 on SOL + $13,025 on
+  // ETH" is two sends on one batch (Ian, 2026-10-26). Their total must
+  // equal the lines + freight total; the server refuses otherwise.
+  type PaySend = { wallet: string; amount: string; amountDirty: boolean; method: string; ref: string };
+  const blankSend = (): PaySend => ({ wallet: '', amount: '', amountDirty: false, method: 'USDC', ref: '' });
+  const [pSends, setPSends] = useState<PaySend[]>([blankSend()]);
   const [pError, setPError] = useState('');
   const [pSaving, setPSaving] = useState(false);
 
@@ -135,6 +147,20 @@ export function VendorsPage() {
   const linesTotal = pLines.reduce((sum, l) => sum + (Number(l.value) > 0 ? Number(l.value) : 0), 0);
   const paymentTotal = Math.round((linesTotal + (Number(pFreight) > 0 ? Number(pFreight) : 0)) * 100) / 100;
 
+  const setSend = (i: number, patch: Partial<PaySend>) =>
+    setPSends(ss => ss.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  // the FIRST send the operator has not hand-typed an amount into takes
+  // whatever the typed sends leave of the total: a single-rail payment
+  // needs no amount typed at all, a two-rail one needs only the first.
+  // Clearing a typed amount hands the field back to the auto-fill.
+  const typedSum = pSends.reduce((s, x) => s + (x.amountDirty && Number(x.amount) > 0 ? Number(x.amount) : 0), 0);
+  const autoIdx = pSends.findIndex(x => !x.amountDirty);
+  const autoAmount = Math.round((paymentTotal - typedSum) * 100) / 100;
+  const sendAmount = (i: number) =>
+    pSends[i].amountDirty ? pSends[i].amount : (i === autoIdx && autoAmount > 0 ? autoAmount.toFixed(2) : '');
+  const sendsTotal = Math.round(pSends.reduce((s, _, i) => s + (Number(sendAmount(i)) > 0 ? Number(sendAmount(i)) : 0), 0) * 100) / 100;
+  const sendsMatch = Math.round(sendsTotal * 100) === Math.round(paymentTotal * 100);
+
   const recordPayment = async () => {
     const active = pLines.filter(l => l.product || l.kits.trim() || l.value.trim());
     if (!pVendor || !pDate) { setPError('Vendor and date are required.'); return; }
@@ -145,6 +171,19 @@ export function VendorsPage() {
       if (!/^\d+(?:\.\d{1,2})?$/.test(l.value.trim()) || !(Number(l.value) > 0)) { setPError('Every line needs a positive $ value (max 2 decimals).'); return; }
     }
     if (pFreight.trim() !== '' && (!/^\d+(?:\.\d{1,2})?$/.test(pFreight.trim()) || !(Number(pFreight) >= 0))) { setPError('Freight must be a dollar amount with at most 2 decimals.'); return; }
+    const sends = pSends
+      .map((s, i) => ({ ...s, amount: sendAmount(i) }))
+      .filter(s => s.wallet || s.amount.trim() || s.ref.trim());
+    if (sends.length === 0) { setPError('Add at least one send — the wallet the money left from.'); return; }
+    for (const s of sends) {
+      if (!s.wallet) { setPError('Every send needs a wallet.'); return; }
+      if (!/^\d+(?:\.\d{1,2})?$/.test(s.amount.trim()) || !(Number(s.amount) > 0)) { setPError('Every send needs a positive $ amount (max 2 decimals).'); return; }
+    }
+    const sendsCents = sends.reduce((c, s) => c + Math.round(Number(s.amount) * 100), 0);
+    if (sendsCents !== Math.round(paymentTotal * 100)) {
+      setPError(`Sends total ${fmtUSD(sendsCents / 100)} must equal the lines + freight total ${fmtUSD(paymentTotal)}.`);
+      return;
+    }
     // deliberate over-buys (stocking beyond current demand) are allowed, but
     // only through an explicit confirmation — the server cap stays on for
     // anything not confirmed, so a typo still refuses. The owed figure the
@@ -181,63 +220,36 @@ export function VendorsPage() {
       if (!window.confirm(`Freight ${fmtUSD(Number(pFreight))} exceeds the ledger: ${ledgerLine}.\n\nVendor-added fees are a valid reason. Record anyway? The vendor breakdown will flag the freight as over-paid.`)) return;
     }
     setPSaving(true); setPError('');
-    const failed: string[] = [];
-    const recordedLines = new Set<PayLine>();
-    let freightRecorded = false;
     try {
-      // each line is its own guarded payment row (single-row inserts are a
-      // platform requirement); shared date/wallet/method/receipt/note tie
-      // them together in the log
-      for (const l of active) {
-        const sku = vendorProducts.find(v => String(v.group_buy_product_id) === l.product)?.sku_code || '?';
-        const res = await doPay({
-          vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate,
-          amount_usd: Number(l.value), wallet_id: pWallet, method: pMethod, receipt_ref: pRef, note: pNote,
-          kits_qty: l.kits.trim(), freight_usd: '', group_buy_product_id: l.product,
+      // ONE batch: lines + freight + sends insert together or not at all,
+      // so the form never holds a half-recorded payment. A refusal names
+      // every problem; the owed figures reload so pressing Record again
+      // raises the override confirmation when that was the reason.
+      const res = await doPayBatch({
+        vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate, note: pNote,
+        lines: JSON.stringify(active.map(l => ({
+          group_buy_product_id: l.product, kits_qty: l.kits.trim(), amount_usd: l.value.trim(),
           allow_over: overLines.has(l) ? 'true' : '',
           confirmed_owed: overLines.has(l) ? String(kitsOwed(l) ?? '') : '',
-          allow_over_freight: '', confirmed_freight_owed: '',
-          actor: userName,
-        }) as unknown[] | null;
-        const wrote = Array.isArray(res) ? res.length > 0 : !!res;
-        if (wrote) recordedLines.add(l);
-        // only reachable when this page's owed figures were stale (someone
-        // else recorded meanwhile) — the reload below refreshes them, so
-        // pressing Record again raises the override confirmation
-        else failed.push(sku + ' (refused — exceeds kits still owed; press Record again to confirm the over-buy)');
-      }
-      if (Number(pFreight) > 0) {
-        const res = await doPay({
-          vendor_id: Number(pVendor), group_buy_id: groupBuyId, paid_on: pDate,
-          amount_usd: Number(pFreight), wallet_id: pWallet, method: pMethod, receipt_ref: pRef,
-          note: (pNote ? pNote + ' | ' : '') + 'freight',
-          kits_qty: '', freight_usd: pFreight.trim(), group_buy_product_id: '',
-          allow_over: '', confirmed_owed: '',
-          allow_over_freight: freightOver ? 'true' : '',
-          confirmed_freight_owed: freightOver ? String(freightOwed ?? '') : '',
-          actor: userName,
-        }) as unknown[] | null;
-        const wrote = Array.isArray(res) ? res.length > 0 : !!res;
-        if (wrote) freightRecorded = true;
-        else failed.push('freight (refused — exceeds freight still owed, or the ledger moved while confirming; press Record again to confirm the override)');
-      }
-      if (failed.length > 0) {
-        setPError('Some lines were NOT recorded: ' + failed.join('; ') + '. Recorded lines moved to the log below; the form now holds only what is still unrecorded.');
+        }))),
+        freight_usd: pFreight.trim(),
+        allow_over_freight: freightOver ? 'true' : '',
+        confirmed_freight_owed: freightOver ? String(freightOwed ?? '') : '',
+        sends: JSON.stringify(sends.map(s => ({
+          wallet_id: s.wallet, amount_usd: s.amount.trim(), method: s.method.trim(), tx_ref: s.ref.trim(),
+        }))),
+        actor: userName,
+      }) as { batch_id: number | string | null; refused: { what: string; why: string }[] | null }[] | null;
+      const row = Array.isArray(res) ? res[0] : null;
+      if (row && row.batch_id != null) {
+        setPLines([blankLine()]); setPFreight(''); setPSends([blankSend()]); setPNote('');
       } else {
-        setPRef(''); setPNote('');
+        const why = (row?.refused || []).map(r => `${r.what}: ${r.why}`).join('; ');
+        setPError('Not recorded — nothing was written. ' + (why || 'The server refused the payment.'));
       }
     } catch (e: unknown) {
-      setPError((e instanceof Error ? e.message : 'Failed to record payment') + ' — recorded lines moved to the log; the form keeps only what is still unrecorded.');
+      setPError(e instanceof Error ? e.message : 'Failed to record payment');
     } finally {
-      // Runs on success, refusal, AND thrown errors alike: the form must
-      // always end up holding EXACTLY the unrecorded subset, so a retry can
-      // never duplicate a row that already landed (recorded lines are in
-      // the log with their audited Remove path).
-      setPLines(ls => {
-        const remaining = ls.filter(l => !recordedLines.has(l) && (l.product || l.kits.trim() || l.value.trim()));
-        return remaining.length > 0 ? remaining : [{ product: '', kits: '', value: '', valueDirty: false }];
-      });
-      if (freightRecorded) setPFreight('');
       reloadBalances(); reloadPayments(); reloadProgress();
       setPSaving(false);
     }
@@ -429,7 +441,7 @@ export function VendorsPage() {
             {/* persistent labels (form-UX sweep 2026-09-12) */}
             <div className="grid gap-3 grid-cols-2">
               <Field label="Vendor">
-                <Select value={pVendor} disabled={pSaving} onValueChange={v => { setPVendor(v); setPLines([{ product: '', kits: '', value: '', valueDirty: false }]); }}>
+                <Select value={pVendor} disabled={pSaving} onValueChange={v => { setPVendor(v); setPLines([blankLine()]); }}>
                   <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
                   <SelectContent>
                     {vendors.filter(v => v.active).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.code}</SelectItem>)}
@@ -462,36 +474,53 @@ export function VendorsPage() {
             ))}
             <div className="flex flex-wrap gap-2 items-center">
               <Button size="sm" variant="outline" className="h-8 text-xs" disabled={!pVendor || pSaving}
-                onClick={() => setPLines(ls => [...ls, { product: '', kits: '', value: '', valueDirty: false }])}>
+                onClick={() => setPLines(ls => [...ls, blankLine()])}>
                 + Add product line
               </Button>
               <Field label="Freight $ · optional" className="w-40">
                 <Input inputMode="decimal" value={pFreight} disabled={pSaving} onChange={e => setPFreight(e.target.value)} className="h-9 w-full" />
               </Field>
             </div>
-            <div className="grid gap-3 grid-cols-2">
-              <Field label="Paid from wallet">
-                <Select value={pWallet} disabled={pSaving} onValueChange={setPWallet}>
-                  <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick…" /></SelectTrigger>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Sends · wallet · amount · token · tx ref</p>
+            {pSends.map((s, i) => (
+              <div key={i} className="flex flex-wrap gap-2 items-center">
+                <Select value={s.wallet} disabled={pSaving} onValueChange={v => setSend(i, { wallet: v })}>
+                  <SelectTrigger className="h-9 w-36"><SelectValue placeholder="Wallet" /></SelectTrigger>
                   <SelectContent>
-                    {wallets.map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                    {wallets.filter(w => w.active).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
-              </Field>
-              <Field label="Method" hint="e.g. USDC, wire">
-                <Input value={pMethod} disabled={pSaving} onChange={e => setPMethod(e.target.value)} className="h-9 w-full" />
-              </Field>
-              <Field label="Receipt / tx ref · optional">
-                <Input value={pRef} disabled={pSaving} onChange={e => setPRef(e.target.value)} className="h-9 w-full" />
-              </Field>
-              <Field label="Note · optional">
+                <Input placeholder="Amount $" inputMode="decimal" value={sendAmount(i)} disabled={pSaving}
+                  title={s.amountDirty ? 'Typed amount — clear it to auto-fill the remainder' : 'Auto-fills with what the other sends leave of the total'}
+                  onChange={e => setSend(i, { amount: e.target.value, amountDirty: e.target.value.trim() !== '' })} className="h-9 w-28" />
+                <Input placeholder="USDC" value={s.method} disabled={pSaving} onChange={e => setSend(i, { method: e.target.value })} className="h-9 w-20" />
+                <Input placeholder="Tx hash / receipt · optional" value={s.ref} disabled={pSaving} onChange={e => setSend(i, { ref: e.target.value })} className="h-9 flex-1 min-w-40" />
+                {pSends.length > 1 && (
+                  <Button size="sm" variant="ghost" className="h-9 px-2 text-rose-400" disabled={pSaving} onClick={() => setPSends(ss => ss.filter((_, j) => j !== i))}>✕</Button>
+                )}
+              </div>
+            ))}
+            <div className="flex flex-wrap gap-2 items-end">
+              <Button size="sm" variant="outline" className="h-8 text-xs" disabled={pSaving}
+                title="The same payment sent on another rail — e.g. part on SOL, the rest on ETH"
+                onClick={() => setPSends(ss => [...ss, blankSend()])}>
+                + Add send (another rail)
+              </Button>
+              <Field label="Note · optional" className="flex-1 min-w-40">
                 <Input value={pNote} disabled={pSaving} onChange={e => setPNote(e.target.value)} className="h-9 w-full" />
               </Field>
             </div>
             {pError && <p className="text-sm text-rose-400">{pError}</p>}
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold">Total: {fmtUSD(paymentTotal)}</span>
-              <Button size="sm" onClick={recordPayment} disabled={pSaving || paymentTotal <= 0}>Record payment</Button>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm font-semibold">
+                Total: {fmtUSD(paymentTotal)}
+                {paymentTotal > 0 && (
+                  <span className={`block text-[10px] font-normal ${sendsMatch ? 'text-emerald-300' : 'text-rose-400'}`}>
+                    {sendsMatch ? `sends cover it (${pSends.filter((_, i) => Number(sendAmount(i)) > 0).length} send${pSends.filter((_, i) => Number(sendAmount(i)) > 0).length === 1 ? '' : 's'})` : `sends total ${fmtUSD(sendsTotal)} — must equal the total`}
+                  </span>
+                )}
+              </span>
+              <Button size="sm" onClick={recordPayment} disabled={pSaving || paymentTotal <= 0 || !sendsMatch}>Record payment</Button>
             </div>
           </CardContent>
         </Card>
@@ -530,33 +559,81 @@ export function VendorsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {payments.map(p => (
-                <TableRow key={p.id}>
-                  <TableCell>{fmtDate(p.paid_on)}</TableCell>
-                  <TableCell className="font-medium">{p.vendor_code}</TableCell>
-                  <TableCell className="text-right">{fmtUSD(p.amount_usd)}</TableCell>
-                  <TableCell>{p.sku_code || '—'}</TableCell>
-                  <TableCell className="text-right">{p.kits_qty != null ? fmtNum(p.kits_qty) : '—'}</TableCell>
-                  <TableCell className="text-right">{p.freight_usd != null ? fmtUSD(p.freight_usd) : '—'}</TableCell>
-                  <TableCell>{p.wallet_name || '—'}</TableCell>
-                  <TableCell>{p.method || '—'}</TableCell>
-                  <TableCell className="text-muted-foreground">{p.note || ''}</TableCell>
-                  <TableCell>
-                    <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400"
-                      onClick={async () => {
-                        // Deleting a payment moves real balances — make the
-                        // operator confirm exactly which one they're removing.
-                        if (!window.confirm(`Remove this vendor payment?\n\n${p.vendor_code} — ${fmtUSD(p.amount_usd)} on ${fmtDate(p.paid_on)}${p.sku_code ? ` (${p.sku_code})` : ''}\n\nThe full payment is preserved in the audit log for reconstruction.`)) return;
-                        const res = await doDeletePayment({ id: p.id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
-                        const wrote = Array.isArray(res) ? res.length > 0 : !!res;
-                        if (!wrote) { setPError('Payment not removed — it may belong to a different campaign or was already deleted.'); return; }
-                        reloadBalances(); reloadPayments(); reloadProgress();
-                      }}>
-                      Remove
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {payments.map((p, i) => {
+                // a batched payment's lines arrive contiguous (the loader
+                // orders by batch): its FIRST line gets a header row above
+                // it carrying the batch total, its sends (one per rail) and
+                // the one Remove that takes the whole batch
+                const batched = p.batch_id != null;
+                const firstOfBatch = batched && (i === 0 || payments[i - 1].batch_id !== p.batch_id);
+                const batchLines = batched ? payments.filter(q => q.batch_id === p.batch_id) : [];
+                const batchTotal = batchLines.reduce((s, q) => s + Number(q.amount_usd), 0);
+                return (
+                  <React.Fragment key={p.id}>
+                    {firstOfBatch && (
+                      <TableRow className="bg-muted/30 hover:bg-muted/40">
+                        <TableCell>{fmtDate(p.paid_on)}</TableCell>
+                        <TableCell className="font-medium">{p.vendor_code}</TableCell>
+                        <TableCell className="text-right font-medium">{fmtUSD(batchTotal)}</TableCell>
+                        <TableCell colSpan={6} className="text-xs">
+                          <span className="text-muted-foreground mr-1">{batchLines.length} line{batchLines.length === 1 ? '' : 's'} · sent as</span>
+                          {(p.sends || []).map(s => (
+                            <span key={s.id} className="inline-flex items-center gap-1 rounded bg-slate-400/10 px-1.5 py-0.5 mr-1.5 whitespace-nowrap"
+                              title={s.tx_ref ? `${s.wallet_name} (${s.chain}) · ${s.method || '—'} · ${fmtUSD(s.amount_usd)} · ${s.tx_ref}` : `${s.wallet_name} (${s.chain}) · ${s.method || '—'} · ${fmtUSD(s.amount_usd)}`}>
+                              <span className="font-medium">{s.wallet_name}</span> · {s.method || '—'} · {fmtUSD(s.amount_usd)}
+                              {s.tx_ref && <span className="text-muted-foreground font-mono">· {s.tx_ref.length > 14 ? s.tx_ref.slice(0, 14) + '…' : s.tx_ref}</span>}
+                            </span>
+                          ))}
+                          {p.note && <span className="block text-muted-foreground mt-0.5">{p.note}</span>}
+                        </TableCell>
+                        <TableCell>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400"
+                            onClick={async () => {
+                              // Deleting a payment moves real balances — the
+                              // whole batch goes (every line and every send).
+                              const lineText = batchLines.map(q => `  ${q.sku_code || 'freight'} — ${fmtUSD(q.amount_usd)}${q.kits_qty != null ? ` (${fmtNum(q.kits_qty)} kits)` : ''}`).join('\n');
+                              const sendText = (p.sends || []).map(s => `  ${s.wallet_name} — ${fmtUSD(s.amount_usd)}${s.method ? ` ${s.method}` : ''}`).join('\n');
+                              if (!window.confirm(`Remove this vendor payment batch?\n\n${p.vendor_code} — ${fmtUSD(batchTotal)} on ${fmtDate(p.paid_on)}\n\nLines:\n${lineText}\n\nSends:\n${sendText}\n\nEvery line and send is preserved in the audit log for reconstruction.`)) return;
+                              const res = await doDeleteBatch({ batch_id: p.batch_id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
+                              const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+                              if (!wrote) { setPError('Batch not removed — it may belong to a different campaign or was already deleted.'); return; }
+                              reloadBalances(); reloadPayments(); reloadProgress();
+                            }}>
+                            Remove batch
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    <TableRow>
+                      <TableCell className={batched ? 'pl-6 text-muted-foreground' : ''}>{batched ? '↳' : fmtDate(p.paid_on)}</TableCell>
+                      <TableCell className={batched ? 'text-muted-foreground' : 'font-medium'}>{p.vendor_code}</TableCell>
+                      <TableCell className="text-right">{fmtUSD(p.amount_usd)}</TableCell>
+                      <TableCell>{p.sku_code || (p.freight_usd != null ? 'freight' : '—')}</TableCell>
+                      <TableCell className="text-right">{p.kits_qty != null ? fmtNum(p.kits_qty) : '—'}</TableCell>
+                      <TableCell className="text-right">{p.freight_usd != null ? fmtUSD(p.freight_usd) : '—'}</TableCell>
+                      <TableCell className="text-muted-foreground">{batched ? 'see sends' : (p.wallet_name || '—')}</TableCell>
+                      <TableCell>{batched ? '' : (p.method || '—')}</TableCell>
+                      <TableCell className="text-muted-foreground">{batched ? '' : (p.note || '')}</TableCell>
+                      <TableCell>
+                        {!batched && (
+                          <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400"
+                            onClick={async () => {
+                              // Deleting a payment moves real balances — make the
+                              // operator confirm exactly which one they're removing.
+                              if (!window.confirm(`Remove this vendor payment?\n\n${p.vendor_code} — ${fmtUSD(p.amount_usd)} on ${fmtDate(p.paid_on)}${p.sku_code ? ` (${p.sku_code})` : ''}\n\nThe full payment is preserved in the audit log for reconstruction.`)) return;
+                              const res = await doDeletePayment({ id: p.id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
+                              const wrote = Array.isArray(res) ? res.length > 0 : !!res;
+                              if (!wrote) { setPError('Payment not removed — it may belong to a different campaign or was already deleted.'); return; }
+                              reloadBalances(); reloadPayments(); reloadProgress();
+                            }}>
+                            Remove
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  </React.Fragment>
+                );
+              })}
               {payments.length === 0 && (
                 <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-6">No vendor payments yet.</TableCell></TableRow>
               )}
