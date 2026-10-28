@@ -342,6 +342,104 @@ export function VendorsPage() {
         </div>
       )}
 
+      {/* STILL TO BUY — the shopping list, one card per product vendor
+          with anything left: each product's remaining kits (demand − paid,
+          never below zero) as the headline figure, with a progress bar and
+          the $ those kits cost at the blended per-kit price; freight and
+          Other items still owed as footer lines. The ledger table below
+          keeps the full owed / paid / balance accounting; this card answers
+          "what do I still have to order from them" at a glance (Ian,
+          2026-10-27). Over-bought products are listed, not netted. */}
+      {(() => {
+        const cards = productBalances.map(b => {
+          const lines = productProgress
+            .filter(pp => pp.vendor_code === b.vendor_code)
+            .map(pp => {
+              const demand = Number(pp.kits_demand);
+              const paid = Number(pp.kits_paid);
+              const left = Math.round((demand - paid) * 100) / 100;
+              const usd = Math.round(Math.max(left, 0) * Number(pp.per_kit_cost_usd) * 100) / 100;
+              return { pp, demand, paid, left, usd };
+            })
+            .sort((x, y) => y.usd - x.usd || x.pp.sku_code.localeCompare(y.pp.sku_code));
+          const toBuy = lines.filter(l => l.left > 0);
+          const done = lines.filter(l => l.left === 0 && l.demand > 0);
+          const over = lines.filter(l => l.left < 0);
+          const kitsLeft = Math.round(toBuy.reduce((s, l) => s + l.left, 0) * 100) / 100;
+          const usdLeft = remainingProductUsd(b.vendor_code);
+          const freightLeft = Math.round((Number(b.freight_demand_usd) - Number(b.freight_paid_usd)) * 100) / 100;
+          const otherLeft = Math.round((Number(b.other_owed_usd) - Number(b.other_paid_usd)) * 100) / 100;
+          const totalLeft = Math.round((usdLeft + Math.max(freightLeft, 0) + Math.max(otherLeft, 0)) * 100) / 100;
+          return { b, toBuy, done, over, kitsLeft, usdLeft, freightLeft, otherLeft, totalLeft };
+        });
+        const open = cards.filter(c => c.kitsLeft > 0 || c.freightLeft > 0 || c.otherLeft > 0);
+        if (cards.length > 0 && open.length === 0) {
+          return (
+            <p className="text-sm text-emerald-300">Every vendor order is bought in full — nothing left to buy.</p>
+          );
+        }
+        return open.length > 0 ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {open.map(c => (
+              <Card key={c.b.vendor_id} className="border-cyan-400/30">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                    <span>Still to buy · {c.b.vendor_code}</span>
+                    <span className="text-sm font-normal text-muted-foreground tabular-nums">
+                      {c.kitsLeft > 0 ? <><span className="text-foreground font-semibold">{fmtNum(c.kitsLeft)}</span> kits · </> : null}
+                      {fmtUSD(c.totalLeft)} to pay
+                    </span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2.5">
+                  {c.toBuy.map(l => {
+                    const pct = l.demand > 0 ? Math.min(l.paid / l.demand, 1) * 100 : 0;
+                    return (
+                      <div key={l.pp.group_buy_product_id} className="grid grid-cols-[minmax(0,1fr)_5.5rem_6rem] gap-x-3 items-center">
+                        <div className="min-w-0">
+                          <div className="flex justify-between gap-2 text-sm">
+                            <span className="font-medium truncate">{l.pp.sku_code}</span>
+                            <span className="text-xs text-muted-foreground whitespace-nowrap tabular-nums">{fmtNum(l.paid)}/{fmtNum(l.demand)} paid</span>
+                          </div>
+                          <div className="h-1.5 rounded bg-muted mt-1 overflow-hidden" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100} aria-label={`${l.pp.sku_code} kits paid`}>
+                            <div className="h-full bg-cyan-400/70" style={{ width: `${pct}%` }} />
+                          </div>
+                        </div>
+                        <div className="text-right whitespace-nowrap tabular-nums">
+                          <span className="text-lg font-semibold">{fmtNum(l.left)}</span>
+                          <span className="text-xs text-muted-foreground"> kits</span>
+                        </div>
+                        <div className="text-right text-sm tabular-nums whitespace-nowrap" title={`${fmtNum(l.left)} kits × ${fmtUSD(l.pp.per_kit_cost_usd)}/kit`}>
+                          {fmtUSD(l.usd)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {c.over.length > 0 && (
+                    <p className="text-xs text-amber-300">
+                      Over-bought: {c.over.map(l => `${l.pp.sku_code} by ${fmtNum(-l.left)}`).join(', ')} — not netted against the kits above.
+                    </p>
+                  )}
+                  {c.done.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      <span className="text-emerald-300">Bought in full:</span> {c.done.map(l => l.pp.sku_code).join(', ')}
+                    </p>
+                  )}
+                  {(c.freightLeft !== 0 || c.otherLeft !== 0) && (
+                    <div className="border-t pt-2 text-xs text-muted-foreground space-y-0.5">
+                      {c.freightLeft > 0 && <div className="flex justify-between"><span>Freight still owed</span><span className="tabular-nums">{fmtUSD(c.freightLeft)}</span></div>}
+                      {c.freightLeft < 0 && <div className="flex justify-between text-amber-300"><span>Freight over-paid</span><span className="tabular-nums">{fmtUSD(-c.freightLeft)}</span></div>}
+                      {c.otherLeft > 0 && <div className="flex justify-between"><span>Other items still owed</span><span className="tabular-nums">{fmtUSD(c.otherLeft)}</span></div>}
+                      {c.otherLeft < 0 && <div className="flex justify-between text-amber-300"><span>Other items over-paid</span><span className="tabular-nums">{fmtUSD(-c.otherLeft)}</span></div>}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : null;
+      })()}
+
       <div className="border rounded-lg overflow-x-auto">
         <Table>
           <TableHeader>
