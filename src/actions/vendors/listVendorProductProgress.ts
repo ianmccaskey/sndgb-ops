@@ -13,6 +13,12 @@ import { action } from '@uibakery/data';
  * v_moq_progress, so preordered at-cost rows are excluded) with adj_detail
  * per kind: GB-price admin rows, outside at-cost sales, personal stock,
  * and stock-plan commits.
+ *
+ * price_variance_usd (1790102800): what the vendor charged above (+) or
+ * below (−) list on this product's kit lines that were recorded with a
+ * list value — the sum of amount − list_value over them. per_kit_cost_usd
+ * stays the LIST figure: it prices the kits still to buy, not the ones
+ * already bought.
  */
 function listVendorProductProgress() {
   return action('listVendorProductProgress', 'SQL', {
@@ -30,10 +36,12 @@ function listVendorProductProgress() {
              CASE WHEN m.ordered_kits > 0
                THEN ROUND(m.vendor_order_value_usd / m.ordered_kits, 4)
                ELSE m.unit_cost_usd END AS per_kit_cost_usd,
-             COALESCE(vp.kits_paid, 0) AS kits_paid
+             COALESCE(vp.kits_paid, 0) AS kits_paid,
+             COALESCE(vp.price_variance_usd, 0) AS price_variance_usd
       FROM v_moq_progress m
       LEFT JOIN (
-        SELECT group_buy_product_id, SUM(COALESCE(kits_qty, 0)) AS kits_paid
+        SELECT group_buy_product_id, SUM(COALESCE(kits_qty, 0)) AS kits_paid,
+               SUM(amount_usd - list_value_usd) FILTER (WHERE list_value_usd IS NOT NULL) AS price_variance_usd
         FROM vendor_payments
         WHERE group_buy_id = {{params.group_buy_id}}::bigint
           AND group_buy_product_id IS NOT NULL

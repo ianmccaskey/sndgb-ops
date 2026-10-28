@@ -14,6 +14,7 @@ import addAdjustment from '@/actions/campaign/addAdjustment';
 import addOtherAdjustment from '@/actions/campaign/addOtherAdjustment';
 import deleteAdjustment from '@/actions/campaign/deleteAdjustment';
 import markAdjustmentReceived from '@/actions/campaign/markAdjustmentReceived';
+import updateOtherAdjustment from '@/actions/campaign/updateOtherAdjustment';
 import reallocateAtCostAdjustment from '@/actions/campaign/reallocateAtCostAdjustment';
 import listVendorProductProgress from '@/actions/vendors/listVendorProductProgress';
 import listWallets from '@/actions/financials/listWallets';
@@ -105,6 +106,7 @@ export function ProductsPage() {
   const [doAddOther] = useMutateAction(addOtherAdjustment);
   const [doDelAdj] = useMutateAction(deleteAdjustment);
   const [doMarkReceived] = useMutateAction(markAdjustmentReceived);
+  const [doUpdateOther] = useMutateAction(updateOtherAdjustment);
   const [doReallocate] = useMutateAction(reallocateAtCostAdjustment);
   const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets] = useLoadAction(listWallets, [], {});
@@ -214,6 +216,10 @@ export function ProductsPage() {
   const [aOtherName, setAOtherName] = useState('');
   const [aOtherCost, setAOtherCost] = useState('');
   const [aOtherVendor, setAOtherVendor] = useState('');
+  // an Other item being corrected in place (name, qty, unit cost) after
+  // the vendor changed its price or count
+  const [oEdit, setOEdit] = useState<{ id: number; name: string; qty: string; cost: string; note: string } | null>(null);
+  const [oSaving, setOSaving] = useState(false);
   // only vendors with a product line in THIS campaign can carry an Other
   // item (the vendor balance row the cost lands on is keyed by those lines)
   const campaignVendorCodes = new Set(campaign.map(c => c.vendor_code));
@@ -389,6 +395,35 @@ export function ProductsPage() {
     setAError('');
     reloadAdj(); reloadCampaign(); reloadProgress();
     return true;
+  };
+
+  // the vendor changed an Other item's price or count (Ian, 2026-10-28: R10
+  // listed at $40/kit, charged at $30): correct the row in place —
+  // expected_usd re-snapshots as qty × cost and flows where it already
+  // does (vendor Other items owed, the party's payout deduction / net
+  // profit / the receivable). The server refuses a received sale and a
+  // cost below what the vendor was already paid for the item.
+  const saveOtherEdit = async () => {
+    if (!oEdit) return;
+    const cost = oEdit.cost.trim(), qty = oEdit.qty.trim();
+    if (!oEdit.name.trim()) { setAError('The item needs a name.'); return; }
+    if (!/^\d+(?:\.\d{1,2})?$/.test(cost) || !(Number(cost) > 0)) { setAError('Unit cost must be a positive $ amount with at most 2 decimals.'); return; }
+    if (!/^\d+$/.test(qty) || !(Number(qty) > 0)) { setAError('Other items are bought in whole units.'); return; }
+    setOSaving(true);
+    try {
+      const res = await doUpdateOther({
+        id: oEdit.id, group_buy_id: groupBuyId, other_name: oEdit.name.trim(), unit_cost_usd: cost, qty,
+        note: oEdit.note.trim(), actor: userName,
+      }) as { id: number | string | null; refused: string | null }[] | null;
+      const row = Array.isArray(res) ? res[0] : null;
+      if (!row || row.id == null) { setAError('Not changed — ' + (row?.refused || 'the server refused the edit.')); return; }
+      setAError(''); setOEdit(null);
+      reloadAdj(); reloadCampaign();
+    } catch (e: unknown) {
+      setAError(e instanceof Error ? e.message : 'Failed to update the Other item');
+    } finally {
+      setOSaving(false);
+    }
   };
 
   const reallocateToGb = async () => {
@@ -882,10 +917,12 @@ export function ProductsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {adjustments.map(a => (
+                {adjustments.map(a => { const editingOther = oEdit !== null && oEdit.id === a.id; return (
                   <TableRow key={a.id}>
                     <TableCell className="font-medium">
-                      {a.sku_code}
+                      {editingOther ? (
+                        <Input value={oEdit!.name} disabled={oSaving} placeholder="Item name" onChange={e => setOEdit({ ...oEdit!, name: e.target.value })} className="h-8 w-36" />
+                      ) : a.sku_code}
                       {a.group_buy_product_id == null && (
                         <span className="ml-1.5 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                           title={`Not a campaign product — ${a.vendor_code || 'vendor'} is owed ${fmtUSD(a.other_unit_cost_usd)} per unit; no demand, kits or freight`}>
@@ -893,7 +930,11 @@ export function ProductsPage() {
                         </span>
                       )}
                     </TableCell>
-                    <TableCell className="text-right">{fmtNum(a.qty)}</TableCell>
+                    <TableCell className="text-right">
+                      {editingOther ? (
+                        <Input inputMode="numeric" value={oEdit!.qty} disabled={oSaving} placeholder="Qty" onChange={e => setOEdit({ ...oEdit!, qty: e.target.value })} className="h-8 w-20 ml-auto text-right" />
+                      ) : fmtNum(a.qty)}
+                    </TableCell>
                     <TableCell>
                       {a.pricing === 'cost' && a.stock ? (
                         <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
@@ -915,7 +956,19 @@ export function ProductsPage() {
                       ) : a.beneficiary === 'both' ? 'Both' : a.beneficiary}
                     </TableCell>
                     <TableCell className="text-right">
-                      {a.pricing === 'cost' ? (
+                      {editingOther ? (
+                        <span className="inline-flex flex-col items-end gap-0.5">
+                          <span className="inline-flex items-center gap-1 text-xs">
+                            <Input inputMode="decimal" value={oEdit!.cost} disabled={oSaving} placeholder="$/unit" onChange={e => setOEdit({ ...oEdit!, cost: e.target.value })} className="h-8 w-24 text-right" />
+                            /unit
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">
+                            {/^\d+$/.test(oEdit!.qty.trim()) && /^\d+(?:\.\d{1,2})?$/.test(oEdit!.cost.trim()) && Number(oEdit!.qty) > 0 && Number(oEdit!.cost) > 0
+                              ? `= ${fmtUSD(Math.round(Number(oEdit!.qty) * Number(oEdit!.cost) * 100) / 100)} (was ${fmtUSD(a.expected_usd)})`
+                              : `was ${fmtUSD(a.expected_usd)}`}
+                          </span>
+                        </span>
+                      ) : a.pricing === 'cost' ? (
                         a.stock ? (
                           <span title="Comes out of net profit before the split — no receivable">
                             {fmtUSD(a.expected_usd)}
@@ -939,13 +992,32 @@ export function ProductsPage() {
                         )
                       ) : fmtUSD(a.value_usd)}
                     </TableCell>
-                    <TableCell>{a.reason}</TableCell>
+                    <TableCell>
+                      {editingOther ? (
+                        <Input value={oEdit!.note} disabled={oSaving} placeholder="Why · optional, audit only" onChange={e => setOEdit({ ...oEdit!, note: e.target.value })} className="h-8 w-44" />
+                      ) : a.reason}
+                    </TableCell>
                     <TableCell>{a.created_by}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{fmtDateTime(a.created_at)}</TableCell>
                     <TableCell>
+                      {/* an Other item (no product) can be corrected in place
+                          when the vendor changed its price or count; a
+                          received sale is closed at its figure */}
+                      {editingOther ? (
+                        <span className="flex gap-1">
+                          <Button size="sm" className="h-7 text-xs" disabled={oSaving} onClick={saveOtherEdit}>Save</Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={oSaving} onClick={() => setOEdit(null)}>Cancel</Button>
+                        </span>
+                      ) : a.group_buy_product_id == null && !a.received_at ? (
+                        <Button size="sm" variant="ghost" className="h-7 text-xs"
+                          title="Correct the item's name, qty or unit vendor cost — e.g. the vendor charged a different price. Its value re-snapshots as qty × cost."
+                          onClick={() => { setAError(''); setOEdit({ id: a.id, name: a.other_name || '', qty: String(Number(a.qty)), cost: Number(a.other_unit_cost_usd).toFixed(2), note: '' }); }}>
+                          Edit
+                        </Button>
+                      ) : null}
                       {/* a RECEIVED at-cost row is a paid sale — the server
                           refuses its deletion, so don't offer the button */}
-                      {!(a.pricing === 'cost' && a.received_at) && (
+                      {!editingOther && !(a.pricing === 'cost' && a.received_at) && (
                         <Button size="sm" variant="ghost" className="h-7 text-xs text-rose-400"
                           onClick={() => {
                             // pre-ordered kits for an OUTSIDE customer are
@@ -966,7 +1038,7 @@ export function ProductsPage() {
                       )}
                     </TableCell>
                   </TableRow>
-                ))}
+                ); })}
                 {adjustments.length === 0 && (
                   <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">No adjustments.</TableCell></TableRow>
                 )}

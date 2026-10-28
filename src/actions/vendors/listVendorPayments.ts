@@ -6,13 +6,17 @@ import { action } from '@uibakery/data';
  * line of the batch repeats the same `sends` array; the page groups by
  * batch_id and shows them once). An unbatched line is its own single send
  * from wallet_name. Ordered so a batch's lines stay contiguous.
+ *
+ * list_value_usd (1790102800) on a kit line: what its kits cost at list
+ * when it was recorded; amount − list value is the price difference the
+ * vendor charged. NULL on rows recorded without one.
  */
 function listVendorPayments() {
   return action('listVendorPayments', 'SQL', {
     datasourceName: 'SND GB DB',
     query: `
       SELECT vp.id, vp.paid_on, vp.amount_usd, vp.kits_qty, vp.freight_usd, vp.method, vp.receipt_ref, vp.note,
-             vp.batch_id,
+             vp.batch_id, vp.list_value_usd,
              v.code AS vendor_code, w.name AS wallet_name, p.sku_code,
              -- an Other-items line attributed to one item (1790102600)
              vp.admin_adjustment_id, oa.other_name,

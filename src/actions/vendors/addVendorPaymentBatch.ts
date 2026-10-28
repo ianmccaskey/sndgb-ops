@@ -35,6 +35,12 @@ import { action } from '@uibakery/data';
  * rows already paid, same override contract; a line beyond what ITS item
  * still owes refuses under the same vendor-level confirmation.
  *
+ * A line's value may differ from kits × the product's per-kit cost: the
+ * vendor charged a different price for THESE kits (1790102800). The
+ * function snapshots the list value of the kits on the line
+ * (list_value_usd); the difference is the product's price variance,
+ * which the vendor's owed figure and the product's cost in P&L follow.
+ *
  * Guards (in the function):
  *  - a line's product must be THIS vendor's in THIS campaign; one line per
  *    product; positive whole-or-2dp kits and a positive $ value;

@@ -42,6 +42,9 @@ type Payment = {
   batch_id: number | null; sends: Send[] | null;
   // an Other-items line attributed to one Other item (1790102600)
   admin_adjustment_id: number | null; other_name: string | null;
+  // a kit line's list value when it was recorded (1790102800); amount −
+  // list value is the price difference the vendor charged. NULL = none kept
+  list_value_usd: string | null;
 };
 type Wallet = { id: number; name: string; chain: string; active: boolean };
 // an OTHER-item adjustment (1790102300): bought from the vendor at a typed
@@ -66,6 +69,8 @@ const isOtherLine = (product: string) => product.startsWith(OTHER_LINE);
 type ProductProgress = {
   group_buy_product_id: number; vendor_code: string; sku_code: string;
   kits_demand: string; kits_paid: string; vendor_order_value_usd: string; per_kit_cost_usd: string;
+  /** what the vendor charged above (+) or below (−) list on this product's kit lines (1790102800) */
+  price_variance_usd: string;
   orders_kits: string; adj_kits: string;
   adj_detail: { kind: string; qty: string }[] | null;
 };
@@ -109,11 +114,14 @@ export function VendorsPage() {
   const [pDate, setPDate] = useState('');
   const [pNote, setPNote] = useState('');
   // one payment = one or more product lines; each line's value auto-computes
-  // from kits × the product's current per-kit vendor cost, editable for
-  // discounts. The whole payment (lines, freight, sends) is recorded as ONE
-  // batch, all or nothing.
-  type PayLine = { product: string; kits: string; value: string; valueDirty: boolean };
-  const blankLine = (): PayLine => ({ product: '', kits: '', value: '', valueDirty: false });
+  // from kits × the product's per-kit LIST cost. When the vendor charged a
+  // different price for these kits (Ian, 2026-10-28: R20 at $50 for the
+  // last 208 instead of the $52 the rest cost) the operator types the
+  // $/kit — or the value — and the line records the difference as the
+  // vendor's price for these kits (1790102800). The whole payment (lines,
+  // freight, sends) is recorded as ONE batch, all or nothing.
+  type PayLine = { product: string; kits: string; price: string; priceDirty: boolean; value: string; valueDirty: boolean };
+  const blankLine = (): PayLine => ({ product: '', kits: '', price: '', priceDirty: false, value: '', valueDirty: false });
   const [pLines, setPLines] = useState<PayLine[]>([blankLine()]);
   const [pFreight, setPFreight] = useState('');
   // money for OTHER-item adjustments (not campaign products): a line with
@@ -164,6 +172,27 @@ export function VendorsPage() {
   const vendorOtherItems = otherItems.filter(o => String(o.vendor_id) === pVendor);
   const otherOf = (product: string) => vendorOtherItems.find(o => OTHER_LINE + o.id === product);
 
+  // the line's product at LIST: per-kit cost (blended over tier blocks) for
+  // a campaign product, unit cost for an Other item
+  const lineListUnit = (l: PayLine): number | null => {
+    const o = isOtherLine(l.product) ? otherOf(l.product) : undefined;
+    const pp = o ? undefined : vendorProducts.find(v => String(v.group_buy_product_id) === l.product);
+    return o ? Number(o.other_unit_cost_usd) : pp ? Number(pp.per_kit_cost_usd) : null;
+  };
+  // the $/kit the line implies: what the operator typed, else value ÷ kits
+  const linePrice = (l: PayLine) =>
+    l.priceDirty ? l.price
+      : Number(l.kits) > 0 && Number(l.value) > 0 ? (Math.round(Number(l.value) / Number(l.kits) * 100) / 100).toFixed(2) : '';
+  // the line's value against its kits at list: the price difference the
+  // vendor is charging on this line (null when nothing to compare yet)
+  const lineVariance = (l: PayLine): { unit: number; list: number; diff: number } | null => {
+    const unit = lineListUnit(l);
+    const kits = Number(l.kits), value = Number(l.value);
+    if (unit === null || !(kits > 0) || !(value > 0)) return null;
+    const list = Math.round(kits * unit * 100) / 100;
+    const diff = Math.round((value - list) * 100) / 100;
+    return Math.abs(diff) < 0.01 ? null : { unit, list, diff };
+  };
   const setLine = (i: number, patch: Partial<PayLine>) => {
     setPLines(ls => ls.map((l, j) => {
       if (j !== i) return l;
@@ -173,15 +202,29 @@ export function VendorsPage() {
         const o = otherOf(next.product);
         if (o) next.kits = String(Number(o.qty));
       }
-      // kits or product changed and the operator has not hand-edited the
-      // value: recompute kits × per-kit vendor cost (units × unit cost for
-      // an Other item)
-      if (!next.valueDirty && (patch.kits !== undefined || patch.product !== undefined)) {
-        const kits = Number(next.kits);
-        const o = isOtherLine(next.product) ? otherOf(next.product) : undefined;
-        const pp = o ? undefined : vendorProducts.find(v => String(v.group_buy_product_id) === next.product);
-        const unit = o ? Number(o.other_unit_cost_usd) : pp ? Number(pp.per_kit_cost_usd) : null;
-        next.value = unit !== null && kits > 0 ? (Math.round(kits * unit * 100) / 100).toFixed(2) : '';
+      const kits = Number(next.kits);
+      const atPrice = (price: number) => (kits > 0 ? (Math.round(kits * price * 100) / 100).toFixed(2) : '');
+      if (patch.price !== undefined) {
+        // a typed $/kit — the vendor's price for THESE kits — drives the
+        // value; clearing it hands the value back to the list cost
+        next.priceDirty = next.price.trim() !== '';
+        next.valueDirty = false;
+        if (next.priceDirty) next.value = Number(next.price) >= 0 ? atPrice(Number(next.price)) : '';
+      }
+      if (patch.value !== undefined) {
+        // a typed value wins; the $/kit shows what it implies
+        next.priceDirty = false; next.price = '';
+      }
+      // kits or product changed (or the $/kit was cleared): recompute from
+      // the typed $/kit, else — unless the value is hand-edited — from the
+      // list cost (units × unit cost for an Other item)
+      if (patch.kits !== undefined || patch.product !== undefined || (patch.price !== undefined && !next.priceDirty)) {
+        if (next.priceDirty) {
+          next.value = atPrice(Number(next.price));
+        } else if (!next.valueDirty) {
+          const unit = lineListUnit(next);
+          next.value = unit !== null ? atPrice(unit) : '';
+        }
       }
       return next;
     }));
@@ -613,7 +656,21 @@ export function VendorsPage() {
                         ))}
                       </TableCell>
                       <TableCell className="text-right text-sm text-muted-foreground">
-                        {fmtUSD(pp.vendor_order_value_usd, { cents: false })}
+                        {(() => {
+                          // owed for the product = the plan (ordered kits at
+                          // list) + what the vendor charged off list on the
+                          // kits already bought (1790102800)
+                          const variance = Number(pp.price_variance_usd);
+                          return variance !== 0 ? (
+                            <>
+                              {fmtUSD(Number(pp.vendor_order_value_usd) + variance, { cents: false })}
+                              <span className="block text-[10px] text-amber-300 whitespace-nowrap"
+                                title="Kit lines recorded at a price other than list: what the vendor charged below (−) or above (+) list for the kits already bought. This vendor's Owed and the product's cost in P&L include it.">
+                                list {fmtUSD(pp.vendor_order_value_usd, { cents: false })} {variance < 0 ? '−' : '+'} {fmtUSD(Math.abs(variance))} vendor price diff
+                              </span>
+                            </>
+                          ) : fmtUSD(pp.vendor_order_value_usd, { cents: false });
+                        })()}
                         {(() => {
                           const remKits = Math.max(Number(pp.kits_demand) - Number(pp.kits_paid), 0);
                           const remUsd = Math.round(remKits * Number(pp.per_kit_cost_usd) * 100) / 100;
@@ -712,10 +769,28 @@ export function VendorsPage() {
                   </SelectContent>
                 </Select>
                 <Input placeholder={isOtherLine(l.product) ? 'Units' : 'Kits'} inputMode="decimal" value={l.kits} disabled={pSaving} onChange={e => setLine(i, { kits: e.target.value })} className="h-9 w-20" />
+                <Input placeholder={isOtherLine(l.product) ? '$/unit' : '$/kit'} inputMode="decimal" value={linePrice(l)} disabled={pSaving}
+                  title="What the vendor charged per kit for THESE kits — type it when it differs from the campaign's cost; the value follows"
+                  onChange={e => setLine(i, { price: e.target.value })} className="h-9 w-24" />
                 <Input placeholder="Value $" inputMode="decimal" value={l.value} disabled={pSaving} onChange={e => setLine(i, { value: e.target.value, valueDirty: e.target.value.trim() !== '' })} className="h-9 w-28" />
                 {pLines.length > 1 && (
                   <Button size="sm" variant="ghost" className="h-9 px-2 text-rose-400" disabled={pSaving} onClick={() => setPLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
                 )}
+                {(() => {
+                  // the line is priced off list: say so, and what it means
+                  const v = lineVariance(l);
+                  if (!v) return null;
+                  const o = isOtherLine(l.product) ? otherOf(l.product) : undefined;
+                  return o ? (
+                    <p className="basis-full text-[10px] text-rose-400 leading-tight">
+                      {o.other_name} is listed at {fmtUSD(v.unit)}/unit — this pays {fmtUSD(Math.abs(v.diff))} {v.diff < 0 ? 'less' : 'more'} than {fmtNum(Number(l.kits))} units cost, leaving the item {v.diff < 0 ? 'partly owed' : 'over-paid'}. If the vendor changed the price, edit the item's cost on the Products page first.
+                    </p>
+                  ) : (
+                    <p className="basis-full text-[10px] text-amber-300 leading-tight">
+                      {fmtUSD(Number(linePrice(l)))}/kit vs list {fmtUSD(v.unit)} · {fmtUSD(Math.abs(v.diff))} {v.diff < 0 ? 'under' : 'over'} list — recorded as the vendor's price for these kits; the product's cost and this vendor's Owed follow it.
+                    </p>
+                  );
+                })()}
               </div>
             ))}
             <div className="flex flex-wrap gap-2 items-center">
@@ -859,7 +934,19 @@ export function VendorsPage() {
                       <TableCell className={batched ? 'text-muted-foreground' : 'font-medium'}>{p.vendor_code}</TableCell>
                       <TableCell className="text-right">{fmtUSD(p.amount_usd)}</TableCell>
                       <TableCell>{p.sku_code || (p.freight_usd != null ? 'freight' : p.other_name ? `other: ${p.other_name}` : batched ? 'other items (lump)' : '—')}</TableCell>
-                      <TableCell className="text-right">{p.kits_qty != null ? fmtNum(p.kits_qty) : '—'}</TableCell>
+                      <TableCell className="text-right">
+                        {p.kits_qty != null ? fmtNum(p.kits_qty) : '—'}
+                        {p.kits_qty != null && Number(p.kits_qty) > 0 && (() => {
+                          const perKit = Math.round(Number(p.amount_usd) / Number(p.kits_qty) * 100) / 100;
+                          const diff = p.list_value_usd != null ? Math.round((Number(p.amount_usd) - Number(p.list_value_usd)) * 100) / 100 : 0;
+                          return (
+                            <span className={`block text-[10px] whitespace-nowrap ${diff !== 0 ? 'text-amber-300' : 'text-muted-foreground'}`}
+                              title={p.list_value_usd != null ? `At list these kits were ${fmtUSD(p.list_value_usd)} when recorded` : 'Recorded before list values were kept — no price difference tracked on this line'}>
+                              @ {fmtUSD(perKit)}/kit{diff !== 0 ? ` · ${fmtUSD(Math.abs(diff))} ${diff < 0 ? 'under' : 'over'} list` : ''}
+                            </span>
+                          );
+                        })()}
+                      </TableCell>
                       <TableCell className="text-right">{p.freight_usd != null ? fmtUSD(p.freight_usd) : '—'}</TableCell>
                       <TableCell className="text-muted-foreground">{batched ? 'see sends' : (p.wallet_name || '—')}</TableCell>
                       <TableCell>{batched ? '' : (p.method || '—')}</TableCell>

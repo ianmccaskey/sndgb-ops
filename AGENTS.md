@@ -157,7 +157,32 @@ where the code fails to honour one; do not propose replacing the decision.
   the union of product lines, Other adjustments and payments
   (`1790102500`), so a vendor stays visible while money is owed or paid
   even after its last product line moves. Settled with the owner
-  2026-10-26.
+  2026-10-26. An Other item is corrected in place through
+  `updateOtherAdjustment` (name, qty, unit cost; `expected_usd`
+  re-snapshots) when the vendor changed its price or count; refused once
+  its sale was received or the vendor was already paid more than the new
+  cost (remove the batch first). Vendor and assignment never change by
+  edit.
+
+- **A kit line's price is what the vendor charged** (`1790102800`). The
+  campaign's unit cost is the PLAN (MOQ, `vendor_order_value_usd`, the
+  kits still to buy, at-cost pricing); a payment line whose value differs
+  from kits × the per-kit list cost records that difference, not a
+  mistake: `record_vendor_payment_batch` snapshots
+  `vendor_payments.list_value_usd` (kits × the blended per-kit list cost
+  at record time) on every kit line it writes, and `amount − list value`
+  is the product's `v_product_profit.price_variance_usd`, which its
+  `owed_to_vendor_usd` and profit include — so `v_vendor_balances`, the
+  wallet-coverage owed query and `v_group_buy_pnl` follow what was paid
+  once every kit is bought. Variance is PRICE only, never quantity: an
+  over-buy at list has none and is flagged as over-bought exactly as
+  before. Rows recorded before the migration, freight / Other-items rows
+  and the single rows the stock-plan commit and at-cost reallocation
+  write carry NULL (no variance; the latter two's amount is cost +
+  freight by design). Flag a reader that prices bought kits off the live
+  unit cost instead of the line; do not propose editing
+  `group_buy_products.unit_cost_usd` to match one batch. Settled with the
+  owner 2026-10-28.
 
 ## Verifying changes
 
