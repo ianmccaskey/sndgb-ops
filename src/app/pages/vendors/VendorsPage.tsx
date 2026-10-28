@@ -936,12 +936,16 @@ export function VendorsPage() {
                       <TableCell>{p.sku_code || (p.freight_usd != null ? 'freight' : p.other_name ? `other: ${p.other_name}` : batched ? 'other items (lump)' : '—')}</TableCell>
                       <TableCell className="text-right">
                         {p.kits_qty != null ? fmtNum(p.kits_qty) : '—'}
-                        {p.kits_qty != null && Number(p.kits_qty) > 0 && (() => {
+                        {/* only a line recorded with a list value is known
+                            to be kit money alone: older rows and the stock-
+                            plan / reallocation rows carry cost + freight in
+                            the amount, so no per-kit price is derived there */}
+                        {p.kits_qty != null && Number(p.kits_qty) > 0 && p.list_value_usd != null && (() => {
                           const perKit = Math.round(Number(p.amount_usd) / Number(p.kits_qty) * 100) / 100;
-                          const diff = p.list_value_usd != null ? Math.round((Number(p.amount_usd) - Number(p.list_value_usd)) * 100) / 100 : 0;
+                          const diff = Math.round((Number(p.amount_usd) - Number(p.list_value_usd)) * 100) / 100;
                           return (
                             <span className={`block text-[10px] whitespace-nowrap ${diff !== 0 ? 'text-amber-300' : 'text-muted-foreground'}`}
-                              title={p.list_value_usd != null ? `At list these kits were ${fmtUSD(p.list_value_usd)} when recorded` : 'Recorded before list values were kept — no price difference tracked on this line'}>
+                              title={`At list these kits were ${fmtUSD(p.list_value_usd)} when recorded`}>
                               @ {fmtUSD(perKit)}/kit{diff !== 0 ? ` · ${fmtUSD(Math.abs(diff))} ${diff < 0 ? 'under' : 'over'} list` : ''}
                             </span>
                           );

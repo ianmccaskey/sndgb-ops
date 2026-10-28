@@ -158,7 +158,8 @@ where the code fails to honour one; do not propose replacing the decision.
   (`1790102500`), so a vendor stays visible while money is owed or paid
   even after its last product line moves. Settled with the owner
   2026-10-26. An Other item is corrected in place through
-  `updateOtherAdjustment` (name, qty, unit cost; `expected_usd`
+  `updateOtherAdjustment` → `update_other_adjustment()` (lock 42002 in its
+  own statement, then name, qty, unit cost; `expected_usd`
   re-snapshots) when the vendor changed its price or count; refused once
   its sale was received or the vendor was already paid more than the new
   cost (remove the batch first). Vendor and assignment never change by

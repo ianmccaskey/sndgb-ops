@@ -403,6 +403,89 @@ $fn$;
 COMMENT ON FUNCTION record_vendor_payment_batch(text, text, text, text, text, text, text, text, text, text, text, text, text, text) IS
   'Records one vendor payment batch (product lines with their list value, freight, Other items lump + per-item lines, sends) all-or-nothing under advisory lock 42002 taken in its own statement (1790102200, Other items 1790102400, item attribution 1790102600, kit-line price variance 1790102800). Returns (batch_id, refused); batch_id NULL means nothing was written and refused names why.';
 
+-- ---- an Other item is corrected in place, serialized with the recorder --
+
+-- updateOtherAdjustment runs through this function so the per-vendor+
+-- campaign advisory lock 42002 is taken in a statement of its OWN before
+-- the money already attributed to the item is read (Codex review,
+-- 2026-10-28): a payment batch attributed to the item that commits while
+-- this edit waits on the row lock would otherwise be invisible to the
+-- edit's snapshot, and the new cost could drop below money just paid.
+-- Inside the function every statement takes a fresh snapshot, exactly as
+-- record_vendor_payment_batch does.
+CREATE OR REPLACE FUNCTION update_other_adjustment(
+  p_id text, p_group_buy_id text, p_other_name text, p_unit_cost_usd text, p_qty text, p_note text, p_actor text
+) RETURNS TABLE (id bigint, refused text)
+LANGUAGE plpgsql VOLATILE AS $fn2$
+#variable_conflict use_column
+DECLARE
+  v_id bigint := CASE WHEN btrim(p_id::text) ~ '^[0-9]+$' THEN btrim(p_id::text)::bigint END;
+  v_gb bigint := CASE WHEN btrim(p_group_buy_id::text) ~ '^[0-9]+$' THEN btrim(p_group_buy_id::text)::bigint END;
+  v_vendor bigint;
+BEGIN
+  SELECT a.vendor_id INTO v_vendor
+  FROM admin_adjustments a
+  WHERE a.id = v_id AND a.group_buy_id = v_gb AND a.group_buy_product_id IS NULL;
+  IF v_vendor IS NOT NULL THEN
+    -- the same key the batch recorder locks on
+    PERFORM pg_advisory_xact_lock(42002, hashtext(v_vendor::text || ':' || v_gb::text));
+  END IF;
+  RETURN QUERY
+      WITH inp AS (
+        SELECT NULLIF(btrim(p_other_name::text), '') AS other_name,
+               CASE WHEN btrim(p_unit_cost_usd::text) ~ '^[0-9]+(\.[0-9]{1,2})?$' THEN btrim(p_unit_cost_usd::text)::numeric END AS unit_cost,
+               CASE WHEN btrim(p_qty::text) ~ '^[0-9]+$' THEN btrim(p_qty::text)::numeric END AS qty
+      ), tgt AS (
+        -- read AFTER the lock: every payment row attributed to the item is
+        -- visible here
+        SELECT a.id, a.other_name, a.other_unit_cost_usd, a.qty, a.expected_usd, a.received_at,
+               COALESCE((
+                 SELECT SUM(vp.amount_usd) FROM vendor_payments vp WHERE vp.admin_adjustment_id = a.id
+               ), 0) AS paid_usd
+        FROM admin_adjustments a
+        WHERE a.id = v_id
+          AND a.group_buy_id = v_gb
+          AND a.group_buy_product_id IS NULL
+        FOR UPDATE OF a
+      ), refusal AS (
+        SELECT CASE
+                 WHEN NOT EXISTS (SELECT 1 FROM tgt) THEN 'not an Other item of this campaign'
+                 WHEN (SELECT t.received_at FROM tgt t) IS NOT NULL THEN 'its customer payment was received at the old figure — a received sale is closed'
+                 WHEN i.other_name IS NULL THEN 'name is required'
+                 WHEN i.unit_cost IS NULL OR i.unit_cost <= 0 THEN 'unit cost must be a positive $ amount with at most 2 decimals'
+                 WHEN i.qty IS NULL OR i.qty <= 0 THEN 'qty must be a positive whole number'
+                 WHEN ROUND(i.qty * i.unit_cost, 2) < (SELECT t.paid_usd FROM tgt t)
+                   THEN 'the vendor has already been paid ' || (SELECT t.paid_usd FROM tgt t)::text || ' for it, more than the new cost — remove that payment batch on the Vendors page first'
+               END AS why
+        FROM inp i
+      ), upd AS (
+        UPDATE admin_adjustments a
+        SET other_name = i.other_name,
+            other_unit_cost_usd = i.unit_cost,
+            qty = i.qty,
+            expected_usd = ROUND(i.qty * i.unit_cost, 2)
+        FROM inp i, tgt t
+        WHERE a.id = t.id
+          AND NOT EXISTS (SELECT 1 FROM refusal r WHERE r.why IS NOT NULL)
+        RETURNING a.id, a.other_name, a.other_unit_cost_usd, a.qty, a.expected_usd
+      ), aud AS (
+        INSERT INTO audit_log (table_name, row_pk, action, actor, old_data, new_data)
+        SELECT 'admin_adjustments', u.id::text, 'other_adjustment_updated', COALESCE(NULLIF(p_actor::text, ''), 'operator'),
+               jsonb_build_object('other_name', t.other_name, 'unit_cost_usd', t.other_unit_cost_usd, 'qty', t.qty,
+                                  'expected_usd', t.expected_usd, 'paid_usd', t.paid_usd),
+               jsonb_build_object('other_name', u.other_name, 'unit_cost_usd', u.other_unit_cost_usd, 'qty', u.qty,
+                                  'expected_usd', u.expected_usd, 'note', NULLIF(btrim(p_note::text), ''))
+        FROM upd u, tgt t
+        RETURNING row_pk
+      )
+      SELECT (SELECT u.id FROM upd u),
+             (SELECT r.why FROM refusal r WHERE r.why IS NOT NULL);
+END
+$fn2$;
+
+COMMENT ON FUNCTION update_other_adjustment(text, text, text, text, text, text, text) IS
+  'Corrects an Other-item adjustment (name, qty, unit cost; expected_usd re-snapshotted) under advisory lock 42002 taken in its own statement, so money attributed to the item by a concurrent payment batch is seen before the new cost is checked against it (1790102800). Returns (id, refused).';
+
 INSERT INTO claude_migrations_applied (filename)
 SELECT '1790102800_kit_line_price_variance.sql'
 WHERE NOT EXISTS (SELECT 1 FROM claude_migrations_applied WHERE filename = '1790102800_kit_line_price_variance.sql');
