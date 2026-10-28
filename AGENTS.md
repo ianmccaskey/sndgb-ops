@@ -144,9 +144,15 @@ where the code fails to honour one; do not propose replacing the decision.
   the product join; the `admin_adjustments_other_shape` CHECK keeps the two
   shapes apart. Every payout consumer adds `other_stock_usd` to
   `stock_cost_usd` as the group stock figure (`src/lib/payout.ts` callers).
-  The vendor is paid for Other items through the payment batch's "Other
-  items $" line — a `vendor_payments` row with no product, kits or freight
-  (`v_vendor_balances.other_paid_usd`), capped like kits and freight.
+  The vendor is paid for Other items through the payment batch: picking
+  the item as a payment line writes a `vendor_payments` row with no
+  product, kits or freight, attributed to that item
+  (`admin_adjustment_id`, `1790102600`, so the item row reads as paid and
+  the item cannot be deleted while the money is attributed); the lump
+  "Other items $" field writes the same row attributed to no item. Both
+  sit in `v_vendor_balances.other_paid_usd`, capped together like kits
+  and freight; an item line beyond its own remaining refuses under the
+  same vendor-level confirmation.
   `v_vendor_balances` (and the wallet-coverage owed query) are keyed by
   the union of product lines, Other adjustments and payments
   (`1790102500`), so a vendor stays visible while money is owed or paid

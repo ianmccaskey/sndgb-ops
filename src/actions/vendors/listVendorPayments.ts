@@ -14,12 +14,15 @@ function listVendorPayments() {
       SELECT vp.id, vp.paid_on, vp.amount_usd, vp.kits_qty, vp.freight_usd, vp.method, vp.receipt_ref, vp.note,
              vp.batch_id,
              v.code AS vendor_code, w.name AS wallet_name, p.sku_code,
+             -- an Other-items line attributed to one item (1790102600)
+             vp.admin_adjustment_id, oa.other_name,
              bs.sends
       FROM vendor_payments vp
       JOIN vendors v ON v.id = vp.vendor_id
       LEFT JOIN wallets w ON w.id = vp.wallet_id
       LEFT JOIN group_buy_products gbp ON gbp.id = vp.group_buy_product_id
       LEFT JOIN products p ON p.id = gbp.product_id
+      LEFT JOIN admin_adjustments oa ON oa.id = vp.admin_adjustment_id
       LEFT JOIN LATERAL (
         SELECT jsonb_agg(jsonb_build_object('id', s.id, 'wallet_name', sw.name, 'chain', sw.chain,
                                             'amount_usd', s.amount_usd, 'method', s.method, 'tx_ref', s.tx_ref)

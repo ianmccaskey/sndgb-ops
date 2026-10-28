@@ -26,9 +26,14 @@ import { action } from '@uibakery/data';
  * params.freight_usd / allow_over_freight / confirmed_freight_owed as in
  * the single-row recorder this replaces.
  * params.other_usd / allow_over_other / confirmed_other_owed (1790102400):
- * money for OTHER-item adjustments (not campaign products) — a line with
- * no product, no kits and no freight, capped against the vendor's Other
- * items owed minus what such lines already paid, same override contract.
+ * LUMP money for OTHER-item adjustments (not campaign products) — a line
+ * with no product, no kits and no freight, attributed to no item.
+ * params.other_lines jsonb [{admin_adjustment_id, amount_usd}] (1790102600):
+ * money for ONE named Other item per line, recorded as its own row
+ * attributed to that item (so the item reads as paid). Lump + lines are
+ * capped together against the vendor's Other items owed minus what such
+ * rows already paid, same override contract; a line beyond what ITS item
+ * still owes refuses under the same vendor-level confirmation.
  *
  * Guards (in the function):
  *  - a line's product must be THIS vendor's in THIS campaign; one line per
@@ -66,7 +71,8 @@ function addVendorPaymentBatch() {
         {{params.actor}}::text,
         {{params.other_usd}}::text,
         {{params.allow_over_other}}::text,
-        {{params.confirmed_other_owed}}::text
+        {{params.confirmed_other_owed}}::text,
+        {{params.other_lines}}::text
       ) r
     `,
   });

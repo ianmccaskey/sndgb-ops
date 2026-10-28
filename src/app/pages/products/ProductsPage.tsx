@@ -383,7 +383,7 @@ export function ProductsPage() {
   const deleteAdjOnly = async (a: Adjustment) => {
     const res = await doDelAdj({ id: a.id, group_buy_id: groupBuyId, actor: userName }) as unknown[] | null;
     if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
-      setAError('Not removed — an at-cost row is locked once its payment is received or its product is vendor-committed (marked ordered / has vendor payments): the kits may already be bought.');
+      setAError('Not removed — an at-cost row is locked once its payment is received or its product is vendor-committed (marked ordered / has vendor payments): the kits may already be bought. An Other item with a vendor payment attributed to it is locked too: remove that payment batch on the Vendors page first.');
       return false;
     }
     setAError('');

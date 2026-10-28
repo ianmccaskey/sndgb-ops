@@ -16,9 +16,12 @@ import { action } from '@uibakery/data';
  * all leave together). GB-priced adjustments delete as before.
  *
  * An OTHER-item row (1790102300, no product) has no demand and no kit
- * attribution to protect: it deletes unless its receivable was received.
- * The vendor's owed figure drops with it — if the item was already paid
- * for, the Vendors page shows the over-payment, which is the truth.
+ * attribution to protect: it deletes unless its receivable was received
+ * or a vendor payment row is attributed to it (1790102600) — that money
+ * was recorded as paying for THIS item, so the payment batch has to go
+ * first (the FK would refuse the delete too, less clearly). Money paid as
+ * a lump is attributed to no item and does not lock it: the vendor's owed
+ * figure drops and the Vendors page shows the over-payment, the truth.
  *
  * CAMPAIGN-SCOPED like every destructive action (a.group_buy_id now lives
  * on every row): a stale or forged id from another campaign must not
@@ -35,6 +38,9 @@ function deleteAdjustment() {
         WHERE a.id = {{params.id}}::bigint
           AND a.group_buy_id = {{params.group_buy_id}}::bigint
           AND NOT (a.pricing = 'cost' AND a.received_at IS NOT NULL)
+          AND NOT EXISTS (
+                SELECT 1 FROM vendor_payments vp WHERE vp.admin_adjustment_id = a.id
+              )
           AND NOT (a.pricing = 'cost' AND NOT a.preordered AND a.group_buy_product_id IS NOT NULL AND EXISTS (
                 SELECT 1 FROM group_buy_products gbp
                 WHERE gbp.id = a.group_buy_product_id
