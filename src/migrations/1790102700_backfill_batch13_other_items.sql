@@ -18,12 +18,26 @@
 -- rows.
 --
 -- Run only on the owner's say-so.
+--
+-- Serialized with the batch recorder (Codex review, 2026-10-27): the
+-- block takes the same per-vendor+campaign advisory lock 42002 that
+-- record_vendor_payment_batch takes, in a statement of its own BEFORE
+-- the guards, so a payment attributed to one of these items cannot be
+-- recorded between the "no attributed rows" check and the inserts.
 
 DO $do$
 DECLARE
   v_old vendor_payments%ROWTYPE;
   v_new jsonb;
+  v_vendor bigint;
+  v_gb bigint;
 BEGIN
+  SELECT vp.vendor_id, vp.group_buy_id INTO v_vendor, v_gb FROM vendor_payments vp WHERE vp.id = 58;
+  IF v_vendor IS NULL THEN
+    RAISE EXCEPTION 'vendor_payments 58 does not exist — nothing changed';
+  END IF;
+  PERFORM pg_advisory_xact_lock(42002, hashtext(v_vendor::text || ':' || v_gb::text));
+  -- every read below happens under the lock
   SELECT * INTO v_old FROM vendor_payments WHERE id = 58;
   IF v_old.id IS NULL
      OR v_old.batch_id IS DISTINCT FROM 13
