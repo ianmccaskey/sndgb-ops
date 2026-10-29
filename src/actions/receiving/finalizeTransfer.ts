@@ -107,7 +107,6 @@ function finalizeTransfer() {
           AND o.status NOT IN ('cancelled', 'refunded')
           AND NOT o.hold_shipping
           AND r.recon_status IN ('matched', 'over')
-          AND r.pending_payment_count = 0
           AND oi.direct_ship AND oi.removed_at IS NULL
           AND oi.direct_fulfilled_at IS NULL
           AND EXISTS (

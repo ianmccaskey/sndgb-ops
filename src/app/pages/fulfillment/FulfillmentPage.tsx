@@ -41,7 +41,7 @@ import { TrackingLink } from '@/components/TrackingLink';
 
 type QueueRow = QueueOrder & {
   hold_shipping: boolean; admin_note: string | null;
-  recon_status: string | null;
+  recon_status: string | null; pending_payment_count: string;
   items_summary: string; item_count: string;
   remaining_summary: string; remaining_packable_qty: string; shipped_packable_qty: string;
   packable_json: { product_id: number; sku: string; remaining: number | string }[] | null;
@@ -875,6 +875,7 @@ export function FulfillmentPage() {
       {r.has_draft && !r.draft_needs_recovery && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="An unfinished shipment draft exists — open Ship to continue or delete it">draft</span>}
       {r.draft_needs_recovery && <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A draft's Shippo purchase was dispatched but never saved — it may hold a PAID label. Open Ship to recover.">needs recovery</span>}
       {r.push_outstanding && <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A shipped box has not been pushed to the ordering app — open Ship and use Push upstream"><Led className="w-1.5 h-1.5" />not pushed</span>}
+      {Number(r.pending_payment_count) > 0 && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Verified money already covers this order, so it can ship — but a payment hash on it is still pending. Open the order and Verify or Reject it; if it verifies, the order reads over.">{Number(r.pending_payment_count) === 1 ? 'pending hash' : `${r.pending_payment_count} pending hashes`}</span>}
       {upstreamMismatch(r) && <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={mismatchTitle(r)}>shipped upstream</span>}
       {partialMismatch(r) && <span className="rounded bg-orange-400/10 text-orange-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={partialTitle(r)}>partial upstream</span>}
       {sessionActive && stage === 'ready' && packability(r) === 'full' && <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">packable</span>}

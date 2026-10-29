@@ -4,8 +4,8 @@ import { action } from '@uibakery/data';
  * Outstanding vendor-direct order lines eligible to be shipped from a
  * receive address straight to the customer — one row per order line,
  * with the order's ship-to snapshot. Money-gated EXACTLY like the
- * Fulfillment direct queue (matched/over recon, no pending payments,
- * not held) and address-gated (no ship-to = not shippable). The same
+ * Fulfillment direct queue (matched/over recon on verified money —
+ * a pending hash is not a gate, 1790102900 — not held) and address-gated (no ship-to = not shippable). The same
  * gates are re-enforced inside create_transfer_draft() at write time —
  * this list is UX, not the trust boundary.
  */
@@ -48,7 +48,6 @@ function listDirectShipCandidates() {
         AND o.status NOT IN ('cancelled', 'refunded')
         AND NOT o.hold_shipping
         AND r.recon_status IN ('matched', 'over')
-        AND r.pending_payment_count = 0
         AND oi.direct_ship AND oi.direct_fulfilled_at IS NULL AND oi.removed_at IS NULL
         AND COALESCE(o.address_line1, '') <> ''
       ORDER BY o.order_number, p.sku_code

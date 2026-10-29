@@ -1,7 +1,8 @@
 import { action } from '@uibakery/data';
 
 /**
- * Orders eligible to pack/ship: reconciled (or verified) and not held.
+ * Orders eligible to pack/ship: reconciled (matched/over on verified
+ * money) and not held. A pending hash on a paid order is not a gate.
  *
  * Multi-shipment model: an order can have MANY shipments (partial boxes,
  * one tracking each). Everything here derives from AGGREGATES over the
@@ -119,6 +120,8 @@ function listFulfillmentQueue() {
              o.hold_shipping, o.customer_note, o.admin_note,
              o.shipping_insurance_usd, o.shipping_insurance_override_usd,
              r.recon_status,
+             -- unresolved hashes on a paid order: shown, never a gate
+             COALESCE(r.pending_payment_count, 0) AS pending_payment_count,
              -- items WE pack; vendor-direct lines live in direct_items_summary
              COALESCE(it.items_summary, '') AS items_summary,
              COALESCE(it.item_count, 0) AS item_count,
@@ -221,14 +224,15 @@ function listFulfillmentQueue() {
                     WHERE (e2->>'product_id')::bigint NOT IN (SELECT pid FROM sel)))))
         AND ({{params.stage}}::text = 'all'
           -- ready requires fully collected (matched — or OVER: an overpaid
-          -- order is fully collected and shippable) AND no unresolved
-          -- payments: an order can read matched (e.g. via write-off/comp)
-          -- while a new hash pends — money evidence must be resolved before
-          -- shipping. Fully-direct orders leave the pack list — they are the
+          -- order is fully collected and shippable). A pending hash does
+          -- NOT hold a paid order back (1790102900): received counts only
+          -- verified money, so matched already means verified money covers
+          -- what is due; the row carries pending_payment_count as a badge.
+          -- Fully-direct orders leave the pack list — they are the
           -- 'direct' stage. Remaining work (not "no shipment yet") is the
           -- membership test: a partially shipped order STAYS ready until its
           -- last packable unit is drafted, and returns if a refund voids one.
-          OR ({{params.stage}}::text = 'ready' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over') AND r.pending_payment_count = 0
+          OR ({{params.stage}}::text = 'ready' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over')
               AND NOT COALESCE(it.all_direct, false)
               AND COALESCE(it.remaining_packable_qty, 0) > 0)
           -- same money gates as ready, but for VENDOR-shipped lines: any order
@@ -236,7 +240,7 @@ function listFulfillmentQueue() {
           -- shipped yet. Deliberately NOT gated on the local shipment rows —
           -- a mixed order's local half packing/shipping must not hide its
           -- outstanding vendor half. Rows leave via "Mark vendor shipped".
-          OR ({{params.stage}}::text = 'direct' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over') AND r.pending_payment_count = 0
+          OR ({{params.stage}}::text = 'direct' AND NOT o.hold_shipping AND r.recon_status IN ('matched', 'over')
               AND COALESCE(it.direct_outstanding, false))
           OR ({{params.stage}}::text = 'held' AND o.hold_shipping)
           OR ({{params.stage}}::text = 'packed' AND COALESCE(s.any_packed, false))

@@ -93,6 +93,18 @@ where the code fails to honour one; do not propose replacing the decision.
   networks, a hash another order holds); do not propose widening it to
   rejections or overrides. Settled with the owner 2026-10-25.
 
+- **A paid order ships even with a pending hash** (`1790102900`). The
+  money gate on every pack/ship path (Ready and Direct queues, direct-ship
+  candidates, the draft / manual / transfer functions, both purchase
+  claims, transfer finalize) is `recon_status IN ('matched', 'over')`
+  and not held — nothing else. Received counts only verified money (or
+  the operator's override), so matched already means verified money
+  covers what is due; a pending hash is shown (order sheet,
+  Reconciliation, a "pending hash" badge on the Fulfillment row), never a
+  gate. The write-off keeps its pending check: a write-off forgives money
+  a pending hash may still be. Do not re-add `pending_payment_count = 0`
+  to a ship gate. Settled with the owner 2026-10-28.
+
 - **Group stock is funded equally by the partners, not by the profit
 
   split.** Stock-plan commits and group-stock adjustments sit inside

@@ -65,7 +65,6 @@ function markTransferPurchaseStarted() {
           AND o.status NOT IN ('cancelled', 'refunded')
           AND NOT o.hold_shipping
           AND r.recon_status IN ('matched', 'over')
-          AND r.pending_payment_count = 0
           AND COALESCE(t.destination->>'street1', '') = COALESCE(o.address_line1, '')
           AND COALESCE(t.destination->>'street2', '') = COALESCE(o.address_line2, '')
           AND COALESCE(t.destination->>'city', '')    = COALESCE(o.city, '')
