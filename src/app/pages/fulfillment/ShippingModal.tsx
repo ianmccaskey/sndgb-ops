@@ -1378,7 +1378,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       }
       const row = Array.isArray(res) && res.length > 0 ? res[0] as { items: unknown } : null;
       if (!row) {
-        setCancelMsg('Not cancelled — a push of this box to the ordering app may be in progress (try again in a minute), or the box was refunded, cancelled, picked up by the carrier or marked delivered meanwhile, or it is a record adopted from the ordering app (correct that there first). The list has refreshed.');
+        setCancelMsg('Not cancelled — a push of this box to the ordering app is in progress or not yet confirmed (try again in a few minutes, or push it until it verifies), or the box was refunded, cancelled, picked up by the carrier or marked delivered meanwhile, or it is a record adopted from the ordering app (correct that there first). The list has refreshed.');
         return;
       }
       const raw = typeof row.items === 'string' ? JSON.parse(row.items) as unknown : row.items;

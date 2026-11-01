@@ -35,8 +35,8 @@
 -- that is corrected in the ordering app first); not a box the carrier has
 -- reported moving, delivered, returned or failed, nor one the operator
 -- recorded delivered or reshipped (it went out — a return, not a cancel);
--- not while a push of the box holds a fresh claim; reason and actor
--- required.
+-- not while a push of the box holds a fresh claim or has a sent PUT not
+-- yet verified; reason and actor required.
 -- Refusals return zero rows. push_epoch is bumped so a push of this box
 -- already in flight cannot stamp it. Audited 'shipment_cancelled'.
 --
@@ -50,8 +50,13 @@
 -- claim a cancelled box — so a push planned before a cancel can never
 -- land after that cancel's reset (Codex, 2026-11-01). A claim older than
 -- 10 minutes is a dead tab's and no longer counts.
+-- push_dispatched_at: that push's PUT was sent (stamped by the renewal
+-- right before it) and not yet verified. A request that went out may land
+-- whatever the tab heard back, so only the verified stamp clears it —
+-- never a release — and a cancel refuses while it is under 10 minutes.
 ALTER TABLE shipments
   ADD COLUMN IF NOT EXISTS push_claimed_at timestamptz,
+  ADD COLUMN IF NOT EXISTS push_dispatched_at timestamptz,
   ADD COLUMN IF NOT EXISTS cancelled_at timestamptz,
   ADD COLUMN IF NOT EXISTS cancelled_by text,
   ADD COLUMN IF NOT EXISTS cancel_reason text,
@@ -155,8 +160,10 @@ BEGIN
     -- reshipped: it went out, so it is a return, not a cancel
     AND COALESCE(s.tracking_status, '') NOT IN ('TRANSIT', 'DELIVERED', 'RETURNED', 'FAILURE')
     AND s.status NOT IN ('delivered', 'reshipped')
-    -- a push of this box is in flight: it could land after the reset
+    -- a push of this box is in flight, or its sent PUT is unconfirmed:
+    -- either could land after the reset
     AND (s.push_claimed_at IS NULL OR s.push_claimed_at < now() - interval '10 minutes')
+    AND (s.push_dispatched_at IS NULL OR s.push_dispatched_at < now() - interval '10 minutes')
   FOR UPDATE;
   IF NOT FOUND THEN RETURN; END IF;
 

@@ -20,7 +20,7 @@ function markShipmentPushed() {
     query: `
       WITH up AS (
         UPDATE shipments s
-        SET b44_pushed_at = now(), push_claimed_at = NULL
+        SET b44_pushed_at = now(), push_claimed_at = NULL, push_dispatched_at = NULL
         WHERE s.id = {{params.shipment_id}}::bigint
           AND s.finalized_at IS NOT NULL
           AND s.b44_pushed_at IS NULL

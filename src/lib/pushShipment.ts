@@ -83,8 +83,13 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   // (1790103200): under the order lock a cancelled / voided / already
   // pushed / re-epoched box refuses, and while the claim is held the box
   // cannot be cancelled — so this push can never land after a cancel's
-  // ordering-app reset. Renewed right before the PUT; the stamp clears
-  // it, every other ending gives it back.
+  // ordering-app reset. The renewal right before the PUT also marks the
+  // write DISPATCHED (push_dispatched_at): a request that went out may
+  // still land whatever this tab hears back (a thrown transport, a
+  // negative re-read), so only the verified stamp clears that mark —
+  // the cancel stays refused until then or for 10 minutes. The claim
+  // itself is given back on every ending without the stamp; a retry may
+  // take it over at once.
   let claimedAt: string;
   try {
     claimedAt = claimedAtOf(await d.claimPush({ shipment_id: d.shipmentId, expected_push_epoch: d.pushEpoch, prior_claimed_at: '', actor: d.userName }));
@@ -92,7 +97,7 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
     return { ok: false, message: 'Push NOT sent — the push could not be claimed (network error). The shipment is saved; retry the push.' };
   }
   if (!claimedAt) {
-    return { ok: false, message: 'Push NOT sent — this box was cancelled, refunded or already pushed, changed since it was read, or another push of it is in progress. Nothing was written; retry if it still shows "not pushed".' };
+    return { ok: false, message: 'Push NOT sent — this box was cancelled, refunded or already pushed, or changed since it was read. Nothing was written; retry if it still shows "not pushed".' };
   }
   const lease = { claimedAt, stamped: false };
   try {
@@ -210,6 +215,8 @@ async function pushClaimed(d: PushShipmentDeps, lease: { claimedAt: string; stam
   }
   lease.claimedAt = renewed;
 
+  // (the renewal above stamped push_dispatched_at: from here the request
+  // may land whatever this tab hears back, and only the stamp clears it)
   let putError: string | null = null;
   try {
     await updateB44Order(d.cfg, d.externalId, fields);
@@ -251,7 +258,8 @@ async function pushClaimed(d: PushShipmentDeps, lease: { claimedAt: string; stam
         }) as unknown[] | null;
         stamped = Array.isArray(res) ? res.length > 0 : !!res;
       } catch { stamped = false; }
-      // the stamp cleared the claim; anything less gives it back
+      // the stamp cleared the claim and the dispatch mark; anything less
+      // gives the claim back and leaves the dispatch mark to lapse
       lease.stamped = stamped;
       if (!stamped && fullyShipped) {
         await followUp('PUSH VERIFIED upstream but the local completion record did not save (a concurrent change may have intervened) — push again to finish recording.');

@@ -5,7 +5,9 @@ import { action } from '@uibakery/data';
  * its stamp — refused, aborted, or sent but unverified — so a retry or a
  * cancel need not wait out the 10-minute window. Only the caller's own
  * claim (exact timestamp) is cleared; zero rows means it was already
- * gone or taken over. Not audited: the claim is a lease, not a fact.
+ * gone or taken over. push_dispatched_at is NOT touched: a PUT that was
+ * sent may still land, and only the verified stamp clears that mark.
+ * Not audited: the claim is a lease, not a fact.
  */
 function releaseShipmentPush() {
   return action('releaseShipmentPush', 'SQL', {
