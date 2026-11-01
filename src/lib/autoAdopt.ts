@@ -350,6 +350,11 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
     }
 
     // ---- 3: write-back — shipped here, undated there --------------------
+    // upstream quantity per product (as pulled): a date is written only
+    // for a product whose WHOLE upstream quantity shipped here — a unit
+    // added there since the last pull must not be called shipped
+    const upQty = new Map<string, number>();
+    for (const it of ups) if (it.qty > 0) upQty.set(it.pid, (upQty.get(it.pid) ?? 0) + it.qty);
     const toPush: PushDatesArgs['lines'] = [];
     const uncovered: string[] = [];
     for (const l of loc) {
@@ -360,6 +365,10 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
       const pid = String(l.product_external_id ?? '');
       const up = ups.find(it => it.pid === pid);
       if (!pid || !up || up.iso !== '' || String(up.raw ?? '') !== '') continue;
+      if (eff + 1e-9 < (upQty.get(pid) ?? 0)) {
+        push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code}: ${eff} shipped here, but the ordering app now holds ${upQty.get(pid)} — a quantity added there since the last pull; pull the campaign, then its ship date is written` });
+        continue;
+      }
       if (l.direct_ship) {
         const date = isoDateOf(l.direct_fulfilled_at);
         if (!date) continue;
@@ -385,8 +394,8 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
     // the ordering app's own lines (as pulled) that this app has not
     // covered — a product or quantity added there since the last import:
     // never called shipped, the operator pulls first
-    const upstreamAhead = ups.filter(it => it.qty > 0 && (!coverage[it.pid] || (!coverage[it.pid].digital && coverage[it.pid].covered + 1e-9 < it.qty)))
-      .map(it => `${it.name} x${it.qty}`);
+    const upstreamAhead = [...upQty.entries()].filter(([pid, q]) => !coverage[pid] || (!coverage[pid].digital && coverage[pid].covered + 1e-9 < q))
+      .map(([pid, q]) => `${ups.find(it => it.pid === pid)?.name ?? pid} x${q}`);
     // covered here on every non-digital line (and there is at least one),
     // and nothing upstream beyond what is imported
     const fullyShipped = uncovered.length === 0 && loc.some(l => !l.digital) && upstreamAhead.length === 0;

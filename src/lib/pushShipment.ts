@@ -280,27 +280,11 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
   if (!d.cfg.token) return { ok: false, skipped: true, message: 'ordering-app write-back skipped — no token in Settings' };
   if (!d.externalId || (d.lines.length === 0 && !d.fullyShipped)) return { ok: false, skipped: true, message: 'nothing to write back' };
   const today = new Date().toLocaleDateString('en-CA');
-  const labels = d.lines.map(l => l.label).join('; ');
-  // ALWAYS a note line, even with nothing to date: it is the stable
-  // marker a later run recovers the durable completion evidence from
-  // (autoAdopt: "Shipped per Ops app" upstream + status shipped + no
-  // audit row → write the row), so a PUT that landed before a failed
-  // verification or a failed audit insert is never lost
-  const noteLine = d.lines.length > 0
-    ? `Shipped per Ops app — ${labels} (${today})`
-    : `Shipped per Ops app — order complete, every line shipped (${today})`;
 
-  try {
-    await d.appendNote({
-      order_id: d.orderId,
-      note: `[${today}] ${d.actor} ${d.lines.length > 0 ? `wrote ship dates to the ordering app: ${labels}` : 'confirmed the order complete in the ordering app (every line shipped here)'}; upstream status ${d.fullyShipped ? "-> 'shipped' (unless already delivered)" : "-> 'partially_shipped' (unless already shipped/terminal there)"}.`,
-      detail: JSON.stringify({ lines: d.lines, fully_shipped: d.fullyShipped }),
-      actor: d.actor,
-    });
-  } catch {
-    return { ok: false, message: 'write-back NOT sent — the local audit note could not be written, and an upstream write without a local trail is not allowed' };
-  }
-
+  // READ first (a read is not a mutation): what is written depends on the
+  // order as it is NOW — an item whose upstream quantity grew past what
+  // shipped here is left undated, and the local trail line below names
+  // exactly what will be written
   let upstream: B44Order;
   try {
     upstream = await getB44Order(d.cfg, d.externalId);
@@ -311,8 +295,26 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
   if (/cancel|refund|reject|void|denied/i.test(upstreamStatus)) {
     return { ok: false, skipped: true, message: `write-back skipped — the ordering app now shows the order "${upstreamStatus}"` };
   }
-  const dateByPid = new Map(d.lines.map(l => [l.productExternalId, l.date] as const));
   const upstreamItems = Array.isArray(upstream.items) ? upstream.items : [];
+  // upstream quantity per product (an order may list a product twice)
+  const upQty = new Map<string, number>();
+  for (const it of upstreamItems) {
+    const pid = String(it.product_id ?? '');
+    const q = Number(it.quantity ?? 0);
+    if (pid && q > 0) upQty.set(pid, (upQty.get(pid) ?? 0) + q);
+  }
+  // a product is coverable when what shipped here covers its WHOLE
+  // upstream quantity (digital lines always): only such items get a date
+  const coverable = (pid: string) => {
+    const c = d.coverage[pid];
+    return !!c && (c.digital || c.covered + 1e-9 >= (upQty.get(pid) ?? 0));
+  };
+  const dateLines = d.lines.filter(l => coverable(l.productExternalId));
+  const heldBack = d.lines.filter(l => !coverable(l.productExternalId)).map(l => l.label);
+  const uncoveredUpstream = [...upQty.keys()].filter(pid => !coverable(pid))
+    .map(pid => `${String(upstreamItems.find(it => String(it.product_id ?? '') === pid)?.product_name ?? pid)} x${upQty.get(pid)}`);
+  const complete = d.fullyShipped && uncoveredUpstream.length === 0;
+  const dateByPid = new Map(dateLines.map(l => [l.productExternalId, l.date] as const));
   let intended = 0;
   const mergedItems: B44OrderItem[] = upstreamItems.map(it => {
     const pid = String(it.product_id ?? '');
@@ -320,38 +322,45 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
     if (date && !it.shipped_date) { intended++; return { ...it, shipped_date: date }; }
     return it;
   });
+  const labels = dateLines.map(l => l.label).join('; ');
+  // ALWAYS a note line, even with nothing to date: it is the stable
+  // marker a later run recovers the durable completion evidence from
+  // (autoAdopt: "Shipped per Ops app" upstream + status shipped + no
+  // audit row → write the row), so a PUT that landed before a failed
+  // verification or a failed audit insert is never lost
+  const noteLine = dateLines.length > 0
+    ? `Shipped per Ops app — ${labels} (${today})`
+    : `Shipped per Ops app — order complete, every line shipped (${today})`;
   const upstreamNotes = String(upstream.notes ?? '');
   const noteAlready = upstreamNotes.includes(noteLine);
   const mergedNotes = noteAlready ? upstreamNotes : (upstreamNotes ? `${upstreamNotes}\n${noteLine}` : noteLine);
   const delivered = /delivered/i.test(upstreamStatus);
   const statusProtected = /shipped|delivered/i.test(upstreamStatus);
-  // completion is checked against the order AS READ NOW: every upstream
-  // item must be covered by what this app shipped (digital lines aside).
-  // A product or quantity the ordering app gained since the last import
-  // is not covered, so the order is not called shipped — the caller
-  // imports first
-  const uncoveredUpstream = upstreamItems.filter(it => {
-    const pid = String(it.product_id ?? '');
-    const q = Number(it.quantity ?? 0);
-    if (!(q > 0)) return false;
-    const c = d.coverage[pid];
-    return !c || (!c.digital && c.covered + 1e-9 < q);
-  }).map(it => `${String(it.product_name ?? it.product_id)} x${Number(it.quantity ?? 0)}`);
-  const complete = d.fullyShipped && uncoveredUpstream.length === 0;
   // the status this write intends: 'shipped' when the order is covered
   // here AND upstream (unless the other admin already recorded delivery —
   // a later fact than ours), 'partially_shipped' for a dated line on an
   // order not yet covered unless its status already says shipped-or-beyond
-  const statusSet: PushDatesOutcome['statusSet'] = complete ? (delivered ? null : 'shipped') : (statusProtected || d.lines.length === 0 ? null : 'partially_shipped');
+  const statusSet: PushDatesOutcome['statusSet'] = complete ? (delivered ? null : 'shipped') : (statusProtected || dateLines.length === 0 ? null : 'partially_shipped');
   const statusChanges = !!statusSet && statusSet !== upstreamStatus;
-  if (d.fullyShipped && !complete && d.lines.length === 0) {
-    return { ok: false, skipped: true, message: `not marked complete — the ordering app now holds ${uncoveredUpstream.join(', ')} beyond what is imported here; pull the campaign first` };
-  }
-  if (intended === 0 && !statusChanges && noteAlready) {
-    return { ok: true, statusSet, message: `the ordering app already shows it (${upstreamStatus}) — nothing to write` };
+  const beyond = uncoveredUpstream.length > 0 ? ` — not marked complete: the ordering app holds ${uncoveredUpstream.join(', ')} beyond what shipped here${heldBack.length > 0 ? ` (left undated: ${heldBack.join('; ')})` : ''}; pull the campaign first` : '';
+  if (intended === 0 && !statusChanges && (noteAlready || dateLines.length === 0 && !complete)) {
+    return { ok: dateLines.length > 0 || complete, skipped: !(dateLines.length > 0 || complete), statusSet, message: `the ordering app already shows it (${upstreamStatus}) — nothing to write${beyond}` };
   }
   const fields: Record<string, unknown> = { items: mergedItems, notes: mergedNotes };
   if (statusSet) fields.status = statusSet;
+
+  // local trail BEFORE the upstream mutation — refusing to write it
+  // aborts the write-back entirely
+  try {
+    await d.appendNote({
+      order_id: d.orderId,
+      note: `[${today}] ${d.actor} ${dateLines.length > 0 ? `wrote ship dates to the ordering app: ${labels}` : 'confirmed the order complete in the ordering app (every line shipped here)'}; upstream status ${statusSet ? `-> '${statusSet}'` : `unchanged ('${upstreamStatus}')`}.${heldBack.length > 0 ? ` Left undated (ordering-app quantity beyond what shipped here): ${heldBack.join('; ')}.` : ''}`,
+      detail: JSON.stringify({ lines: dateLines, held_back: heldBack, fully_shipped: d.fullyShipped, complete }),
+      actor: d.actor,
+    });
+  } catch {
+    return { ok: false, message: 'write-back NOT sent — the local audit note could not be written, and an upstream write without a local trail is not allowed' };
+  }
 
   let putError: string | null = null;
   try {
@@ -368,7 +377,7 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
     const afterStatus = String(after.status ?? '').trim();
     const statusOk = statusSet ? afterStatus === statusSet : afterStatus === upstreamStatus;
     if (undated === 0 && noteOk && statusOk) {
-      return { ok: true, statusSet, message: `ordering app updated: ${intended} item${intended === 1 ? '' : 's'} dated${labels ? ` (${labels})` : ''}${statusChanges ? `, status -> '${statusSet}'` : delivered ? ' (delivered there, kept)' : ''}${d.fullyShipped && !complete ? ` — not marked complete: the ordering app holds ${uncoveredUpstream.join(', ')} beyond what is imported here, pull the campaign first` : ''}` };
+      return { ok: true, statusSet, message: `ordering app updated: ${intended} item${intended === 1 ? '' : 's'} dated${labels ? ` (${labels})` : ''}${statusChanges ? `, status -> '${statusSet}'` : delivered ? ' (delivered there, kept)' : ''}${beyond}` };
     }
     const what = [undated > 0 ? `${undated} item(s) still undated` : null, noteOk ? null : 'note missing', statusOk ? null : `status is '${afterStatus}'`].filter(Boolean).join(', ');
     return { ok: false, message: `write-back partial — the ordering app shows ${what}${putError ? ` (transport: ${putError})` : ''}; the next run retries` };
