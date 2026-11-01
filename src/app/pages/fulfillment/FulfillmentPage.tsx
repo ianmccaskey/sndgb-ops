@@ -844,7 +844,7 @@ export function FulfillmentPage() {
       for (const l of chosen) {
         const dv = dvByLine[Number(l.order_item_id)] || { carrier: '', tracking: '' };
         const res = await doMarkDirect({
-          order_id: directing.id, item_id: String(l.order_item_id), expected_ids: '',
+          order_id: directing.id, item_id: String(l.order_item_id), expected_ids: '', expected_qty: '',
           fulfilled: true, vendor_carrier: dv.carrier, vendor_tracking: dv.tracking, actor: userName,
         }) as unknown[] | null;
         if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
@@ -870,7 +870,7 @@ export function FulfillmentPage() {
     setSaving(true); setError('');
     try {
       const res = await doMarkDirect({
-        order_id: r.id, item_id: '', expected_ids: '',
+        order_id: r.id, item_id: '', expected_ids: '', expected_qty: '',
         fulfilled, vendor_carrier: '', vendor_tracking: '', actor: userName,
       }) as unknown[] | null;
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) {

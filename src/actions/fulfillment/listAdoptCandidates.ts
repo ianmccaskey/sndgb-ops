@@ -36,7 +36,17 @@ function listAdoptCandidates() {
              COALESCE(att.adopted, 0) AS adopted_qty,
              COALESCE(att.local_box, 0) AS local_box_qty,
              att.last_shipped_on,
-             att.boxes
+             att.boxes,
+             -- the durable completion evidence the digital-flip guard
+             -- consumes (an audited push that set status 'shipped'): the
+             -- pass records it after its own completing write-back, and
+             -- re-records it on a later run if that insert failed
+             EXISTS (
+               SELECT 1 FROM audit_log al
+               WHERE al.table_name = 'shipments'
+                 AND al.action = 'shipment_pushed_upstream'
+                 AND (al.new_data->>'order_id')::bigint = o.id
+                 AND al.new_data->'pushed'->>'status_set' = 'shipped') AS completion_logged
       FROM orders o
       JOIN order_items oi ON oi.order_id = o.id AND oi.removed_at IS NULL
       JOIN group_buy_products gbp ON gbp.id = oi.group_buy_product_id

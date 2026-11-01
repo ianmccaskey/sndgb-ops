@@ -1178,7 +1178,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     setSaving(true); setCompMsg('');
     try {
       const res = await doMarkDirectFulfilled({
-        order_id: o.id, item_id: String(it.id), expected_ids: '', fulfilled,
+        order_id: o.id, item_id: String(it.id), expected_ids: '', expected_qty: '', fulfilled,
         vendor_carrier: '', vendor_tracking: '', actor: userName,
       }) as unknown[] | null;
       if (!(Array.isArray(res) ? res.length > 0 : !!res)) setCompMsg('Nothing to change on that line.');

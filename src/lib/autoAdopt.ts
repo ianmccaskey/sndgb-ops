@@ -50,6 +50,8 @@ export type AdoptCandidateLine = {
   direct_vendor_carrier: string | null; direct_vendor_tracking: string | null;
   effective_qty: string; attributed_qty: string; shipped_qty: string; adopted_qty: string; local_box_qty: string;
   last_shipped_on: string | null; boxes: string | null;
+  /** an audited upstream completion (status 'shipped') already exists for the order */
+  completion_logged: boolean;
 };
 
 export type AutoAdoptItemKind = 'adopted' | 'vendor_marked' | 'pushed' | 'needs_you' | 'skipped' | 'error';
@@ -89,9 +91,12 @@ export type AutoAdoptDeps = {
   getUpstream: (cfg: B44Config, orderId: string) => Promise<B44Order>;
   /** adopt_upstream_shipment_untouched: refuses (zero rows) unless every line still has zero attribution */
   adopt: (p: { order_id: number; group_buy_id: number; items: string; shipped_date: string; note: string; actor: string }) => Promise<unknown>;
-  markDirect: (p: { order_id: number; item_id: string; expected_ids: string; fulfilled: boolean; vendor_carrier: string; vendor_tracking: string; actor: string }) => Promise<unknown>;
+  /** markOrderDirectFulfilled, item mode; expected_qty makes the stamp refuse a line whose quantity changed since it was read */
+  markDirect: (p: { order_id: number; item_id: string; expected_ids: string; expected_qty: string; fulfilled: boolean; vendor_carrier: string; vendor_tracking: string; actor: string }) => Promise<unknown>;
   pushDates: (p: PushDatesArgs) => Promise<PushDatesOutcome>;
   appendNote: (p: { order_id: number; note: string; detail: string; actor: string }) => Promise<unknown>;
+  /** logUpstreamCompletion: the durable completion evidence the digital-flip guard consumes (idempotent per order) */
+  logCompletion: (p: { order_id: number; actor: string; pushed: string }) => Promise<unknown>;
   logRun: (p: { group_buy_id: number; actor: string; detail: string }) => Promise<unknown>;
 };
 
@@ -296,12 +301,15 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
           for (const p of plannedDirect) {
             if (!stillHolds(p)) { push({ kind: 'skipped', orderNumber, orderId, message: `${p.sku}: the ordering app's mark changed between the pull and the write — not marked; the next run re-reads it` }); continue; }
             try {
+              // the stamp names the quantity the mark covers: a line whose
+              // quantity changed since the read (an import, an edit)
+              // refuses in the database rather than being marked whole
               const wrote = wroteRows(await deps.markDirect({
-                order_id: orderId, item_id: String(p.order_item_id), expected_ids: '',
+                order_id: orderId, item_id: String(p.order_item_id), expected_ids: '', expected_qty: p.qty,
                 fulfilled: true, vendor_carrier: '', vendor_tracking: '', actor: deps.actor,
               }));
               if (wrote) push({ kind: 'vendor_marked', orderNumber, orderId, message: `${p.sku} x${Number(p.qty)} marked vendor shipped — the ordering app says it shipped ${p.date}` });
-              else push({ kind: 'skipped', orderNumber, orderId, message: `${p.sku}: the vendor-direct line changed before it could be marked — nothing written` });
+              else push({ kind: 'skipped', orderNumber, orderId, message: `${p.sku}: the vendor-direct line changed (quantity or state) before it could be marked — nothing written; the next run re-reads it` });
             } catch (e: unknown) {
               push({ kind: 'error', orderNumber, orderId, message: `${p.sku}: vendor-shipped mark failed — ${e instanceof Error ? e.message : String(e)}` });
             }
@@ -363,17 +371,44 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
         toPush.push({ productExternalId: pid, date, label: `Shipped here — ${l.sku_code} x ${eff} (${l.boxes ?? 'box'})` });
       }
     }
-    if (toPush.length > 0) {
+    // covered here on every non-digital line (and there is at least one)
+    const fullyShipped = uncovered.length === 0 && loc.some(l => !l.digital);
+    const completionLogged = loc.some(l => l.completion_logged === true);
+    // this pass completed the order upstream earlier (its note line is
+    // there) — the durable evidence must exist too, whatever failed then
+    const completedByUs = /Shipped per Ops app/.test(String(o.notes ?? ''));
+    const logCompletion = async (reason: string) => {
+      try {
+        const wrote = wroteRows(await deps.logCompletion({
+          order_id: orderId, actor: deps.actor,
+          pushed: JSON.stringify({ reason, lines: toPush.map(l => l.label) }),
+        }));
+        if (wrote) push({ kind: 'pushed', orderNumber, orderId, message: `completion recorded (the ordering app shows the order shipped and every line is covered here)` });
+      } catch (e: unknown) {
+        push({ kind: 'error', orderNumber, orderId, message: `the completion record could not be written — ${e instanceof Error ? e.message : String(e)}; the next run retries` });
+      }
+    };
+    // the write-back is owed for dated lines, AND — with nothing to date —
+    // for an order covered here whose ordering-app status does not say so
+    // yet (a line completed through a vendor mark, or an earlier write
+    // whose status step failed); the status is the retry marker, not the
+    // item dates
+    const statusOwed = fullyShipped && !shippedLike(status);
+    if (toPush.length > 0 || statusOwed) {
       try {
         const r = await deps.pushDates({
           cfg: deps.cfg, externalId: String(o.id), orderId, orderNumber,
-          lines: toPush, fullyShipped: uncovered.length === 0, actor: deps.actor, appendNote: deps.appendNote,
+          lines: toPush, fullyShipped, actor: deps.actor, appendNote: deps.appendNote,
         });
-        if (r.ok) push({ kind: 'pushed', orderNumber, orderId, message: r.message });
-        else push({ kind: r.skipped ? 'skipped' : 'error', orderNumber, orderId, message: r.message });
+        if (r.ok) {
+          push({ kind: 'pushed', orderNumber, orderId, message: r.message });
+          if (r.statusSet === 'shipped' && !completionLogged) await logCompletion('write-back set the ordering app to shipped');
+        } else push({ kind: r.skipped ? 'skipped' : 'error', orderNumber, orderId, message: r.message });
       } catch (e: unknown) {
         push({ kind: 'error', orderNumber, orderId, message: `write-back to the ordering app failed — ${e instanceof Error ? e.message : String(e)}` });
       }
+    } else if (fullyShipped && shippedLike(status) && completedByUs && !completionLogged) {
+      await logCompletion('an earlier write-back completed the order; its evidence row was missing');
     }
   }
 

@@ -237,6 +237,7 @@ export type PushDatesArgs = {
   externalId: string;
   orderId: number;
   orderNumber: string;
+  /** items to date; may be EMPTY when only the order's completion status is owed */
   lines: PushDatesLine[];
   /** every non-digital line of the order is now covered here (boxes + vendor stamps) */
   fullyShipped: boolean;
@@ -244,33 +245,40 @@ export type PushDatesArgs = {
   appendNote: (params: { order_id: number; note: string; detail: string; actor: string }) => Promise<unknown>;
 };
 
-export type PushDatesOutcome = PushOutcome & { skipped?: boolean };
+export type PushDatesOutcome = PushOutcome & {
+  skipped?: boolean;
+  /** the order-level status this write VERIFIED upstream, when it set one */
+  statusSet?: 'shipped' | 'partially_shipped' | null;
+};
 
 /**
  * Write ship dates the ordering app is missing for lines that ALREADY
  * left from here: vendor-direct lines marked "Vendor shipped" (which no
  * other path pushes), and packed lines whose box push left them undated
- * (a partial at push time, a later quantity edit). Used by the auto-adopt
- * pass (src/lib/autoAdopt.ts). Same discipline as pushShipmentUpstream:
- * local trail line first, read-merge-write of items[] (only shipped_date
- * on the named items, never over one already set), a note line appended
- * once, status 'shipped' only when the whole order is covered and
- * otherwise 'partially_shipped' never over a protected status, then a
- * verifying re-read. There is no local stamp to write: the ordering
- * app's own shipped_date is the idempotency marker — the next run sees
- * it set and leaves the item alone.
+ * (a partial at push time, a later quantity edit) — and, with no lines at
+ * all, the order's completion status once every line is covered here.
+ * Used by the auto-adopt pass (src/lib/autoAdopt.ts). Same discipline as
+ * pushShipmentUpstream: local trail line first, read-merge-write of
+ * items[] (only shipped_date on the named items, never over one already
+ * set), a note line appended once, status 'shipped' only when the whole
+ * order is covered (never over 'delivered' — the other admin's later
+ * fact stands) and otherwise 'partially_shipped' never over a protected
+ * status, then a verifying re-read. The ordering app's own shipped_date
+ * and status are the idempotency markers: the next run sees them set and
+ * leaves the order alone. The caller records the durable completion
+ * evidence (logUpstreamCompletion) when statusSet is 'shipped'.
  */
 export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDatesOutcome> {
   if (!d.cfg.token) return { ok: false, skipped: true, message: 'ordering-app write-back skipped — no token in Settings' };
-  if (!d.externalId || d.lines.length === 0) return { ok: false, skipped: true, message: 'nothing to write back' };
+  if (!d.externalId || (d.lines.length === 0 && !d.fullyShipped)) return { ok: false, skipped: true, message: 'nothing to write back' };
   const today = new Date().toLocaleDateString('en-CA');
   const labels = d.lines.map(l => l.label).join('; ');
-  const noteLine = `Shipped per Ops app — ${labels} (${today})`;
+  const noteLine = d.lines.length > 0 ? `Shipped per Ops app — ${labels} (${today})` : '';
 
   try {
     await d.appendNote({
       order_id: d.orderId,
-      note: `[${today}] ${d.actor} wrote ship dates to the ordering app: ${labels}; upstream status ${d.fullyShipped ? "-> 'shipped'" : "-> 'partially_shipped' (unless already shipped/terminal there)"}.`,
+      note: `[${today}] ${d.actor} ${d.lines.length > 0 ? `wrote ship dates to the ordering app: ${labels}` : 'confirmed the order complete in the ordering app (every line shipped here)'}; upstream status ${d.fullyShipped ? "-> 'shipped' (unless already delivered)" : "-> 'partially_shipped' (unless already shipped/terminal there)"}.`,
       detail: JSON.stringify({ lines: d.lines, fully_shipped: d.fullyShipped }),
       actor: d.actor,
     });
@@ -298,11 +306,21 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
     return it;
   });
   const upstreamNotes = String(upstream.notes ?? '');
-  const mergedNotes = upstreamNotes.includes(noteLine) ? upstreamNotes : (upstreamNotes ? `${upstreamNotes}\n${noteLine}` : noteLine);
+  const noteAlready = !noteLine || upstreamNotes.includes(noteLine);
+  const mergedNotes = noteAlready ? upstreamNotes : (upstreamNotes ? `${upstreamNotes}\n${noteLine}` : noteLine);
+  const delivered = /delivered/i.test(upstreamStatus);
   const statusProtected = /shipped|delivered/i.test(upstreamStatus);
+  // the status this write intends: 'shipped' when the order is covered
+  // here (unless the other admin already recorded delivery — a later
+  // fact than ours), 'partially_shipped' for a dated line on an order
+  // not yet covered unless its status already says shipped-or-beyond
+  const statusSet: PushDatesOutcome['statusSet'] = d.fullyShipped ? (delivered ? null : 'shipped') : (statusProtected ? null : 'partially_shipped');
+  const statusChanges = !!statusSet && statusSet !== upstreamStatus;
+  if (intended === 0 && !statusChanges && noteAlready) {
+    return { ok: true, statusSet, message: `the ordering app already shows it (${upstreamStatus}) — nothing to write` };
+  }
   const fields: Record<string, unknown> = { items: mergedItems, notes: mergedNotes };
-  if (d.fullyShipped) fields.status = 'shipped';
-  else if (!statusProtected) fields.status = 'partially_shipped';
+  if (statusSet) fields.status = statusSet;
 
   let putError: string | null = null;
   try {
@@ -315,13 +333,13 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
     const after = await getB44Order(d.cfg, d.externalId);
     const afterItems = Array.isArray(after.items) ? after.items : [];
     const undated = afterItems.filter(it => dateByPid.has(String(it.product_id ?? '')) && !it.shipped_date).length;
-    const noteOk = String(after.notes ?? '').includes(noteLine);
+    const noteOk = !noteLine || String(after.notes ?? '').includes(noteLine);
     const afterStatus = String(after.status ?? '').trim();
-    const statusOk = d.fullyShipped ? afterStatus === 'shipped' : statusProtected || afterStatus === 'partially_shipped';
+    const statusOk = statusSet ? afterStatus === statusSet : afterStatus === upstreamStatus;
     if (undated === 0 && noteOk && statusOk) {
-      return { ok: true, message: `ordering app updated: ${intended} item${intended === 1 ? '' : 's'} dated (${labels})${d.fullyShipped ? ", status -> 'shipped'" : statusProtected ? '' : ", status -> 'partially_shipped'"}` };
+      return { ok: true, statusSet, message: `ordering app updated: ${intended} item${intended === 1 ? '' : 's'} dated${labels ? ` (${labels})` : ''}${statusChanges ? `, status -> '${statusSet}'` : delivered ? ' (delivered there, kept)' : ''}` };
     }
-    const what = [undated > 0 ? `${undated} item(s) still undated` : null, noteOk ? null : 'note missing', statusOk ? null : 'status not set'].filter(Boolean).join(', ');
+    const what = [undated > 0 ? `${undated} item(s) still undated` : null, noteOk ? null : 'note missing', statusOk ? null : `status is '${afterStatus}'`].filter(Boolean).join(', ');
     return { ok: false, message: `write-back partial — the ordering app shows ${what}${putError ? ` (transport: ${putError})` : ''}; the next run retries` };
   } catch {
     return { ok: false, message: `write-back outcome unknown — the update ${putError ? `threw (${putError})` : 'was sent'} and the verifying re-read failed; the next run retries (idempotent)` };

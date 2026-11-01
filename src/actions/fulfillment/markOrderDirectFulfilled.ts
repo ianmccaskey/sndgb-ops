@@ -15,6 +15,9 @@ import { action } from '@uibakery/data';
  *    stamp onto half its lines. Optional vendor_carrier/vendor_tracking
  *    record the VENDOR's label on the stamped lines (canonical compact
  *    tracking, lowercase carrier); undo clears them.
+ *  - expected_qty ('' for the operator's controls): an unattended caller
+ *    names the quantity its evidence covers and the stamp refuses when the
+ *    line's effective quantity differs (changed since it was read).
  *  - fulfilled=false + blank item_id: undo across the order's fulfilled
  *    lines. Deliberately un-anchored — undoing only ADDS work back to the
  *    queue, the safe direction.
@@ -35,7 +38,13 @@ function markOrderDirectFulfilled() {
                string_to_array(NULLIF({{params.expected_ids}}::text, ''), ',')::bigint[] AS exp_ids,
                {{params.fulfilled}}::boolean AS fulfilled,
                NULLIF(LOWER(TRIM({{params.vendor_carrier}}::text)), '') AS v_carrier,
-               NULLIF(regexp_replace(UPPER(TRIM({{params.vendor_tracking}}::text)), '\\s', '', 'g'), '') AS v_tracking
+               NULLIF(regexp_replace(UPPER(TRIM({{params.vendor_tracking}}::text)), '\\s', '', 'g'), '') AS v_tracking,
+               -- an unattended caller (the auto-adopt pass) names the
+               -- quantity its evidence covers; the stamp refuses if the
+               -- line's effective quantity changed meanwhile (an import
+               -- or edit between its read and this write). The
+               -- operator's controls pass '' and stamp the line as is.
+               NULLIF({{params.expected_qty}}::text, '')::numeric AS exp_qty
         FROM lck
       ), upd AS (
         UPDATE order_items oi SET
@@ -68,6 +77,7 @@ function markOrderDirectFulfilled() {
             WHERE g.id = oi.group_buy_product_id AND p.digital)
           AND ((inp.fulfilled AND oi.direct_fulfilled_at IS NULL)
                OR (NOT inp.fulfilled AND oi.direct_fulfilled_at IS NOT NULL))
+          AND (inp.exp_qty IS NULL OR COALESCE(oi.qty_override, oi.qty) = inp.exp_qty)
           AND (
             -- one specific line
             (inp.item_id IS NOT NULL AND oi.id = inp.item_id)

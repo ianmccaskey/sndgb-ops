@@ -4,6 +4,7 @@ import listAdoptCandidates from '@/actions/fulfillment/listAdoptCandidates';
 import adoptUpstreamShipmentUntouched from '@/actions/fulfillment/adoptUpstreamShipmentUntouched';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import logAutoAdoptRun from '@/actions/fulfillment/logAutoAdoptRun';
+import logUpstreamCompletion from '@/actions/fulfillment/logUpstreamCompletion';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { useApp, platformOf } from '@/app/AppContext';
 import { B44_DEFAULT_APP_ID, getB44Order, listB44Orders } from '@/lib/base44';
@@ -60,13 +61,14 @@ export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
   const [doAdopt] = useMutateAction(adoptUpstreamShipmentUntouched);
   const [doMarkDirect] = useMutateAction(markOrderDirectFulfilled);
   const [doLogRun] = useMutateAction(logAutoAdoptRun);
+  const [doLogCompletion] = useMutateAction(logUpstreamCompletion);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [state, setState] = useState<AutoAdoptState>(IDLE);
   const activeRef = useRef(false);
   const queuedRef = useRef<Map<number, string>>(new Map());
   const runRef = useRef<(groupBuyId: number, trigger: string) => Promise<AutoAdoptSummary | null>>(async () => null);
-  const envRef = useRef({ userName, settings, groupBuys, doCandidates, doAdopt, doMarkDirect, doLogRun, doAppendNote });
-  envRef.current = { userName, settings, groupBuys, doCandidates, doAdopt, doMarkDirect, doLogRun, doAppendNote };
+  const envRef = useRef({ userName, settings, groupBuys, doCandidates, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote });
+  envRef.current = { userName, settings, groupBuys, doCandidates, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote };
 
   // when each campaign's last run finished — a page-open trigger within
   // RECENT_MS of it is skipped (the Fulfillment page would otherwise
@@ -100,6 +102,7 @@ export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
         markDirect: (p) => env.doMarkDirect(p),
         pushDates: pushShippedDatesUpstream,
         appendNote: (p) => env.doAppendNote(p),
+        logCompletion: (p) => env.doLogCompletion(p),
         logRun: (p) => env.doLogRun(p),
       });
       summary.trigger = trigger;
