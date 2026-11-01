@@ -362,6 +362,29 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
     return { ok: false, message: 'write-back NOT sent — the local audit note could not be written, and an upstream write without a local trail is not allowed' };
   }
 
+  // The ordering app offers no conditional update: a PUT replaces items,
+  // notes and status wholesale. So the order is read AGAIN immediately
+  // before the write, with nothing awaited in between, and the write is
+  // refused if anything the merge was built from moved since the planning
+  // read (the admin editing a quantity, adding a note, cancelling) — the
+  // next run re-plans from the new state. What remains is the one network
+  // hop between this read and the PUT, the same residual the shipment
+  // push has always carried; the verifying re-read after the PUT cannot
+  // see into it, which is why the window is kept this small.
+  let latest: B44Order;
+  try {
+    latest = await getB44Order(d.cfg, d.externalId);
+  } catch (e: unknown) {
+    return { ok: false, message: `write-back aborted before the write — could not re-read the ordering-app order (${e instanceof Error ? e.message : 'read failed'}); the next run retries` };
+  }
+  const moved = String(latest.updated_date ?? '') !== String(upstream.updated_date ?? '')
+    || String(latest.status ?? '').trim() !== upstreamStatus
+    || String(latest.notes ?? '') !== upstreamNotes
+    || JSON.stringify(Array.isArray(latest.items) ? latest.items : []) !== JSON.stringify(upstreamItems);
+  if (moved) {
+    return { ok: false, skipped: true, message: `write-back held — the ordering app's order changed while it was being prepared (now "${String(latest.status ?? '')}"); nothing written, the next run re-plans from the new state` };
+  }
+
   let putError: string | null = null;
   try {
     await updateB44Order(d.cfg, d.externalId, fields);

@@ -110,9 +110,15 @@ where the code fails to honour one; do not propose replacing the decision.
   It never records over a line that already has a box or draft here (a
   possible double shipment goes under "needs you" with both records),
   never acts on an order-level status alone, never resolves two dates.
-  Flag a place where the pass would record over local evidence or act on
-  an ISO-dated item; do not propose widening it to order-level statuses
-  or to linking products. Settled with the owner 2026-11-01.
+  The write-back plans from one read, writes the local trail line, reads
+  the order AGAIN with nothing awaited before the PUT and refuses if
+  `updated_date`, status, notes or items moved; base44 has no conditional
+  update, so the one network hop between that read and the PUT is the
+  residual every upstream push in this app carries (`pushShipmentUpstream`
+  included) — accepted, not a finding. Flag a place where the pass would
+  record over local evidence, act on an ISO-dated item, or write upstream
+  without the second read; do not propose widening it to order-level
+  statuses or to linking products. Settled with the owner 2026-11-01.
 
 - **A paid order ships even with a pending hash** (`1790102900`). The
   money gate on every pack/ship path (Ready and Direct queues, direct-ship
