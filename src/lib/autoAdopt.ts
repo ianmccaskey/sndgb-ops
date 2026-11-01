@@ -374,8 +374,11 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
     // covered here on every non-digital line (and there is at least one)
     const fullyShipped = uncovered.length === 0 && loc.some(l => !l.digital);
     const completionLogged = loc.some(l => l.completion_logged === true);
-    // this pass completed the order upstream earlier (its note line is
-    // there) — the durable evidence must exist too, whatever failed then
+    // this pass wrote to the order upstream earlier (its note line is
+    // there — written on every write-back, status-only ones included) and
+    // the order is complete there: the durable evidence must exist too,
+    // whatever failed after the PUT landed (verification, the audit row,
+    // a closed tab)
     const completedByUs = /Shipped per Ops app/.test(String(o.notes ?? ''));
     const logCompletion = async (reason: string) => {
       try {

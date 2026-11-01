@@ -260,7 +260,8 @@ export type PushDatesOutcome = PushOutcome & {
  * Used by the auto-adopt pass (src/lib/autoAdopt.ts). Same discipline as
  * pushShipmentUpstream: local trail line first, read-merge-write of
  * items[] (only shipped_date on the named items, never over one already
- * set), a note line appended once, status 'shipped' only when the whole
+ * set), a note line appended once (also on a status-only write — it is
+ * the recovery marker), status 'shipped' only when the whole
  * order is covered (never over 'delivered' — the other admin's later
  * fact stands) and otherwise 'partially_shipped' never over a protected
  * status, then a verifying re-read. The ordering app's own shipped_date
@@ -273,7 +274,14 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
   if (!d.externalId || (d.lines.length === 0 && !d.fullyShipped)) return { ok: false, skipped: true, message: 'nothing to write back' };
   const today = new Date().toLocaleDateString('en-CA');
   const labels = d.lines.map(l => l.label).join('; ');
-  const noteLine = d.lines.length > 0 ? `Shipped per Ops app — ${labels} (${today})` : '';
+  // ALWAYS a note line, even with nothing to date: it is the stable
+  // marker a later run recovers the durable completion evidence from
+  // (autoAdopt: "Shipped per Ops app" upstream + status shipped + no
+  // audit row → write the row), so a PUT that landed before a failed
+  // verification or a failed audit insert is never lost
+  const noteLine = d.lines.length > 0
+    ? `Shipped per Ops app — ${labels} (${today})`
+    : `Shipped per Ops app — order complete, every line shipped (${today})`;
 
   try {
     await d.appendNote({
@@ -306,7 +314,7 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
     return it;
   });
   const upstreamNotes = String(upstream.notes ?? '');
-  const noteAlready = !noteLine || upstreamNotes.includes(noteLine);
+  const noteAlready = upstreamNotes.includes(noteLine);
   const mergedNotes = noteAlready ? upstreamNotes : (upstreamNotes ? `${upstreamNotes}\n${noteLine}` : noteLine);
   const delivered = /delivered/i.test(upstreamStatus);
   const statusProtected = /shipped|delivered/i.test(upstreamStatus);
@@ -333,7 +341,7 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
     const after = await getB44Order(d.cfg, d.externalId);
     const afterItems = Array.isArray(after.items) ? after.items : [];
     const undated = afterItems.filter(it => dateByPid.has(String(it.product_id ?? '')) && !it.shipped_date).length;
-    const noteOk = !noteLine || String(after.notes ?? '').includes(noteLine);
+    const noteOk = String(after.notes ?? '').includes(noteLine);
     const afterStatus = String(after.status ?? '').trim();
     const statusOk = statusSet ? afterStatus === statusSet : afterStatus === upstreamStatus;
     if (undated === 0 && noteOk && statusOk) {
