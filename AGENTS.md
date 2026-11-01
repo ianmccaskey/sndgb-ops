@@ -132,6 +132,33 @@ where the code fails to honour one; do not propose replacing the decision.
   a pending hash may still be. Do not re-add `pending_payment_count = 0`
   to a ship gate. Settled with the owner 2026-10-28.
 
+- **A box recorded shipped by mistake is cancelled at once; the label
+  refund settles on its own** (`1790103200`). "Cancel shipment" on the
+  Ship dialog (`cancelShipment` → `cancel_finalized_shipment()`, 42001
+  lock) empties the finalized box (what it held stays in
+  `cancelled_items` and the `shipment_cancelled` audit row), so its units
+  are back on the pack list and in inventory now and the order re-enters
+  Ready to pack; the Shippo refund stays a separate money fact on
+  `refund_status`, requested and re-checked as before, and nothing waits
+  for it. A cancelled box takes no items and its record never changes
+  (triggers), and it is not a shipment: the queue, the order list, the
+  delivery poll and every push surface skip `cancelled_at IS NOT NULL`,
+  and `markShipmentPushed` refuses it. The cancel refuses a box the
+  carrier reported moving / delivered / returned / failed (a return, not
+  a cancel) and an adopted `'upstream'` record (corrected in the ordering
+  app first, or auto-adopt records it again). The ordering app is then
+  reset for that one box (`resetVoidedShipmentUpstream`, also offered for
+  a refund-voided pushed box): only ISO ship dates this app wrote, only
+  on items no longer covered here, the box's tracking note marked
+  cancelled, and status moved off shipped / partially_shipped only when
+  this box's push evidently set it — to partially_shipped if anything
+  else shipped, else the status the operator picks (default: the
+  `prior_status` the push now records, else verified). Hand-typed dates
+  and `delivered` are the other admin's and stay. Until
+  `upstream_reset_at`, the row says "ordering app not reset" instead of
+  offering "Record here" for the box that was cancelled. Settled with
+  the owner 2026-11-01.
+
 - **Group stock is funded equally by the partners, not by the profit
 
   split.** Stock-plan commits and group-stock adjustments sit inside

@@ -192,9 +192,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       // only in audit tombstones), and NEVER attach silently — the
       // operator confirms the exact shipment the evidence will join
       try {
-        type JitRow = { id: number; refund_status: string | null; finalized_at: string | null; carrier: string | null; tracking_number: string | number | null };
+        type JitRow = { id: number; refund_status: string | null; cancelled_at: string | null; finalized_at: string | null; carrier: string | null; tracking_number: string | number | null };
         const res = await fetchShipRowsJit({ order_id: orderId }) as JitRow[] | null;
-        const live = (Array.isArray(res) ? res : []).filter(r => r.refund_status !== 'SUCCESS');
+        const live = (Array.isArray(res) ? res : []).filter(r => r.refund_status !== 'SUCCESS' && !r.cancelled_at);
         // the operator's explicit pick wins; it must still exist LIVE in
         // the fresh read. No pick = newest finalized box (drafts only
         // when nothing finalized exists).
@@ -297,6 +297,9 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     refund_status: string | null; finalized_at: string | null; shipped_at: string | null;
     b44_pushed_at: string | null; push_epoch: number; created_by: string | null;
     items: { order_item_id: number; qty: string; sku_code: string }[];
+    // recorded shipped by mistake (1790103200): empty, not a shipment
+    cancelled_at: string | null; cancel_reason: string | null; upstream_reset_at: string | null;
+    cancelled_items: { order_item_id: number; qty: string; sku_code: string }[];
   };
   type ShipPackableRow = {
     order_item_id: number; product_external_id: string | null; sku_code: string;
@@ -309,7 +312,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const shippedByItem = useMemo(() => {
     const m = new Map<number, number>();
     for (const s of shipRows) {
-      if (!s.finalized_at || s.refund_status === 'SUCCESS') continue;
+      if (!s.finalized_at || s.refund_status === 'SUCCESS' || s.cancelled_at) continue;
       for (const si of s.items || []) {
         m.set(Number(si.order_item_id), (m.get(Number(si.order_item_id)) || 0) + Number(si.qty || 0));
       }
@@ -1887,16 +1890,22 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                 <h3 id="ods-shipments" className="font-semibold mb-1 scroll-mt-14">Shipments</h3>
                 {shipRows.length === 0 && <p className="text-muted-foreground text-xs">No shipments yet — boxes ship from the Fulfillment page.</p>}
                 {shipRows.map(s => (
-                  <div key={s.id} className={`py-1 border-b last:border-0 text-xs space-y-0.5 ${s.refund_status === 'SUCCESS' ? 'opacity-50' : ''}`}>
+                  <div key={s.id} className={`py-1 border-b last:border-0 text-xs space-y-0.5 ${s.refund_status === 'SUCCESS' || s.cancelled_at ? 'opacity-50' : ''}`}>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <StatusPill value={s.refund_status === 'SUCCESS' ? 'refunded' : (s.finalized_at ? s.status : 'pending')} />
+                      <StatusPill value={s.cancelled_at ? 'cancelled' : s.refund_status === 'SUCCESS' ? 'refunded' : (s.finalized_at ? s.status : 'pending')} />
+                      {s.cancelled_at && !s.upstream_reset_at && (
+                        <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase"
+                          title="The ordering app may still show this box as shipped — open Ship on the Fulfillment page and use Reset ordering app">ordering app not reset</span>
+                      )}
                       {!s.finalized_at && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Unfinished draft — continue or delete it from the Fulfillment page's Ship dialog">draft</span>}
                       {s.tracking_number && <span className="font-mono">{(s.carrier || '').toUpperCase()} <TrackingLink carrier={s.carrier} tracking={s.tracking_number} /></span>}
-                      <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${Number(i.qty)}`).join(', ')}</span>
+                      {s.cancelled_at
+                        ? <span className="text-muted-foreground line-through" title={`Cancelled — ${s.cancel_reason || 'recorded shipped by mistake'}; nothing went out`}>{(s.cancelled_items || []).map(i => `${i.sku_code}×${Number(i.qty)}`).join(', ')}</span>
+                        : <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${Number(i.qty)}`).join(', ')}</span>}
                       {Number(s.label_cost_usd) > 0 && <span className="text-muted-foreground">{fmtUSD(s.label_cost_usd)}</span>}
                       {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}
                       {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">refund {s.refund_status}</span>}
-                      {s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && (
+                      {s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && !s.cancelled_at && (
                         <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="The ordering app has not been told about this shipment yet"><Led className="w-1.5 h-1.5" />not pushed</span>
                       )}
                     </div>
@@ -1910,7 +1919,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                     )}
                     <div className="flex flex-wrap gap-1.5">
                       {s.label_url && <a className="underline text-muted-foreground" href={s.label_url} target="_blank" rel="noreferrer">label</a>}
-                      {s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && o.external_id && (
+                      {s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && !s.cancelled_at && o.external_id && (
                         <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={saving} onClick={() => pushShipRow(s)}>Push upstream</Button>
                       )}
                     </div>
@@ -1944,13 +1953,13 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                               </Button>
                             ) : (
                               <>
-                                {s.shipment_id == null && shipRows.filter(r => r.refund_status !== 'SUCCESS').length > 1 && (
+                                {s.shipment_id == null && shipRows.filter(r => r.refund_status !== 'SUCCESS' && !r.cancelled_at).length > 1 && (
                                   <select className="h-5 max-w-[110px] rounded border bg-background text-[10px]"
                                     title="Choose the exact box this photo belongs to"
                                     value={attachTarget[s.key] ?? ''}
                                     onChange={e => setAttachTarget(m => ({ ...m, [s.key]: e.target.value }))}>
                                     <option value="">newest box</option>
-                                    {shipRows.filter(r => r.refund_status !== 'SUCCESS').map(r => (
+                                    {shipRows.filter(r => r.refund_status !== 'SUCCESS' && !r.cancelled_at).map(r => (
                                       <option key={r.id} value={String(r.id)}>
                                         #{r.id}{r.finalized_at ? '' : ' draft'}{r.tracking_number ? ` ${dbText(r.tracking_number)}` : ''}
                                       </option>

@@ -148,6 +148,11 @@ function listFulfillmentQueue() {
              COALESCE(s.has_draft, false) AS has_draft,
              COALESCE(s.draft_needs_recovery, false) AS draft_needs_recovery,
              COALESCE(s.push_outstanding, false) AS push_outstanding,
+             -- a cancelled box whose ordering-app reset has not verified:
+             -- the ordering app may still call the order shipped
+             EXISTS (SELECT 1 FROM shipments sc
+                     WHERE sc.order_id = o.id AND sc.cancelled_at IS NOT NULL
+                       AND sc.upstream_reset_at IS NULL) AS upstream_reset_outstanding,
              COALESCE(s.tracking_numbers, '') AS tracking_numbers,
              COALESCE(s.label_cost_total, 0) AS label_cost_total,
              -- carrier-said delivery progress (tracking snapshots refreshed
@@ -207,7 +212,10 @@ function listFulfillmentQueue() {
                max(CASE sh.status WHEN 'delivered' THEN 5 WHEN 'reshipped' THEN 4
                                   WHEN 'shipped' THEN 3 WHEN 'packed' THEN 2 ELSE 1 END) AS max_rank
         FROM shipments sh
+        -- a cancelled box (recorded shipped by mistake, 1790103200) is not
+        -- a shipment: no state, no push, no tracking, no label on the row
         WHERE sh.order_id = o.id AND COALESCE(sh.refund_status, '') <> 'SUCCESS'
+          AND sh.cancelled_at IS NULL
       ) s ON true
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND o.status NOT IN ('cancelled','refunded')

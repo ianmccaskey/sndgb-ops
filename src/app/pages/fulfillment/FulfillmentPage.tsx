@@ -53,6 +53,8 @@ type QueueRow = QueueOrder & {
   direct_outstanding_ids: string; all_direct: boolean; direct_outstanding: boolean;
   shipment_state: string | null; shipment_count: string;
   has_draft: boolean; draft_needs_recovery: boolean; push_outstanding: boolean;
+  // a cancelled box (recorded shipped by mistake) the ordering app may still show
+  upstream_reset_outstanding: boolean;
   tracking_numbers: string; label_cost_total: string;
   finalized_count: string; delivered_count: string; returned_count: string; last_delivered_at: string | null;
   attention_count: string; attention_substatus: string | null;
@@ -150,7 +152,7 @@ export function FulfillmentPage() {
         // JIT authoritative reads per order — never this page's stale rows
         type JitShip = {
           id: number; finalized_at: string | null; b44_pushed_at: string | null;
-          refund_status: string | null; push_epoch: number; carrier: string | null;
+          refund_status: string | null; cancelled_at: string | null; push_epoch: number; carrier: string | null;
           tracking_number: string | number | null;
           items: { order_item_id: number; qty: string; sku_code: string }[];
         };
@@ -162,7 +164,7 @@ export function FulfillmentPage() {
             await fetchPackableJit({ order_id: r.id }) as unknown[] | null,
           ];
           ships = (Array.isArray(shipRes) ? shipRes as JitShip[] : [])
-            .filter(s => s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS');
+            .filter(s => s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && !s.cancelled_at);
           packable = (Array.isArray(pkRes) ? pkRes : []).map(row => {
             const l = row as Record<string, unknown>;
             return {
@@ -594,6 +596,9 @@ export function FulfillmentPage() {
   const upstreamMismatch = (r: QueueRow): boolean => {
     const s = upstreamStatusOf(r);
     if (!s || !upstreamShippedLike(s)) return false;
+    // the ordering app still carries a box cancelled here: the fix is its
+    // reset, never recording that same box again ("ordering app not reset")
+    if (r.upstream_reset_outstanding) return false;
     // vendor-direct completion is recorded WITHOUT a local shipment row —
     // an all-direct order whose vendor lines are marked sent is fully
     // accounted for here, never a mismatch
@@ -614,6 +619,7 @@ export function FulfillmentPage() {
   const partialMismatch = (r: QueueRow): boolean => {
     const info = upstreamInfoOf(r);
     if (!info || !upstreamPartial(info.status)) return false;
+    if (r.upstream_reset_outstanding) return false;
     if (r.all_direct && !r.direct_outstanding) return false;
     const locals = r.upstream_check_json || [];
     const mapped = info.shipped.filter(u => locals.some(l => String(l.ext) === u.pid));
@@ -891,6 +897,7 @@ export function FulfillmentPage() {
       {r.draft_needs_recovery && <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A draft's Shippo purchase was dispatched but never saved — it may hold a PAID label. Open Ship to recover.">needs recovery</span>}
       {r.push_outstanding && <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A shipped box has not been pushed to the ordering app — open Ship and use Push upstream"><Led className="w-1.5 h-1.5" />not pushed</span>}
       {Number(r.pending_payment_count) > 0 && <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="Verified money already covers this order, so it can ship — but a payment hash on it is still pending. Open the order and Verify or Reject it; if it verifies, the order reads over.">{Number(r.pending_payment_count) === 1 ? 'pending hash' : `${r.pending_payment_count} pending hashes`}</span>}
+      {r.upstream_reset_outstanding && <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title="A box on this order was cancelled (recorded shipped by mistake) and the ordering app may still show it shipped — open Ship and use Reset ordering app"><Led className="w-1.5 h-1.5" />ordering app not reset</span>}
       {upstreamMismatch(r) && <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={mismatchTitle(r)}>shipped upstream</span>}
       {partialMismatch(r) && <span className="rounded bg-orange-400/10 text-orange-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase" title={partialTitle(r)}>partial upstream</span>}
       {sessionActive && stage === 'ready' && packability(r) === 'full' && <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase">packable</span>}

@@ -63,6 +63,7 @@ function listOrders() {
                         AND NOT p2.digital) a) AS remaining_packable_qty
         FROM shipments sh
         WHERE sh.order_id = o.id AND COALESCE(sh.refund_status, '') <> 'SUCCESS'
+          AND sh.cancelled_at IS NULL   -- a cancelled box is not a shipment (1790103200)
       ) s ON true
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND ({{params.status}}::text = 'all' OR o.status::text = {{params.status}}::text)

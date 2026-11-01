@@ -24,10 +24,12 @@ import { announceHold, coordAvailable, remoteCaptureActive, remoteLandingActive,
 import { getRates, purchaseLabel, createShippoOrder, getTransaction, findTransactionByRate, requestRefund, findRefundByTransaction, ShippoPurchaseRefusedError, usPhoneOrUndefined } from '@/lib/shippo';
 import setShipmentShippoOrder from '@/actions/fulfillment/setShipmentShippoOrder';
 import adjustShipmentItemRecorded from '@/actions/fulfillment/adjustShipmentItemRecorded';
+import cancelShipment from '@/actions/fulfillment/cancelShipment';
+import markShipmentUpstreamReset from '@/actions/fulfillment/markShipmentUpstreamReset';
 import type { ShippoAddress, ShippoRate, PurchaseResult } from '@/lib/shippo';
 import type { ShippoHttp } from '@/lib/useShippoHttp';
-import { pushShipmentUpstream } from '@/lib/pushShipment';
-import type { PushPackableLine } from '@/lib/pushShipment';
+import { pushShipmentUpstream, resetVoidedShipmentUpstream } from '@/lib/pushShipment';
+import type { PushOutcome, PushPackableLine } from '@/lib/pushShipment';
 import type { B44Config } from '@/lib/base44';
 import { fmtUSD, fmtNum, fmtDateTime, fmtDate } from '@/lib/fmt';
 
@@ -91,7 +93,16 @@ type ShipmentRow = {
   finalized_at: string | null; shipped_at: string | null; b44_pushed_at: string | null;
   push_epoch: number; created_at: string;
   items: { order_item_id: number; qty: string; sku_code: string; product_id: number; product_external_id: string | null }[];
+  // recorded shipped by mistake (1790103200): items is empty, cancelled_items is what it held
+  cancelled_at: string | null; cancelled_by: string | null; cancel_reason: string | null;
+  cancelled_items: { order_item_id: number; qty: string; sku_code: string; product_id: number; product_external_id: string | null }[];
+  upstream_reset_at: string | null; pushed_prior_status: string | null;
 };
+
+// statuses a reset may put an order back to — never a shipped or terminal one
+const RESTORABLE = (s: string | null | undefined) => !!s && !/ship|deliver|cancel|refund|reject|void|denied/i.test(s);
+// the carrier has had the box: it went out, so it is a return, not a cancel
+const CARRIER_HAD_IT = ['TRANSIT', 'DELIVERED', 'RETURNED', 'FAILURE'];
 
 export type QueueOrder = {
   id: number; order_number: string; external_id: string | null; customer_name: string;
@@ -144,6 +155,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doSetShippoOrder] = useMutateAction(setShipmentShippoOrder);
   const [doAdjustItem] = useMutateAction(adjustShipmentItemRecorded);
+  const [doCancelShipment] = useMutateAction(cancelShipment);
+  const [doMarkReset] = useMutateAction(markShipmentUpstreamReset);
+  // "Cancel shipment" panel for ONE finalized box at a time, and the
+  // ordering-app reset (also offered alone, as a retry) — server-gated
+  const [cancelId, setCancelId] = useState<number | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelAlsoRefund, setCancelAlsoRefund] = useState(true);
+  const [cancelMsg, setCancelMsg] = useState('');
+  const [restorePick, setRestorePick] = useState<Record<number, string>>({});
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const cancelInFlight = useRef(false);
   // "Fix items" editor for ONE finalized shipment at a time: which row is
   // open, the shared audited reason, per-line qty edits, and the add-line
   // pickers. All server-gated — these fields are conveniences, not truth.
@@ -1155,10 +1177,14 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     reloadPackable(); reloadShipments(); reload();
   };
 
-  const refund = async (s: ShipmentRow) => {
-    if (!s.shippo_transaction_id || refundInFlight.current) return;
-    if (!shippoKey) { setRowMsg(m => ({ ...m, [s.id]: 'No Shippo API token is set (Settings) — the refund request cannot be sent.' })); return; }
-    if (!window.confirm(`Request a refund for this label (${fmtUSD(s.rate_amount || s.label_cost_usd)})? Carrier refunds settle over days and only succeed for UNUSED labels. When "Re-check" records SUCCESS, this shipment is VOIDED: its quantities return to remaining and the order re-enters the pack queue.`)) return;
+  // ask=false when the Cancel shipment panel already confirmed it; returns
+  // whether Shippo accepted the request (the row then shows its status)
+  const refund = async (s: ShipmentRow, ask = true): Promise<boolean> => {
+    if (!s.shippo_transaction_id || refundInFlight.current) return false;
+    if (!shippoKey) { setRowMsg(m => ({ ...m, [s.id]: 'No Shippo API token is set (Settings) — the refund request cannot be sent.' })); return false; }
+    if (ask && !window.confirm(s.cancelled_at
+      ? `Request a refund for this cancelled box's label (${fmtUSD(s.rate_amount || s.label_cost_usd)})? Carrier refunds settle over days and only succeed for UNUSED labels; the order is already back on the pack list.`
+      : `Request a refund for this label (${fmtUSD(s.rate_amount || s.label_cost_usd)})? Carrier refunds settle over days and only succeed for UNUSED labels. When "Re-check" records SUCCESS, this shipment is VOIDED: its quantities return to remaining and the order re-enters the pack queue. If nothing went out, use "Cancel shipment" instead — it puts the order back right away.`)) return false;
     refundInFlight.current = true;
     try {
       // the marker write must NOT fail silently: before 2026-09-08 a
@@ -1171,12 +1197,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         markRow = Array.isArray(mark) && mark.length > 0 ? mark[0] as { requested_at?: string } : null;
       } catch (e: unknown) {
         setRowMsg(m => ({ ...m, [s.id]: `Refund NOT requested — the request marker could not be saved (${e instanceof Error ? e.message : 'network error'}). Nothing was sent to Shippo; click Request refund again.` }));
-        return;
+        return false;
       }
       if (!markRow) {
         setRowMsg(m => ({ ...m, [s.id]: 'Not sent — a refund for this label was already requested (possibly by the other admin). Use "Re-check".' }));
         reloadShipments();
-        return;
+        return false;
       }
       if (markRow.requested_at) {
         let hb: unknown[] | null = null;
@@ -1185,21 +1211,24 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         } catch (e: unknown) {
           setRowMsg(m => ({ ...m, [s.id]: `Refund NOT sent to Shippo — the marker heartbeat failed (${e instanceof Error ? e.message : 'network error'}). Use "Re-check" to reconcile before requesting again.` }));
           reloadShipments();
-          return;
+          return false;
         }
         if (!(Array.isArray(hb) && hb.length > 0)) {
           setRowMsg(m => ({ ...m, [s.id]: 'Not sent — this request marker was cleared or superseded while the page was idle. Use "Re-check" before requesting again.' }));
           reloadShipments();
-          return;
+          return false;
         }
       }
+      let accepted = false;
       try {
         const status = await requestRefund(shippoHttp, shippoKey, s.shippo_transaction_id);
         await doSetRefund({ shipment_id: s.id, refund_status: status, prior_requested_at: '', actor: userName });
+        accepted = true;
       } catch (e: unknown) {
         setRowMsg(m => ({ ...m, [s.id]: (e instanceof Error ? e.message : 'Refund request failed') + ' The row stays REQUESTING — use "Re-check" to reconcile; do not assume it failed.' }));
       }
       reloadShipments();
+      return accepted;
     } finally {
       refundInFlight.current = false;
     }
@@ -1213,7 +1242,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       const status = await findRefundByTransaction(shippoHttp, shippoKey, s.shippo_transaction_id, s.created_at);
       if (status) {
         await doSetRefund({ shipment_id: s.id, refund_status: status, prior_requested_at: '', actor: userName });
-        setRowMsg(m => ({ ...m, [s.id]: status === 'SUCCESS' ? 'Refund SUCCESS — this shipment is voided; its quantities returned to remaining.' : `Refund status: ${status}.` }));
+        setRowMsg(m => ({ ...m, [s.id]: status === 'SUCCESS'
+          ? (s.cancelled_at ? 'Refund SUCCESS — the label money is back (the box was already cancelled).' : 'Refund SUCCESS — this shipment is voided; its quantities returned to remaining.')
+          : `Refund status: ${status}.` }));
       } else {
         if (!window.confirm('Shippo\'s FULL refund listing shows no refund for this label. Clear the marker so a refund can be requested again? Only confirm if the original request never reached Shippo.')) {
           setRowMsg(m => ({ ...m, [s.id]: 'Marker kept — Re-check again later.' }));
@@ -1284,8 +1315,119 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     }
   };
 
+  // "Cancel shipment": a box recorded shipped that never went out. The
+  // cancel itself is immediate and local (cancel_finalized_shipment): the
+  // units return to remaining-to-pack now. The ordering app is then reset
+  // for this box, and the label refund — if asked for — is only requested;
+  // it settles at Shippo on its own and nothing here waits for it.
+  const defaultRestore = (s: ShipmentRow) => (RESTORABLE(s.pushed_prior_status) ? s.pushed_prior_status! : 'verified');
+  const restoreOptions = (s: ShipmentRow) => Array.from(new Set([defaultRestore(s), 'verified', 'pending']));
+  const openCancel = (s: ShipmentRow) => {
+    if (cancelId === s.id) { setCancelId(null); return; }
+    setCancelId(s.id); setCancelReason(''); setCancelMsg('');
+    setCancelAlsoRefund(!!s.shippo_transaction_id && !s.refund_status);
+    setRestorePick(p => ({ ...p, [s.id]: p[s.id] ?? defaultRestore(s) }));
+    if (fixItemsId === s.id) setFixItemsId(null);
+    setRowMsg(m => { const n = { ...m }; delete n[s.id]; return n; });
+  };
+
+  const runReset = async (s: ShipmentRow, lines: ShipmentRow['items'], why: string): Promise<PushOutcome> => {
+    let fresh: PushPackableLine[];
+    try {
+      const res = await fetchPackable({ order_id: order.id }) as unknown[] | null;
+      fresh = (Array.isArray(res) ? res : []).map(r => {
+        const l = r as PackableLine;
+        return {
+          order_item_id: Number(l.order_item_id),
+          product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
+          sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
+          direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at, digital: l.digital,
+        };
+      });
+      if (fresh.length === 0) throw new Error('empty read');
+    } catch {
+      return { ok: false, message: 'Ordering app NOT reset — could not re-read the order\'s packing state. Use "Reset ordering app" to retry.' };
+    }
+    return resetVoidedShipmentUpstream({
+      cfg, externalId: order.external_id || '', orderId: order.id, shipmentId: s.id,
+      carrier: s.carrier || '', tracking: s.tracking_number || '',
+      boxLines: lines.map(i => ({ sku: i.sku_code, qty: String(i.qty), productExternalId: i.product_external_id == null ? null : String(i.product_external_id) })),
+      why, restoreStatus: restorePick[s.id] ?? defaultRestore(s),
+      packable: fresh, userName, appendNote: doAppendNote, markReset: doMarkReset,
+    });
+  };
+
+  const confirmCancel = async (s: ShipmentRow) => {
+    if (cancelInFlight.current) return;
+    const reason = cancelReason.trim();
+    if (!reason) { setCancelMsg('Enter the reason first — it goes in the audit trail and on the ordering-app note.'); return; }
+    cancelInFlight.current = true;
+    setCancelBusy(true); setCancelMsg('');
+    try {
+      let res: unknown[] | null;
+      try {
+        res = await doCancelShipment({ shipment_id: s.id, reason, actor: userName }) as unknown[] | null;
+      } catch (e: unknown) {
+        // a thrown action is AMBIGUOUS — it may or may not have saved
+        setCancelMsg(`The cancel did not confirm (${e instanceof Error ? e.message : 'network error'}) — it may or may not have saved. The list refreshes now; check the box before retrying.`);
+        return;
+      }
+      const row = Array.isArray(res) && res.length > 0 ? res[0] as { items: unknown } : null;
+      if (!row) {
+        setCancelMsg('Not cancelled — the box was refunded, cancelled or picked up by the carrier meanwhile, or it is a record adopted from the ordering app (correct that there first). The list has refreshed.');
+        return;
+      }
+      const raw = typeof row.items === 'string' ? JSON.parse(row.items) as unknown : row.items;
+      const held = (Array.isArray(raw) ? raw : []) as ShipmentRow['items'];
+      const heldText = held.map(i => `${i.sku_code} × ${fmtNum(i.qty)}`).join(', ') || 'nothing (the box was already empty)';
+      const label = `#${s.id} ${(s.carrier || '').toUpperCase()} ${s.tracking_number || ''}`.trim();
+      setCancelId(null);
+      const parts = [`Cancelled ${label} — ${heldText} back to remaining-to-pack; the order is back on Ready to pack.`];
+      try {
+        await doAppendNote({
+          order_id: order.id,
+          note: `[${new Date().toLocaleDateString('en-CA')}] ${userName} cancelled shipment ${label} — recorded shipped, nothing went out (${reason}); ${heldText} returned to remaining-to-pack.`,
+          detail: JSON.stringify({ shipment_id: s.id, items: held }),
+          actor: userName,
+        });
+      } catch { /* the shipment_cancelled audit row is the record */ }
+      setRowMsg(m => ({ ...m, [s.id]: `${parts.join(' ')} Resetting the ordering app…` }));
+      const out = await runReset(s, held, reason);
+      parts.push(out.message);
+      if (cancelAlsoRefund && s.shippo_transaction_id && !s.refund_status) {
+        const accepted = await refund(s, false);
+        parts.push(accepted ? 'Label refund requested — it settles at Shippo on its own; use Re-check refund later.' : 'Label refund NOT requested — see above, then use Request refund.');
+      }
+      setRowMsg(m => ({ ...m, [s.id]: parts.join(' ') }));
+    } finally {
+      reloadPackable(); reloadShipments(); reload();
+      cancelInFlight.current = false;
+      setCancelBusy(false);
+    }
+  };
+
+  // retry for a cancelled box, or the reset alone for a refund-voided one
+  const retryReset = async (s: ShipmentRow) => {
+    if (cancelInFlight.current) return;
+    cancelInFlight.current = true;
+    setCancelBusy(true);
+    setRowMsg(m => ({ ...m, [s.id]: 'Resetting the ordering app…' }));
+    try {
+      const out = s.cancelled_at
+        ? await runReset(s, s.cancelled_items || [], s.cancel_reason || 'cancelled here')
+        : await runReset(s, s.items || [], 'label refunded');
+      setRowMsg(m => ({ ...m, [s.id]: out.message }));
+    } finally {
+      reloadShipments(); reload();
+      cancelInFlight.current = false;
+      setCancelBusy(false);
+    }
+  };
+
   const drafts = shipments.filter(s => !s.finalized_at);
   const finals = shipments.filter(s => !!s.finalized_at);
+  // a box that no longer counts: refunded, or cancelled (recorded by mistake)
+  const isVoid = (s: ShipmentRow) => s.refund_status === 'SUCCESS' || !!s.cancelled_at;
 
   return (
     <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
@@ -1718,22 +1860,28 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 </div>
               ))}
               {finals.map(s => (
-                <div key={s.id} className={`rounded border p-2 text-xs space-y-1 ${s.refund_status === 'SUCCESS' ? 'opacity-60' : ''}`}>
+                <div key={s.id} className={`rounded border p-2 text-xs space-y-1 ${isVoid(s) ? 'opacity-60' : ''}`}>
                   <p className="flex flex-wrap items-center gap-1.5">
-                    <StatusPill value={s.refund_status === 'SUCCESS' ? 'refunded' : s.status} />
-                    {s.refund_status !== 'SUCCESS' && s.tracking_status === 'DELIVERED' && (
+                    <StatusPill value={s.cancelled_at ? 'cancelled' : s.refund_status === 'SUCCESS' ? 'refunded' : s.status} />
+                    {s.cancelled_at && !s.upstream_reset_at && (
+                      <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                        title="The ordering app may still show this box as shipped — use Reset ordering app">
+                        <Led className="w-1.5 h-1.5" />ordering app not reset
+                      </span>
+                    )}
+                    {!isVoid(s) && s.tracking_status === 'DELIVERED' && (
                       <span className="rounded bg-emerald-400/10 text-emerald-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                         title={s.tracking_checked_at ? `Carrier says delivered — last checked ${fmtDateTime(s.tracking_checked_at)}` : 'Carrier says delivered'}>
                         carrier: delivered {s.tracking_status_date ? fmtDateTime(s.tracking_status_date) : ''}
                       </span>
                     )}
-                    {s.refund_status !== 'SUCCESS' && s.tracking_status === 'RETURNED' && (
+                    {!isVoid(s) && s.tracking_status === 'RETURNED' && (
                       <span className="rounded bg-rose-400/10 text-rose-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
                         title="The carrier returned this box to sender — it needs re-shipping or follow-up">
                         carrier: returned
                       </span>
                     )}
-                    {s.refund_status !== 'SUCCESS'
+                    {!isVoid(s)
                       && !['DELIVERED', 'RETURNED'].includes(s.tracking_status || '')
                       && (s.tracking_status === 'FAILURE' || ATTENTION_SUBSTATUSES.includes(s.tracking_substatus || '')) && (
                       <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
@@ -1741,7 +1889,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         carrier: {(s.tracking_substatus || 'needs attention').replace(/_/g, ' ')}
                       </span>
                     )}
-                    {s.refund_status !== 'SUCCESS'
+                    {!isVoid(s)
                       && ['PRE_TRANSIT', 'TRANSIT'].includes(s.tracking_status || '')
                       && !ATTENTION_SUBSTATUSES.includes(s.tracking_substatus || '') && (
                       s.tracking_substatus === 'out_for_delivery' ? (
@@ -1756,7 +1904,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         </span>
                       )
                     )}
-                    {s.refund_status !== 'SUCCESS' && s.tracking_error && (
+                    {!isVoid(s) && s.tracking_error && (
                       // the visible reason behind "N lookups failed" in the
                       // Shipped tab's Check-deliveries summary
                       <span className="rounded bg-amber-400/10 text-amber-300 text-[10px] font-semibold px-1.5 py-0.5 uppercase whitespace-nowrap"
@@ -1765,15 +1913,17 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                       </span>
                     )}
                     <span className="font-mono">{(s.carrier || '').toUpperCase()} <TrackingLink carrier={s.carrier} tracking={s.tracking_number} /></span>
-                    <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}</span>
+                    {s.cancelled_at
+                      ? <span className="text-muted-foreground line-through" title="What this box was recorded with — returned to remaining-to-pack when it was cancelled">{(s.cancelled_items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}</span>
+                      : <span className="text-muted-foreground">{(s.items || []).map(i => `${i.sku_code}×${fmtNum(i.qty)}`).join(', ')}</span>}
                     <span className="text-muted-foreground">{fmtUSD(s.label_cost_usd)}</span>
                     {s.shipped_at && <span className="text-muted-foreground">{fmtDateTime(s.shipped_at)}</span>}
                     {s.refund_status && s.refund_status !== 'SUCCESS' && <span className="rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase">refund {s.refund_status}</span>}
-                    {!s.b44_pushed_at && s.refund_status !== 'SUCCESS' && <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase" title="The ordering app has not been told about this shipment yet"><Led className="w-1.5 h-1.5" />not pushed</span>}
+                    {!s.b44_pushed_at && !isVoid(s) && <span className="inline-flex items-center gap-1 rounded bg-amber-400/10 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase" title="The ordering app has not been told about this shipment yet"><Led className="w-1.5 h-1.5" />not pushed</span>}
                     {/* positive-only: absence of the chip is the norm for
                         the 389 pre-feature labels — the ship-to notice
                         carries the general rule, so no amber noise here */}
-                    {s.refund_status !== 'SUCCESS' && s.shippo_order_id && (
+                    {!isVoid(s) && s.shippo_order_id && (
                       <span className="rounded bg-emerald-400/10 text-emerald-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase whitespace-nowrap"
                         title={`Label linked to Shippo order ${s.shippo_order_id} — Shippo emails this customer tracking updates${s.dest_email ? ` at ${s.dest_email}` : ''}.`}>
                         shippo emails
@@ -1793,10 +1943,10 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                   )}
                   <div className="flex flex-wrap gap-1">
                     {s.label_url && <a className="underline text-muted-foreground" href={s.label_url} target="_blank" rel="noreferrer">label</a>}
-                    {s.refund_status !== 'SUCCESS' && (
+                    {!isVoid(s) && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={photoBusy} onClick={() => capturePhotos(s.id)}>+ photo</Button>
                     )}
-                    {!s.b44_pushed_at && s.refund_status !== 'SUCCESS' && (
+                    {!s.b44_pushed_at && !isVoid(s) && (
                       <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => retryPushRow(s)}>Push upstream</Button>
                     )}
                     {s.shippo_transaction_id && !s.refund_status && (
@@ -1805,7 +1955,31 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {s.shippo_transaction_id && s.refund_status && s.refund_status !== 'SUCCESS' && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => recheckRefund(s)}>Re-check refund</Button>
                     )}
-                    {s.refund_status !== 'SUCCESS' && (
+                    {!isVoid(s) && s.carrier !== 'upstream' && !CARRIER_HAD_IT.includes(s.tracking_status || '') && (
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-rose-400"
+                        title="This box never went out — put its units back on the pack list now (the label refund is separate)"
+                        onClick={() => openCancel(s)}>
+                        {cancelId === s.id ? 'Keep shipment' : 'Cancel shipment'}
+                      </Button>
+                    )}
+                    {((s.cancelled_at && !s.upstream_reset_at) || (s.refund_status === 'SUCCESS' && s.b44_pushed_at && !s.upstream_reset_at)) && order.external_id && (
+                      <span className="inline-flex items-center gap-1">
+                        <Select value={restorePick[s.id] ?? defaultRestore(s)} onValueChange={v => setRestorePick(p => ({ ...p, [s.id]: v }))}>
+                          <SelectTrigger className="h-6 w-28 text-[11px]" aria-label="Ordering-app status to restore" title="The status the ordering app goes back to when nothing else on the order has shipped">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {restoreOptions(s).map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                        <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={cancelBusy}
+                          title="Take this box back out of the ordering app: clear the ship dates it set, mark its tracking note cancelled, and put the status back"
+                          onClick={() => retryReset(s)}>
+                          Reset ordering app
+                        </Button>
+                      </span>
+                    )}
+                    {!isVoid(s) && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
                         title="Correct this shipment's recorded contents (audited) — for items marked shipped that weren't, or shipped items that were never recorded"
                         onClick={() => openFixItems(s)}>
@@ -1873,6 +2047,52 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                         );
                       })()}
                       {fixMsg && <p className={`text-[11px] ${fixMsg.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{fixMsg.text}</p>}
+                    </div>
+                  )}
+                  {s.cancelled_at && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Cancelled {fmtDateTime(s.cancelled_at)}{s.cancelled_by ? ` by ${s.cancelled_by}` : ''} — {s.cancel_reason}. Nothing went out; its units are back on the pack list.
+                      {s.shippo_transaction_id && s.refund_status !== 'SUCCESS' && ' The label refund settles separately.'}
+                      {s.upstream_reset_at && ` Ordering app reset ${fmtDateTime(s.upstream_reset_at)}.`}
+                    </p>
+                  )}
+                  {cancelId === s.id && (
+                    <div className="rounded border border-rose-400/40 p-2 space-y-2">
+                      <p className="text-[11px] text-muted-foreground">
+                        Only for a box that did <span className="font-semibold">not</span> go out. Its {(s.items || []).map(i => `${i.sku_code} × ${fmtNum(i.qty)}`).join(', ') || 'recorded lines'} go
+                        back on the pack list right away and the order returns to Ready to pack — no waiting for the label refund, which settles at Shippo on its own.
+                        {order.external_id && ' The ordering app is reset for this box: its ship dates cleared, its tracking note marked cancelled, and the status put back.'}
+                      </p>
+                      <Input placeholder="Reason (audited, and on the ordering-app note) — e.g. marked shipped by mistake" value={cancelReason}
+                        onChange={e => setCancelReason(e.target.value)} className="h-8 text-xs" />
+                      {order.external_id && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] text-muted-foreground">Ordering-app status if nothing else on the order shipped:</span>
+                          <Select value={restorePick[s.id] ?? defaultRestore(s)} onValueChange={v => setRestorePick(p => ({ ...p, [s.id]: v }))}>
+                            <SelectTrigger className="h-7 w-32 text-xs" aria-label="Ordering-app status to restore"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {restoreOptions(s).map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                          {!RESTORABLE(s.pushed_prior_status) && (
+                            <span className="text-[11px] text-muted-foreground">(the status before the push was not recorded — verified is a paid order awaiting shipment)</span>
+                          )}
+                        </div>
+                      )}
+                      {s.shippo_transaction_id && !s.refund_status && (
+                        <label className="flex items-center gap-2 text-[11px]">
+                          <input type="checkbox" checked={cancelAlsoRefund} onChange={e => setCancelAlsoRefund(e.target.checked)} />
+                          Also request the label refund ({fmtUSD(s.rate_amount || s.label_cost_usd)})
+                        </label>
+                      )}
+                      {s.refund_status && <p className="text-[11px] text-muted-foreground">Label refund already {s.refund_status.toLowerCase()} — it keeps settling on its own.</p>}
+                      <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={cancelBusy} onClick={() => setCancelId(null)}>Keep shipment</Button>
+                        <Button size="sm" variant="destructive" className="h-7 text-xs" disabled={cancelBusy || !cancelReason.trim()} onClick={() => confirmCancel(s)}>
+                          {cancelBusy ? 'Cancelling…' : 'Cancel shipment'}
+                        </Button>
+                      </div>
+                      {cancelMsg && <p className="text-[11px] text-rose-300">{cancelMsg}</p>}
                     </div>
                   )}
                   {rowMsg[s.id] && <p className="text-amber-200">{rowMsg[s.id]}</p>}                </div>

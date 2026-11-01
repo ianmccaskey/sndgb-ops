@@ -24,6 +24,7 @@ function markShipmentPushed() {
         WHERE s.id = {{params.shipment_id}}::bigint
           AND s.finalized_at IS NOT NULL
           AND s.b44_pushed_at IS NULL
+          AND s.cancelled_at IS NULL   -- a cancelled box is never pushed (1790103200)
           AND s.push_epoch = {{params.expected_push_epoch}}::int
         RETURNING s.id, s.order_id
       )

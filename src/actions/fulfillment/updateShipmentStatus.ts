@@ -4,7 +4,8 @@ import { action } from '@uibakery/data';
  * Progress a SPECIFIC finalized shipment's status forward — shipped →
  * delivered / reshipped (and between those two, for a box that came back
  * and went out again). Never backward: a purchased label cannot un-ship;
- * a mistake is handled by the refund flow, which voids the row entirely.
+ * a box recorded by mistake is cancelled (cancelShipment) or voided by the
+ * refund flow, and neither takes a status change.
  * Drafts refuse — a draft has no status semantics until finalize. Targets
  * one shipment id, never "the latest". Audited.
  */
@@ -25,6 +26,7 @@ function updateShipmentStatus() {
         WHERE s.id = lck.sid
           AND s.finalized_at IS NOT NULL
           AND COALESCE(s.refund_status, '') <> 'SUCCESS'
+          AND s.cancelled_at IS NULL
           AND {{params.status}}::text IN ('delivered', 'reshipped')
           AND s.status IN ('shipped', 'delivered', 'reshipped')
           AND s.status::text <> {{params.status}}::text

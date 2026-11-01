@@ -370,7 +370,8 @@ export function orderFacts(args: {
     shipments: args.shipments.map(s => ({
       ...pick(s, ['id', 'status', 'carrier', 'servicelevel', 'label_cost_usd', 'box', 'note',
         'tracking_status', 'tracking_substatus', 'tracking_status_date', 'eta', 'refund_status',
-        'finalized_at', 'shipped_at', 'b44_pushed_at', 'created_by', 'created_at', 'items']),
+        'finalized_at', 'shipped_at', 'b44_pushed_at', 'created_by', 'created_at', 'items',
+        'cancelled_at', 'cancel_reason', 'cancelled_items', 'upstream_reset_at']),
       tracking_number: s.tracking_number == null ? null : dbText(s.tracking_number),
     })),
   };

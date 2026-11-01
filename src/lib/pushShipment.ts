@@ -30,6 +30,7 @@
  */
 import { getB44Order, updateB44Order } from '@/lib/base44';
 import type { B44Config, B44Order, B44OrderItem } from '@/lib/base44';
+import { isHandSetDate } from '@/lib/autoAdopt';
 
 export type PushPackableLine = {
   order_item_id: number;
@@ -198,7 +199,9 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
       try {
         const res = await d.markPushed({
           shipment_id: d.shipmentId, actor: d.userName, expected_push_epoch: d.pushEpoch,
-          pushed: JSON.stringify({ tracking: d.tracking, carrier: d.carrier, shipped_date_items: datesLanded, status_set: fullyShipped ? 'shipped' : setPartial ? 'partially_shipped' : null }),
+          // prior_status: what a later reset of this box restores
+          // (resetVoidedShipmentUpstream) when nothing else shipped
+          pushed: JSON.stringify({ tracking: d.tracking, carrier: d.carrier, shipped_date_items: datesLanded, status_set: fullyShipped ? 'shipped' : setPartial ? 'partially_shipped' : null, prior_status: upstreamStatus }),
         }) as unknown[] | null;
         stamped = Array.isArray(res) ? res.length > 0 : !!res;
       } catch { stamped = false; }
@@ -406,5 +409,229 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
     return { ok: false, message: `write-back partial — the ordering app shows ${what}${putError ? ` (transport: ${putError})` : ''}; the next run retries` };
   } catch {
     return { ok: false, message: `write-back outcome unknown — the update ${putError ? `threw (${putError})` : 'was sent'} and the verifying re-read failed; the next run retries (idempotent)` };
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+export type ResetVoidedArgs = {
+  cfg: B44Config;
+  externalId: string;
+  orderId: number;
+  shipmentId: number;
+  carrier: string;
+  tracking: string;
+  /** what the box recorded — cancelled_items for a cancelled box, items for a refund-voided one */
+  boxLines: { sku: string; qty: string; productExternalId: string | null }[];
+  /** why it did not ship, for the ordering app's note (the cancel reason, or "label refunded") */
+  why: string;
+  /** the status to restore when NOTHING else on the order has shipped — the operator's pick */
+  restoreStatus: string;
+  /** FRESH getPackableItems rows, read by the caller after the cancel/void */
+  packable: PushPackableLine[];
+  userName: string;
+  appendNote: (params: Record<string, unknown>) => Promise<unknown>;
+  /** markShipmentUpstreamReset: stamps upstream_reset_at; refuses a live box or one already stamped */
+  markReset: (params: Record<string, unknown>) => Promise<unknown>;
+};
+
+/**
+ * Take back what a push told the ordering app about a box that did NOT
+ * ship — cancelled here (recorded by mistake) or voided by a label refund.
+ * Nothing else in this app moves the ordering app backward, by design;
+ * this is the one reverse, scoped to that one box:
+ *  - items[].shipped_date is removed from the items of this box's products
+ *    whose line is no longer covered here (what still shipped covers the
+ *    ordering app's whole quantity, a date stays) — and only a date this
+ *    app wrote (ISO); a date the other admin typed by hand is hers and is
+ *    left, named in the outcome.
+ *  - the box's own tracking line in the notes is marked "[CANCELLED]" and
+ *    one "Cancelled per Ops app — box #<id> …" line is appended (the
+ *    idempotency marker).
+ *  - status is moved ONLY off 'shipped'/'partially_shipped', and only when
+ *    the box's push is evidently what set it (its tracking line or its
+ *    dates are there): to 'partially_shipped' when anything else on the
+ *    order still shipped, otherwise to the operator's restoreStatus. An
+ *    order still complete here keeps 'shipped' (a duplicate box); a
+ *    remaining hand-typed date leaves the status to the operator;
+ *    'delivered' and terminal states refuse the whole reset.
+ * Same discipline as the pushes: local trail line first, a planning read,
+ * a re-read right before the PUT that refuses if anything moved, then a
+ * verifying re-read; only a verified (or a nothing-to-do) outcome stamps
+ * upstream_reset_at. A second run finds its own marker and changes
+ * nothing.
+ */
+export async function resetVoidedShipmentUpstream(d: ResetVoidedArgs): Promise<PushOutcome> {
+  const stamp = async (detail: Record<string, unknown>) => {
+    try {
+      const res = await d.markReset({ shipment_id: d.shipmentId, actor: d.userName, reset: JSON.stringify(detail) }) as unknown[] | null;
+      return Array.isArray(res) ? res.length > 0 : !!res;
+    } catch { return false; }
+  };
+  if (!d.externalId) {
+    // added locally — the ordering app never held this order
+    await stamp({ outcome: 'no ordering-app order' });
+    return { ok: true, message: 'Nothing to reset — this order has no ordering-app id.' };
+  }
+  if (!d.cfg.token) return { ok: false, message: 'Ordering app NOT reset — no Base44 token in Settings. The cancel is saved; use "Reset ordering app" once the token is set.' };
+  const restore = d.restoreStatus.trim();
+  if (!restore || /ship|deliver|cancel|refund|reject|void|denied/i.test(restore)) {
+    return { ok: false, message: 'Ordering app NOT reset — pick the status the order goes back to (e.g. verified).' };
+  }
+  const today = new Date().toLocaleDateString('en-CA');
+  const carrierU = d.carrier.toUpperCase();
+  const trackPrefix = d.tracking ? `Shipped ${carrierU} ${d.tracking}` : '';
+  const marker = `Cancelled per Ops app — box #${d.shipmentId} ${carrierU}${d.tracking ? ` ${d.tracking}` : ''}`;
+  const cancelLine = `${marker} did not ship (${d.why.replace(/\s+/g, ' ').trim()}) (${today})`;
+
+  let upstream: B44Order;
+  try {
+    upstream = await getB44Order(d.cfg, d.externalId);
+  } catch (e: unknown) {
+    return { ok: false, message: `Ordering app NOT reset — could not read the order (${e instanceof Error ? e.message : 'read failed'}). The cancel is saved; use "Reset ordering app" to retry.` };
+  }
+  const status = String(upstream.status ?? '').trim();
+  if (/cancel|refund|reject|void|denied/i.test(status)) {
+    return { ok: false, message: `Ordering app NOT reset — it shows the order "${status}"; nothing written. Check the order there.` };
+  }
+  if (/delivered/i.test(status)) {
+    return { ok: false, message: 'Ordering app NOT reset — it shows the order "delivered", a later fact than this box. If nothing went out, correct it there by hand.' };
+  }
+
+  // what is covered HERE now, per ordering-app product (the voided box no
+  // longer counts), against the ordering app's quantity for it
+  const coverage = new Map<string, number>();
+  for (const l of d.packable) {
+    if (l.digital || !l.product_external_id) continue;
+    const eff = Number(l.effective_qty);
+    const c = l.direct_ship ? (l.direct_fulfilled_at ? eff : 0) : Math.min(Number(l.shipped_qty), eff);
+    coverage.set(l.product_external_id, (coverage.get(l.product_external_id) ?? 0) + c);
+  }
+  const upstreamItems = Array.isArray(upstream.items) ? upstream.items : [];
+  const upQty = new Map<string, number>();
+  for (const it of upstreamItems) {
+    const pid = String(it.product_id ?? '');
+    const q = Number(it.quantity ?? 0);
+    if (pid && q > 0) upQty.set(pid, (upQty.get(pid) ?? 0) + q);
+  }
+  const covered = (pid: string) => (upQty.get(pid) ?? 0) > 0 && (coverage.get(pid) ?? 0) + 1e-9 >= (upQty.get(pid) ?? 0);
+  const boxPids = new Set(d.boxLines.map(l => l.productExternalId).filter((p): p is string => !!p));
+  const cleared: string[] = [];
+  const clearedPids = new Set<string>();
+  const handLeft: string[] = [];
+  const mergedItems: B44OrderItem[] = upstreamItems.map(it => {
+    const pid = String(it.product_id ?? '');
+    if (!pid || !boxPids.has(pid) || !it.shipped_date || covered(pid)) return it;
+    const name = String(it.product_name ?? pid);
+    if (isHandSetDate(it.shipped_date)) { handLeft.push(`${name} (${String(it.shipped_date)})`); return it; }
+    // an item that never shipped carries no shipped_date at all
+    const rest: B44OrderItem = { ...it };
+    delete rest.shipped_date;
+    cleared.push(name);
+    clearedPids.add(pid);
+    return rest;
+  });
+
+  const upstreamNotes = String(upstream.notes ?? '');
+  let struck = 0;
+  const noteLines = upstreamNotes === '' ? [] : upstreamNotes.split('\n').map(line => {
+    if (trackPrefix && line.startsWith(trackPrefix)) { struck++; return `[CANCELLED] ${line}`; }
+    return line;
+  });
+  const markerThere = upstreamNotes.includes(marker);
+
+  // the order's state here without the box (fully-shipped exactly as the push computes it)
+  const packableLines = d.packable.filter(l => !l.direct_ship && !l.digital && Number(l.effective_qty) > 0);
+  const directLines = d.packable.filter(l => l.direct_ship && !l.digital);
+  const stillComplete = d.packable.length > 0
+    && packableLines.every(l => Number(l.shipped_qty) >= Number(l.effective_qty))
+    && directLines.every(l => l.direct_fulfilled_at != null);
+  const stillShippedHere = d.packable.some(l => !l.digital && (l.direct_ship ? !!l.direct_fulfilled_at : Number(l.shipped_qty) > 0));
+  const datedAfter = mergedItems.some(it => !!it.shipped_date);
+  // the status is this box's to take back only when its push evidently set it
+  const ours = struck > 0 || cleared.length > 0;
+  let statusSet: string | null = null;
+  let statusWhy = '';
+  if (/^(shipped|partially_shipped)$/i.test(status)) {
+    if (!ours) statusWhy = ' — not set by this box';
+    else if (stillComplete) statusWhy = ' — the rest of the order still covers it';
+    else if (handLeft.length > 0) statusWhy = ' — a hand-typed ship date remains';
+    else statusSet = stillShippedHere || datedAfter ? 'partially_shipped' : restore;
+    if (statusSet === status) statusSet = null;
+  }
+  const handNote = handLeft.length > 0
+    ? ` Left the hand-typed ship date on ${handLeft.join(', ')} — if that did not ship either, clear it in the ordering app, or the auto-adopt pass will record it here again.`
+    : '';
+  const detail = { prior_status: status, status_set: statusSet, dates_cleared: cleared, hand_dates_left: handLeft, notes_struck: struck };
+
+  if (cleared.length === 0 && !statusSet && struck === 0) {
+    // nothing of this box is there (never pushed, or an earlier reset
+    // landed and only its stamp was lost)
+    const stamped = await stamp({ ...detail, outcome: markerThere ? 'already reset' : 'nothing there' });
+    return {
+      ok: stamped,
+      message: stamped
+        ? `Ordering app already clear of this box (status "${status}")${markerThere ? '' : ' — it was never told about it'}.${handNote}`
+        : 'The ordering app is clear of this box, but the local record did not save — use "Reset ordering app" again.',
+    };
+  }
+  if (!markerThere) noteLines.push(cancelLine);
+  const mergedNotes = noteLines.join('\n');
+  const fields: Record<string, unknown> = { items: mergedItems, notes: mergedNotes };
+  if (statusSet) fields.status = statusSet;
+  const what = `${cleared.length > 0 ? `ship date cleared on ${cleared.join(', ')}` : 'no ship dates to clear'}; status ${statusSet ? `'${status}' -> '${statusSet}'` : `left '${status}'${statusWhy}`}; tracking note marked cancelled`;
+
+  // local trail BEFORE the upstream mutation — refusing to write it aborts
+  try {
+    await d.appendNote({
+      order_id: d.orderId,
+      note: `[${today}] ${d.userName} reset the ordering app for box #${d.shipmentId} ${carrierU} ${d.tracking} (did not ship: ${d.why}): ${what}.`,
+      detail: JSON.stringify({ shipment_id: d.shipmentId, ...detail }),
+      actor: d.userName,
+    });
+  } catch {
+    return { ok: false, message: 'Ordering app NOT reset — the local audit note could not be written, and an upstream write without a local trail is not allowed. Retry.' };
+  }
+
+  // a PUT replaces items, notes and status wholesale: re-read with nothing
+  // awaited in between and refuse if anything the merge was built from moved
+  let latest: B44Order;
+  try {
+    latest = await getB44Order(d.cfg, d.externalId);
+  } catch (e: unknown) {
+    return { ok: false, message: `Ordering app NOT reset — could not re-read the order right before writing (${e instanceof Error ? e.message : 'read failed'}). Retry "Reset ordering app".` };
+  }
+  const moved = String(latest.updated_date ?? '') !== String(upstream.updated_date ?? '')
+    || String(latest.status ?? '').trim() !== status
+    || String(latest.notes ?? '') !== upstreamNotes
+    || JSON.stringify(Array.isArray(latest.items) ? latest.items : []) !== JSON.stringify(upstreamItems);
+  if (moved) {
+    return { ok: false, message: `Ordering app NOT reset — the order changed there while this was being prepared (now "${String(latest.status ?? '')}"); nothing written. Retry "Reset ordering app" to plan from the new state.` };
+  }
+
+  let putError: string | null = null;
+  try {
+    await updateB44Order(d.cfg, d.externalId, fields);
+  } catch (e: unknown) {
+    putError = e instanceof Error ? e.message : 'update failed';
+  }
+
+  try {
+    const after = await getB44Order(d.cfg, d.externalId);
+    const afterItems = Array.isArray(after.items) ? after.items : [];
+    const stillDated = afterItems.filter(it => clearedPids.has(String(it.product_id ?? '')) && !!it.shipped_date).length;
+    const afterNotes = String(after.notes ?? '');
+    const noteOk = afterNotes.includes(marker) && !(trackPrefix && afterNotes.split('\n').some(l => l.startsWith(trackPrefix)));
+    const afterStatus = String(after.status ?? '').trim();
+    const statusOk = statusSet ? afterStatus === statusSet : afterStatus === status;
+    if (stillDated === 0 && noteOk && statusOk) {
+      const stamped = await stamp(detail);
+      if (!stamped) return { ok: false, message: 'Ordering app reset (verified), but the local record did not save — use "Reset ordering app" again; it changes nothing twice.' };
+      return { ok: true, message: `Ordering app reset: ${what}.${handNote}` };
+    }
+    const miss = [stillDated > 0 ? `${stillDated} ship date(s) still set` : null, noteOk ? null : 'note not updated', statusOk ? null : `status is '${afterStatus}'`].filter(Boolean).join(', ');
+    return { ok: false, message: `Ordering app reset PARTIAL — it shows ${miss}${putError ? ` (transport: ${putError})` : ''}. Use "Reset ordering app" to retry.` };
+  } catch {
+    return { ok: false, message: `Ordering app reset outcome UNKNOWN — the update ${putError ? `threw (${putError})` : 'was sent'} and the verifying re-read failed. Use "Reset ordering app" to retry; it changes nothing twice.` };
   }
 }

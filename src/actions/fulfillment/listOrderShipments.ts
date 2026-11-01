@@ -4,7 +4,8 @@ import { action } from '@uibakery/data';
  * Every shipment of one order — drafts, finalized, refunded — newest last,
  * with its attributed items aggregated. Voided rows (refund SUCCESS) are
  * INCLUDED so history stays visible; consumers style them struck-through
- * and all fulfilled math already excludes them server-side.
+ * and all fulfilled math already excludes them server-side. Cancelled
+ * boxes (cancelled_at) are included the same way — their items are empty.
  */
 function listOrderShipments() {
   return action('listOrderShipments', 'SQL', {
@@ -24,6 +25,16 @@ function listOrderShipments() {
              btrim(COALESCE(s.destination->>'email', '')) AS dest_email,
              s.purchase_started_at, s.purchase_attempted_at, s.attempt_verified_no_label_at,
              s.finalized_at, s.shipped_at, s.b44_pushed_at, s.push_epoch, s.created_by, s.created_at,
+             -- recorded shipped by mistake (1790103200): the box is empty,
+             -- cancelled_items is what it held
+             s.cancelled_at, s.cancelled_by, s.cancel_reason,
+             COALESCE(s.cancelled_items, '[]'::jsonb) AS cancelled_items, s.upstream_reset_at,
+             -- the ordering-app status this box's push found (recorded
+             -- since 2026-11-01) — what a reset restores by default
+             (SELECT al.new_data->'pushed'->>'prior_status' FROM audit_log al
+              WHERE al.table_name = 'shipments' AND al.row_pk = s.id::text
+                AND al.action = 'shipment_pushed_upstream'
+              ORDER BY al.id DESC LIMIT 1) AS pushed_prior_status,
              COALESCE(si.items, '[]'::jsonb) AS items
       FROM shipments s
       LEFT JOIN LATERAL (

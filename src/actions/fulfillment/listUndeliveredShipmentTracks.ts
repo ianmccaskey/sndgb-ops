@@ -20,6 +20,7 @@ function listUndeliveredShipmentTracks() {
       WHERE o.group_buy_id = {{params.group_buy_id}}::bigint
         AND s.finalized_at IS NOT NULL
         AND COALESCE(s.refund_status, '') <> 'SUCCESS'
+        AND s.cancelled_at IS NULL   -- a cancelled box's label never moves (1790103200)
         AND COALESCE(s.tracking_number, '') <> ''
         AND COALESCE(s.carrier, '') <> ''
         AND COALESCE(s.tracking_status, '') NOT IN ('DELIVERED', 'RETURNED')
