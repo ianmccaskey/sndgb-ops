@@ -24,6 +24,8 @@ import { readStash, stashGet, stashRemove, stashMutateIf } from '@/lib/photoStas
 import type { StashedPhoto } from '@/lib/photoStash';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
+import claimShipmentPush from '@/actions/fulfillment/claimShipmentPush';
+import releaseShipmentPush from '@/actions/fulfillment/releaseShipmentPush';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
 import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
 import setOrderFees from '@/actions/orders/setOrderFees';
@@ -327,6 +329,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doGetTxRefs] = useMutateAction(getOrderTxRefs);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doMarkShipPushed] = useMutateAction(markShipmentPushed);
+  const [doClaimShipPush] = useMutateAction(claimShipmentPush);
+  const [doReleaseShipPush] = useMutateAction(releaseShipmentPush);
   // read action invoked imperatively (getOrderTxRefs precedent): the push's
   // fully-shipped decision needs a JUST-IN-TIME authoritative read
   const [doFetchShipPackable] = useMutateAction(getPackableItems);
@@ -363,7 +367,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
           sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
           direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at, digital: l.digital,
         })),
-        userName, appendNote: doAppendNote, markPushed: doMarkShipPushed,
+        userName, appendNote: doAppendNote, markPushed: doMarkShipPushed, claimPush: doClaimShipPush, releasePush: doReleaseShipPush,
       });
       setShipPushMsg(out.message);
       reloadShipRows(); reloadOrder();

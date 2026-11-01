@@ -5,6 +5,8 @@ import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfi
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
+import claimShipmentPush from '@/actions/fulfillment/claimShipmentPush';
+import releaseShipmentPush from '@/actions/fulfillment/releaseShipmentPush';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
 import type { PushPackableLine } from '@/lib/pushShipment';
@@ -133,6 +135,8 @@ export function FulfillmentPage() {
   const [fetchPackableJit] = useMutateAction(getPackableItems);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doMarkPushed] = useMutateAction(markShipmentPushed);
+  const [doClaimPush] = useMutateAction(claimShipmentPush);
+  const [doReleasePush] = useMutateAction(releaseShipmentPush);
   const pushAllInFlight = useRef(false);
   const [pushAllBusy, setPushAllBusy] = useState(false);
   const [pushAllMsg, setPushAllMsg] = useState('');
@@ -188,7 +192,7 @@ export function FulfillmentPage() {
             shipmentId: s.id, pushEpoch: Number(s.push_epoch || 0),
             carrier: s.carrier || '', tracking: s.tracking_number == null ? '' : dbText(s.tracking_number),
             shippedItems: (s.items || []).map(it => ({ sku: it.sku_code, qty: String(it.qty) })),
-            packable, userName, appendNote: doAppendNote, markPushed: doMarkPushed,
+            packable, userName, appendNote: doAppendNote, markPushed: doMarkPushed, claimPush: doClaimPush, releasePush: doReleasePush,
           });
           if (out.ok) pushedBoxes++;
           else failures.push(`${r.order_number}: ${out.message}`);

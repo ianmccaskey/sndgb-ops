@@ -59,9 +59,16 @@ export type PushShipmentDeps = {
   userName: string;
   appendNote: (params: Record<string, unknown>) => Promise<unknown>;
   markPushed: (params: Record<string, unknown>) => Promise<unknown>;
+  /** claimShipmentPush: claim / renew this box's push under the order lock (zero rows = refused) */
+  claimPush: (params: Record<string, unknown>) => Promise<unknown>;
+  /** releaseShipmentPush: give the claim back when the push ends without its stamp */
+  releasePush: (params: Record<string, unknown>) => Promise<unknown>;
 };
 
 export type PushOutcome = { ok: boolean; message: string };
+
+const claimedAtOf = (res: unknown): string =>
+  Array.isArray(res) && res.length > 0 ? String((res[0] as { claimed_at?: unknown }).claimed_at ?? '') : '';
 
 // the operator's LOCAL calendar date (en-CA renders YYYY-MM-DD): an
 // evening shipment must not be stamped with tomorrow's UTC date in the
@@ -72,6 +79,32 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   if (!d.cfg.token) return { ok: false, message: 'Ordering-app push skipped — no Base44 token in Settings. The shipment is saved; use "Push upstream" once the token is set.' };
   if (!d.externalId) return { ok: false, message: 'Ordering-app push skipped — this order has no ordering-app id (added locally?). The shipment is saved.' };
 
+  // (0) CLAIM the box before anything is written, local or upstream
+  // (1790103200): under the order lock a cancelled / voided / already
+  // pushed / re-epoched box refuses, and while the claim is held the box
+  // cannot be cancelled — so this push can never land after a cancel's
+  // ordering-app reset. Renewed right before the PUT; the stamp clears
+  // it, every other ending gives it back.
+  let claimedAt: string;
+  try {
+    claimedAt = claimedAtOf(await d.claimPush({ shipment_id: d.shipmentId, expected_push_epoch: d.pushEpoch, prior_claimed_at: '', actor: d.userName }));
+  } catch {
+    return { ok: false, message: 'Push NOT sent — the push could not be claimed (network error). The shipment is saved; retry the push.' };
+  }
+  if (!claimedAt) {
+    return { ok: false, message: 'Push NOT sent — this box was cancelled, refunded or already pushed, changed since it was read, or another push of it is in progress. Nothing was written; retry if it still shows "not pushed".' };
+  }
+  const lease = { claimedAt, stamped: false };
+  try {
+    return await pushClaimed(d, lease);
+  } finally {
+    if (!lease.stamped) {
+      try { await d.releasePush({ shipment_id: d.shipmentId, claimed_at: lease.claimedAt }); } catch { /* it lapses in 10 minutes */ }
+    }
+  }
+}
+
+async function pushClaimed(d: PushShipmentDeps, lease: { claimedAt: string; stamped: boolean }): Promise<PushOutcome> {
   // ONE ship date per invocation: awaited network calls sit between the
   // note writes and the shipped_date merge, and a push crossing local
   // midnight must not record contradictory dates for the same shipment
@@ -164,6 +197,19 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   if (fullyShipped) fields.status = 'shipped';
   else if (setPartial) fields.status = 'partially_shipped';
 
+  // renew the claim right before the PUT: a box cancelled or voided since
+  // the claim — or a claim that lapsed and another tab took — stops here,
+  // with nothing written upstream
+  let renewed = '';
+  try {
+    renewed = claimedAtOf(await d.claimPush({ shipment_id: d.shipmentId, expected_push_epoch: d.pushEpoch, prior_claimed_at: lease.claimedAt, actor: d.userName }));
+  } catch { renewed = ''; }
+  if (!renewed) {
+    await followUp('PUSH ABORTED before write: the box was cancelled, voided or pushed elsewhere (or this push lost its claim) while the push was being prepared — nothing written upstream.');
+    return { ok: false, message: 'Push NOT sent — the box changed (cancelled, voided or pushed elsewhere) while the push was being prepared. Nothing was written to the ordering app.' };
+  }
+  lease.claimedAt = renewed;
+
   let putError: string | null = null;
   try {
     await updateB44Order(d.cfg, d.externalId, fields);
@@ -205,6 +251,8 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
         }) as unknown[] | null;
         stamped = Array.isArray(res) ? res.length > 0 : !!res;
       } catch { stamped = false; }
+      // the stamp cleared the claim; anything less gives it back
+      lease.stamped = stamped;
       if (!stamped && fullyShipped) {
         await followUp('PUSH VERIFIED upstream but the local completion record did not save (a concurrent change may have intervened) — push again to finish recording.');
         return { ok: false, message: "Upstream verified (status 'shipped' landed) but the LOCAL completion record did not save — use \"Push upstream\" once more to finish recording; the retry is idempotent." };

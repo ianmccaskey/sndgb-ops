@@ -11,6 +11,8 @@ import finalizeShipment from '@/actions/fulfillment/finalizeShipment';
 import deleteShipmentDraft from '@/actions/fulfillment/deleteShipmentDraft';
 import setShipmentRefund from '@/actions/fulfillment/setShipmentRefund';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
+import claimShipmentPush from '@/actions/fulfillment/claimShipmentPush';
+import releaseShipmentPush from '@/actions/fulfillment/releaseShipmentPush';
 import addShipmentPhoto from '@/actions/fulfillment/addShipmentPhoto';
 import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
 import getShipmentPhoto from '@/actions/fulfillment/getShipmentPhoto';
@@ -149,6 +151,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [doDeleteDraft] = useMutateAction(deleteShipmentDraft);
   const [doSetRefund] = useMutateAction(setShipmentRefund);
   const [doMarkPushed] = useMutateAction(markShipmentPushed);
+  const [doClaimPush] = useMutateAction(claimShipmentPush);
+  const [doReleasePush] = useMutateAction(releaseShipmentPush);
   const [doAddPhoto] = useMutateAction(addShipmentPhoto);
   const [doDeletePhoto] = useMutateAction(deleteShipmentPhoto);
   const [doGetPhoto] = useMutateAction(getShipmentPhoto);
@@ -765,7 +769,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         shipmentId, pushEpoch, carrier, tracking,
         shippedItems: items.map(i => ({ sku: i.sku, qty: i.qty })),
         packable: freshRows, userName,
-        appendNote: doAppendNote, markPushed: doMarkPushed,
+        appendNote: doAppendNote, markPushed: doMarkPushed, claimPush: doClaimPush, releasePush: doReleasePush,
       });
       setPushMsg(out.message);
       reloadShipments();
@@ -1374,7 +1378,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       }
       const row = Array.isArray(res) && res.length > 0 ? res[0] as { items: unknown } : null;
       if (!row) {
-        setCancelMsg('Not cancelled — the box was refunded, cancelled or picked up by the carrier meanwhile, or it is a record adopted from the ordering app (correct that there first). The list has refreshed.');
+        setCancelMsg('Not cancelled — a push of this box to the ordering app may be in progress (try again in a minute), or the box was refunded, cancelled, picked up by the carrier or marked delivered meanwhile, or it is a record adopted from the ordering app (correct that there first). The list has refreshed.');
         return;
       }
       const raw = typeof row.items === 'string' ? JSON.parse(row.items) as unknown : row.items;
@@ -1955,7 +1959,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {s.shippo_transaction_id && s.refund_status && s.refund_status !== 'SUCCESS' && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => recheckRefund(s)}>Re-check refund</Button>
                     )}
-                    {!isVoid(s) && s.carrier !== 'upstream' && !CARRIER_HAD_IT.includes(s.tracking_status || '') && (
+                    {!isVoid(s) && s.carrier !== 'upstream' && !CARRIER_HAD_IT.includes(s.tracking_status || '')
+                      && !['delivered', 'reshipped'].includes(s.status) && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-rose-400"
                         title="This box never went out — put its units back on the pack list now (the label refund is separate)"
                         onClick={() => openCancel(s)}>

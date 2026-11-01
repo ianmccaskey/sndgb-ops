@@ -33,15 +33,25 @@
 -- record of an ordering-app hand mark (carrier 'upstream' — cancelling
 -- it here would only see the auto-adopt pass record the same mark again;
 -- that is corrected in the ordering app first); not a box the carrier has
--- reported moving, delivered, returned or failed (it went out — a return,
--- not a cancel); reason and actor required.
+-- reported moving, delivered, returned or failed, nor one the operator
+-- recorded delivered or reshipped (it went out — a return, not a cancel);
+-- not while a push of the box holds a fresh claim; reason and actor
+-- required.
 -- Refusals return zero rows. push_epoch is bumped so a push of this box
 -- already in flight cannot stamp it. Audited 'shipment_cancelled'.
 --
 -- For every writer: a cancelled shipment takes no shipment_items (the
 -- trigger below), and its cancel record never changes or clears.
 
+-- push_claimed_at: a push of this box is in flight (claimShipmentPush,
+-- taken under the 42001 order lock before the push writes anything
+-- upstream, renewed right before its PUT, cleared by the stamp or a
+-- release). A cancel refuses while a claim is fresh, and a push cannot
+-- claim a cancelled box — so a push planned before a cancel can never
+-- land after that cancel's reset (Codex, 2026-11-01). A claim older than
+-- 10 minutes is a dead tab's and no longer counts.
 ALTER TABLE shipments
+  ADD COLUMN IF NOT EXISTS push_claimed_at timestamptz,
   ADD COLUMN IF NOT EXISTS cancelled_at timestamptz,
   ADD COLUMN IF NOT EXISTS cancelled_by text,
   ADD COLUMN IF NOT EXISTS cancel_reason text,
@@ -141,8 +151,12 @@ BEGIN
     AND COALESCE(s.refund_status, '') <> 'SUCCESS'
     AND s.cancelled_at IS NULL
     AND COALESCE(s.carrier, '') <> 'upstream'
-    -- the carrier has had it: it went out, so it is a return, not a cancel
+    -- the carrier has had it, or the operator recorded it delivered /
+    -- reshipped: it went out, so it is a return, not a cancel
     AND COALESCE(s.tracking_status, '') NOT IN ('TRANSIT', 'DELIVERED', 'RETURNED', 'FAILURE')
+    AND s.status NOT IN ('delivered', 'reshipped')
+    -- a push of this box is in flight: it could land after the reset
+    AND (s.push_claimed_at IS NULL OR s.push_claimed_at < now() - interval '10 minutes')
   FOR UPDATE;
   IF NOT FOUND THEN RETURN; END IF;
 

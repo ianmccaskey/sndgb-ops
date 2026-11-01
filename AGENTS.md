@@ -144,9 +144,16 @@ where the code fails to honour one; do not propose replacing the decision.
   (triggers), and it is not a shipment: the queue, the order list, the
   delivery poll and every push surface skip `cancelled_at IS NOT NULL`,
   and `markShipmentPushed` refuses it. The cancel refuses a box the
-  carrier reported moving / delivered / returned / failed (a return, not
-  a cancel) and an adopted `'upstream'` record (corrected in the ordering
-  app first, or auto-adopt records it again). The ordering app is then
+  carrier reported moving / delivered / returned / failed, or the
+  operator recorded delivered / reshipped (a return, not a cancel), and
+  an adopted `'upstream'` record (corrected in the ordering app first, or
+  auto-adopt records it again). Every shipment push holds a claim
+  (`claimShipmentPush`, under 42001, renewed right before its PUT,
+  cleared by the stamp or `releaseShipmentPush`, lapsing after 10
+  minutes): a cancel refuses while a claim is fresh and a cancelled box
+  cannot be claimed, so no push planned before a cancel lands after its
+  reset — pass `claimPush` / `releasePush` to every `pushShipmentUpstream`
+  caller. The ordering app is then
   reset for that one box (`resetVoidedShipmentUpstream`, also offered for
   a refund-voided pushed box): only ISO ship dates this app wrote, only
   on items no longer covered here, the box's tracking note marked
