@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import listAdoptCandidates from '@/actions/fulfillment/listAdoptCandidates';
+import getAdoptCandidateOrder from '@/actions/fulfillment/getAdoptCandidateOrder';
 import adoptUpstreamShipmentUntouched from '@/actions/fulfillment/adoptUpstreamShipmentUntouched';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import logAutoAdoptRun from '@/actions/fulfillment/logAutoAdoptRun';
@@ -58,6 +59,7 @@ export function useAutoAdopt(): Api {
 export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
   const { userName, settings, groupBuys } = useApp();
   const [doCandidates] = useMutateAction(listAdoptCandidates);
+  const [doOrderLines] = useMutateAction(getAdoptCandidateOrder);
   const [doAdopt] = useMutateAction(adoptUpstreamShipmentUntouched);
   const [doMarkDirect] = useMutateAction(markOrderDirectFulfilled);
   const [doLogRun] = useMutateAction(logAutoAdoptRun);
@@ -67,8 +69,8 @@ export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
   const activeRef = useRef(false);
   const queuedRef = useRef<Map<number, string>>(new Map());
   const runRef = useRef<(groupBuyId: number, trigger: string) => Promise<AutoAdoptSummary | null>>(async () => null);
-  const envRef = useRef({ userName, settings, groupBuys, doCandidates, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote });
-  envRef.current = { userName, settings, groupBuys, doCandidates, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote };
+  const envRef = useRef({ userName, settings, groupBuys, doCandidates, doOrderLines, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote });
+  envRef.current = { userName, settings, groupBuys, doCandidates, doOrderLines, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote };
 
   // when each campaign's last run finished — a page-open trigger within
   // RECENT_MS of it is skipped (the Fulfillment page would otherwise
@@ -96,6 +98,7 @@ export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
         gbExternalId: gb.external_id,
         actor: `${env.userName} (auto-adopt)`,
         listCandidates: (g) => env.doCandidates({ group_buy_id: g }),
+        getOrderLines: (id) => env.doOrderLines({ order_id: id }),
         listUpstream: listB44Orders,
         getUpstream: getB44Order,
         adopt: (p) => env.doAdopt(p),

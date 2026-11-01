@@ -87,6 +87,8 @@ export type AutoAdoptDeps = {
   /** audit actor for every write, e.g. "Ian (auto-adopt)" */
   actor: string;
   listCandidates: (groupBuyId: number) => Promise<unknown>;
+  /** getAdoptCandidateOrder: ONE order's lines in the same shape, read fresh around every write-back */
+  getOrderLines: (orderId: number) => Promise<unknown>;
   listUpstream: (cfg: B44Config, gbExternalId: string) => Promise<B44Order[]>;
   getUpstream: (cfg: B44Config, orderId: string) => Promise<B44Order>;
   /** adopt_upstream_shipment_untouched: refuses (zero rows) unless every line still has zero attribution */
@@ -174,6 +176,80 @@ function usableMark(facts: HandFacts, raw: unknown): { ok: true; date: string; q
   if (facts.dates.length !== 1) return { ok: false, reason: `the ordering app carries ${facts.dates.length} different ship dates for it (${facts.dates.join(', ')}) — ambiguous` };
   if (!(facts.qty > 0)) return { ok: false, reason: `the ordering app's shipped quantity is unusable` };
   return { ok: true, date: facts.dates[0], qty: facts.qty };
+}
+
+type WriteBackPlan = {
+  toPush: PushDatesArgs['lines'];
+  coverage: PushDatesArgs['coverage'];
+  fullyShipped: boolean;
+  completionLogged: boolean;
+  /** "needs you" text when everything imported shipped but the ordering app holds more */
+  upstreamAheadWarn: string | null;
+  /** "needs you" texts for lines shipped here short of the ordering app's quantity */
+  shortfalls: string[];
+};
+
+/**
+ * What a write-back for one order would send, computed from the local
+ * lines AS GIVEN: dates for lines fully shipped here that the ordering
+ * app shows undated (only when the line covers the ordering app's whole
+ * quantity for that product), what this app shipped per product, and
+ * whether the order is complete here and upstream. Pure — called on the
+ * run's opening read, again on a fresh read right before the write, and
+ * once more after it; the plans must agree line for line or nothing is
+ * written.
+ */
+function planWriteBack(loc: AdoptCandidateLine[], ups: UpItem[], status: string): WriteBackPlan {
+  const upQty = new Map<string, number>();
+  for (const it of ups) if (it.qty > 0) upQty.set(it.pid, (upQty.get(it.pid) ?? 0) + it.qty);
+  const coverage: PushDatesArgs['coverage'] = {};
+  for (const l of loc) {
+    const pid = String(l.product_external_id ?? '');
+    if (!pid) continue;
+    const eff = num(l.effective_qty);
+    const covered = l.direct_ship ? (l.direct_fulfilled_at ? eff : 0) : Math.min(num(l.shipped_qty), eff);
+    const prev = coverage[pid];
+    coverage[pid] = { covered: (prev?.covered ?? 0) + covered, digital: (prev?.digital ?? true) && l.digital };
+  }
+  const toPush: PushDatesArgs['lines'] = [];
+  const uncovered: string[] = [];
+  const shortfalls: string[] = [];
+  for (const l of loc) {
+    if (l.digital) continue;
+    const eff = num(l.effective_qty);
+    const covered = l.direct_ship ? !!l.direct_fulfilled_at : eff > 0 && num(l.shipped_qty) >= eff;
+    if (!covered) { uncovered.push(l.sku_code); continue; }
+    const pid = String(l.product_external_id ?? '');
+    const up = ups.find(it => it.pid === pid);
+    if (!pid || !up || up.iso !== '' || String(up.raw ?? '') !== '') continue;
+    if (eff + 1e-9 < (upQty.get(pid) ?? 0)) {
+      shortfalls.push(`${l.sku_code}: ${eff} shipped here, but the ordering app now holds ${upQty.get(pid)} — a quantity added there since the last pull; pull the campaign, then its ship date is written`);
+      continue;
+    }
+    if (l.direct_ship) {
+      const date = isoDateOf(l.direct_fulfilled_at);
+      if (!date) continue;
+      const label = `Vendor shipped${l.direct_vendor_carrier ? ` ${l.direct_vendor_carrier.toUpperCase()}` : ''}${l.direct_vendor_tracking ? ` ${l.direct_vendor_tracking}` : ''} — ${l.sku_code} x ${eff}`;
+      toPush.push({ productExternalId: pid, date, label });
+    } else {
+      const date = l.last_shipped_on ? isoDateOf(l.last_shipped_on) : '';
+      if (!date) continue;
+      toPush.push({ productExternalId: pid, date, label: `Shipped here — ${l.sku_code} x ${eff} (${l.boxes ?? 'box'})` });
+    }
+  }
+  const upstreamAhead = [...upQty.entries()].filter(([pid, q]) => !coverage[pid] || (!coverage[pid].digital && coverage[pid].covered + 1e-9 < q))
+    .map(([pid, q]) => `${ups.find(it => it.pid === pid)?.name ?? pid} x${q}`);
+  const localCovered = uncovered.length === 0 && loc.some(l => !l.digital);
+  const fullyShipped = localCovered && upstreamAhead.length === 0;
+  const upstreamAheadWarn = localCovered && upstreamAhead.length > 0 && !shippedLike(status)
+    ? `everything imported here has shipped, but the ordering app holds ${upstreamAhead.join(', ')} beyond it (a line or quantity added there since the last pull) — pull the campaign, then this order completes`
+    : null;
+  return { toPush, coverage, fullyShipped, completionLogged: loc.some(l => l.completion_logged === true), upstreamAheadWarn, shortfalls };
+}
+
+/** The part of a plan that reaches the ordering app, as one comparable string. */
+function planKey(p: WriteBackPlan): string {
+  return JSON.stringify([p.toPush.map(l => [l.productExternalId, l.date]).sort(), p.fullyShipped, Object.entries(p.coverage).sort()]);
 }
 
 export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Promise<AutoAdoptSummary> {
@@ -350,98 +426,85 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
     }
 
     // ---- 3: write-back — shipped here, undated there --------------------
-    // upstream quantity per product (as pulled): a date is written only
-    // for a product whose WHOLE upstream quantity shipped here — a unit
-    // added there since the last pull must not be called shipped
-    const upQty = new Map<string, number>();
-    for (const it of ups) if (it.qty > 0) upQty.set(it.pid, (upQty.get(it.pid) ?? 0) + it.qty);
-    const toPush: PushDatesArgs['lines'] = [];
-    const uncovered: string[] = [];
-    for (const l of loc) {
-      if (l.digital) continue;
-      const eff = num(l.effective_qty);
-      const covered = l.direct_ship ? !!l.direct_fulfilled_at : eff > 0 && num(l.shipped_qty) >= eff;
-      if (!covered) { uncovered.push(l.sku_code); continue; }
-      const pid = String(l.product_external_id ?? '');
-      const up = ups.find(it => it.pid === pid);
-      if (!pid || !up || up.iso !== '' || String(up.raw ?? '') !== '') continue;
-      if (eff + 1e-9 < (upQty.get(pid) ?? 0)) {
-        push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code}: ${eff} shipped here, but the ordering app now holds ${upQty.get(pid)} — a quantity added there since the last pull; pull the campaign, then its ship date is written` });
-        continue;
-      }
-      if (l.direct_ship) {
-        const date = isoDateOf(l.direct_fulfilled_at);
-        if (!date) continue;
-        const label = `Vendor shipped${l.direct_vendor_carrier ? ` ${l.direct_vendor_carrier.toUpperCase()}` : ''}${l.direct_vendor_tracking ? ` ${l.direct_vendor_tracking}` : ''} — ${l.sku_code} x ${eff}`;
-        toPush.push({ productExternalId: pid, date, label });
-      } else {
-        const date = l.last_shipped_on ? isoDateOf(l.last_shipped_on) : '';
-        if (!date) continue;
-        toPush.push({ productExternalId: pid, date, label: `Shipped here — ${l.sku_code} x ${eff} (${l.boxes ?? 'box'})` });
-      }
-    }
-    // what this app shipped, per ordering-app product id — the write-back
-    // re-checks every item of the freshly read upstream order against it
-    const coverage: PushDatesArgs['coverage'] = {};
-    for (const l of loc) {
-      const pid = String(l.product_external_id ?? '');
-      if (!pid) continue;
-      const eff = num(l.effective_qty);
-      const covered = l.direct_ship ? (l.direct_fulfilled_at ? eff : 0) : Math.min(num(l.shipped_qty), eff);
-      const prev = coverage[pid];
-      coverage[pid] = { covered: (prev?.covered ?? 0) + covered, digital: (prev?.digital ?? true) && l.digital };
-    }
-    // the ordering app's own lines (as pulled) that this app has not
-    // covered — a product or quantity added there since the last import:
-    // never called shipped, the operator pulls first
-    const upstreamAhead = [...upQty.entries()].filter(([pid, q]) => !coverage[pid] || (!coverage[pid].digital && coverage[pid].covered + 1e-9 < q))
-      .map(([pid, q]) => `${ups.find(it => it.pid === pid)?.name ?? pid} x${q}`);
-    // covered here on every non-digital line (and there is at least one),
-    // and nothing upstream beyond what is imported
-    const fullyShipped = uncovered.length === 0 && loc.some(l => !l.digital) && upstreamAhead.length === 0;
-    if (uncovered.length === 0 && loc.some(l => !l.digital) && upstreamAhead.length > 0 && !shippedLike(status)) {
-      push({ kind: 'needs_you', orderNumber, orderId, message: `everything imported here has shipped, but the ordering app holds ${upstreamAhead.join(', ')} beyond it (a line or quantity added there since the last pull) — pull the campaign, then this order completes` });
-    }
-    const completionLogged = loc.some(l => l.completion_logged === true);
-    // this pass wrote to the order upstream earlier (its note line is
-    // there — written on every write-back, status-only ones included) and
-    // the order is complete there: the durable evidence must exist too,
-    // whatever failed after the PUT landed (verification, the audit row,
-    // a closed tab)
-    const completedByUs = /Shipped per Ops app/.test(String(o.notes ?? ''));
-    const logCompletion = async (reason: string) => {
+    // planned from the local lines as read NOW (re-read right before the
+    // write and again after it: an undo of a vendor-shipped mark, a
+    // quantity edit or a voided box in between must hold the write back
+    // or be reported — the run's opening read is not evidence enough)
+    const planned0 = planWriteBack(loc, ups, status);
+    if (planned0.upstreamAheadWarn) push({ kind: 'needs_you', orderNumber, orderId, message: planned0.upstreamAheadWarn });
+    for (const m of planned0.shortfalls) push({ kind: 'needs_you', orderNumber, orderId, message: m });
+    const logCompletion = async (reason: string, labels: string[]) => {
       try {
         const wrote = wroteRows(await deps.logCompletion({
           order_id: orderId, actor: deps.actor,
-          pushed: JSON.stringify({ reason, lines: toPush.map(l => l.label) }),
+          pushed: JSON.stringify({ reason, lines: labels }),
         }));
         if (wrote) push({ kind: 'pushed', orderNumber, orderId, message: `completion recorded (the ordering app shows the order shipped and every line is covered here)` });
       } catch (e: unknown) {
         push({ kind: 'error', orderNumber, orderId, message: `the completion record could not be written — ${e instanceof Error ? e.message : String(e)}; the next run retries` });
       }
     };
+    // this pass wrote to the order upstream earlier (its note line is
+    // there — written on every write-back, status-only ones included) and
+    // the order is complete there: the durable evidence must exist too,
+    // whatever failed after the PUT landed (verification, the audit row,
+    // a closed tab)
+    const completedByUs = /Shipped per Ops app/.test(String(o.notes ?? ''));
     // the write-back is owed for dated lines, AND — with nothing to date —
     // for an order covered here whose ordering-app status does not say so
-    // yet (a line completed through a vendor mark, or an earlier write
+    // yet (a line completed through a vendor mark, an earlier write
     // whose status step failed); the status is the retry marker, not the
     // item dates
-    const statusOwed = fullyShipped && !shippedLike(status);
-    if (toPush.length > 0 || statusOwed) {
-      try {
-        const r = await deps.pushDates({
-          cfg: deps.cfg, externalId: String(o.id), orderId, orderNumber,
-          lines: toPush, fullyShipped, coverage, actor: deps.actor, appendNote: deps.appendNote,
-        });
-        if (r.ok) {
-          push({ kind: 'pushed', orderNumber, orderId, message: r.message });
-          if (r.statusSet === 'shipped' && !completionLogged) await logCompletion('write-back set the ordering app to shipped');
-        } else push({ kind: r.skipped ? 'skipped' : 'error', orderNumber, orderId, message: r.message });
-      } catch (e: unknown) {
-        push({ kind: 'error', orderNumber, orderId, message: `write-back to the ordering app failed — ${e instanceof Error ? e.message : String(e)}` });
+    const statusOwed0 = planned0.fullyShipped && !shippedLike(status);
+    if (planned0.toPush.length > 0 || statusOwed0) {
+      // fresh local read: the plan must still hold line for line
+      let freshLoc: AdoptCandidateLine[] | null = null;
+      try { freshLoc = rowsOf<AdoptCandidateLine>(await deps.getOrderLines(orderId)); } catch (e: unknown) {
+        push({ kind: 'error', orderNumber, orderId, message: `could not re-read this order's local record before the write-back — ${e instanceof Error ? e.message : String(e)}; nothing written this run` });
       }
-    } else if (fullyShipped && shippedLike(status) && completedByUs && !completionLogged) {
-      // (fullyShipped already requires every upstream line covered)
-      await logCompletion('an earlier write-back completed the order; its evidence row was missing');
+      if (freshLoc) {
+        const planned1 = planWriteBack(freshLoc, ups, status);
+        if (planKey(planned1) !== planKey(planned0) || freshLoc.length === 0) {
+          push({ kind: 'skipped', orderNumber, orderId, message: `the local record changed during the run (a box, a vendor-shipped mark or a quantity) — nothing written to the ordering app; the next run re-reads it` });
+        } else {
+          try {
+            const r = await deps.pushDates({
+              cfg: deps.cfg, externalId: String(o.id), orderId, orderNumber,
+              lines: planned1.toPush, fullyShipped: planned1.fullyShipped, coverage: planned1.coverage, actor: deps.actor, appendNote: deps.appendNote,
+            });
+            if (r.ok) {
+              push({ kind: 'pushed', orderNumber, orderId, message: r.message });
+              // the write landed: did the local record change underneath it?
+              // (the window between the re-read and the PUT) — the ordering
+              // app now shows what the local record no longer supports, and
+              // only the operator can settle which is right
+              try {
+                const after = rowsOf<AdoptCandidateLine>(await deps.getOrderLines(orderId));
+                const planned2 = planWriteBack(after, ups, status);
+                if (planKey(planned2) !== planKey(planned1)) {
+                  push({ kind: 'needs_you', orderNumber, orderId, message: `the local record changed WHILE the ordering app was being updated — the ordering app may now show shipped what this app no longer does; compare the two by hand and correct the ordering app if needed` });
+                } else if (r.statusSet === 'shipped' && !after.some(l => l.completion_logged === true)) {
+                  await logCompletion('write-back set the ordering app to shipped', planned1.toPush.map(l => l.label));
+                }
+              } catch (e: unknown) {
+                push({ kind: 'error', orderNumber, orderId, message: `could not re-read the local record after the write-back — ${e instanceof Error ? e.message : String(e)}; the next run checks it${r.statusSet === 'shipped' ? ' and records the completion' : ''}` });
+              }
+            } else push({ kind: r.skipped ? 'skipped' : 'error', orderNumber, orderId, message: r.message });
+          } catch (e: unknown) {
+            push({ kind: 'error', orderNumber, orderId, message: `write-back to the ordering app failed — ${e instanceof Error ? e.message : String(e)}` });
+          }
+        }
+      }
+    } else if (planned0.fullyShipped && shippedLike(status) && completedByUs && !planned0.completionLogged) {
+      // (fullyShipped already requires every upstream line covered) —
+      // re-read first for the same reason
+      try {
+        const freshLoc = rowsOf<AdoptCandidateLine>(await deps.getOrderLines(orderId));
+        const planned1 = planWriteBack(freshLoc, ups, status);
+        if (planned1.fullyShipped && !planned1.completionLogged) await logCompletion('an earlier write-back completed the order; its evidence row was missing', []);
+      } catch (e: unknown) {
+        push({ kind: 'error', orderNumber, orderId, message: `could not re-read this order's local record — ${e instanceof Error ? e.message : String(e)}; the next run retries` });
+      }
     }
   }
 
