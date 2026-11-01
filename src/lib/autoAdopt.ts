@@ -14,28 +14,33 @@ import type { PushDatesOutcome, PushDatesArgs } from '@/lib/pushShipment';
  *     shipped_date written as display text, "Oct 31, 2026" — this app
  *     writes ISO "2026-10-31", so the format names the writer) whose local
  *     line has NOTHING recorded (no box, no draft, no adopted row) is
- *     recorded through adopt_upstream_shipment: a finalized shipment at
- *     the ordering app's date, carrier 'upstream', no tracking — exactly
- *     what the Adopt button writes. One date, one quantity, re-read fresh
- *     right before writing; the fn re-proves the remaining quantity under
- *     the order lock.
- *  2. VENDOR SHIPPED: a hand mark on a vendor-direct line stamps
- *     direct_fulfilled_at through markOrderDirectFulfilled (item mode),
- *     the Direct ship tab's own write.
+ *     recorded through adopt_upstream_shipment_untouched: the Adopt
+ *     button's write (a finalized shipment at the ordering app's date,
+ *     carrier 'upstream', no tracking) behind a database check, under the
+ *     order lock, that the line still has zero attribution — so a second
+ *     run, a concurrent run, or a draft opened meanwhile can never record
+ *     the same mark twice. One date, one quantity, re-read fresh right
+ *     before writing.
+ *  2. VENDOR SHIPPED: a hand mark covering a vendor-direct line's whole
+ *     quantity stamps direct_fulfilled_at through markOrderDirectFulfilled
+ *     (item mode), the Direct ship tab's own write — after the same
+ *     validation and fresh re-read as an adoption.
  *  3. WRITE-BACK: a line fully shipped HERE (a finalized box, or a
  *     vendor-direct line marked vendor shipped) that the ordering app
  *     still shows undated gets its shipped_date and a note there, through
  *     the same read-merge-write-verify discipline the shipment push uses —
  *     so the other admin never sees as unshipped what already left.
  *
- * NEVER: record over a line that already has a box or draft here (that is
- * a possible double shipment — listed under "needs you" with both
- * records); act on an order-level "shipped" status with no per-item dates
- * (the Adopt button asks for an explicit confirmation there, so the
- * unattended pass asks the operator); act on an item carrying two
- * different ship dates or an unparseable one; link products. Every write
- * runs under the actor the caller passes ("<operator> (auto-adopt)"), and
- * a run that changed anything writes one auto_adopt_run summary row.
+ * NEVER: record over a line that already has a box, a draft or an adopted
+ * row here (a box within a day of the hand mark is the same shipment
+ * written down twice; anything else is a possible double shipment, listed
+ * under "needs you" with both records); act on an order-level "shipped"
+ * status with no per-item dates (the Adopt button asks for an explicit
+ * confirmation there, so the unattended pass asks the operator); act on an
+ * item carrying two different ship dates, an unparseable one, or a
+ * quantity short of a vendor-direct line; link products. Every write runs
+ * under the actor the caller passes ("<operator> (auto-adopt)"), and a run
+ * that changed anything writes one auto_adopt_run summary row.
  */
 
 export type AdoptCandidateLine = {
@@ -82,6 +87,7 @@ export type AutoAdoptDeps = {
   listCandidates: (groupBuyId: number) => Promise<unknown>;
   listUpstream: (cfg: B44Config, gbExternalId: string) => Promise<B44Order[]>;
   getUpstream: (cfg: B44Config, orderId: string) => Promise<B44Order>;
+  /** adopt_upstream_shipment_untouched: refuses (zero rows) unless every line still has zero attribution */
   adopt: (p: { order_id: number; group_buy_id: number; items: string; shipped_date: string; note: string; actor: string }) => Promise<unknown>;
   markDirect: (p: { order_id: number; item_id: string; expected_ids: string; fulfilled: boolean; vendor_carrier: string; vendor_tracking: string; actor: string }) => Promise<unknown>;
   pushDates: (p: PushDatesArgs) => Promise<PushDatesOutcome>;
@@ -144,11 +150,25 @@ function upstreamItems(o: B44Order): UpItem[] {
     }));
 }
 
+type HandFacts = { dates: string[]; qty: number; unparseable: boolean };
+
 /** The hand-set ship facts for one product on one ordering-app order: distinct dates and total quantity. */
-function handFacts(items: UpItem[], pid: string): { dates: string[]; qty: number; unparseable: boolean } {
+function handFacts(items: UpItem[], pid: string): HandFacts {
   const hits = items.filter(it => it.pid === pid && it.hand);
   const dates = Array.from(new Set(hits.map(h => h.iso)));
   return { dates: dates.filter(Boolean), qty: hits.reduce((s, h) => s + (h.qty > 0 ? h.qty : 0), 0), unparseable: dates.includes('') };
+}
+
+/**
+ * ONE usable hand mark for a product, or the reason there is none. Shared
+ * by packed adoption and vendor-direct marking so both act on the same
+ * evidence standard: exactly one parseable date and a positive quantity.
+ */
+function usableMark(facts: HandFacts, raw: unknown): { ok: true; date: string; qty: number } | { ok: false; reason: string } {
+  if (facts.unparseable) return { ok: false, reason: `the ordering app's ship date "${String(raw)}" cannot be read as a date` };
+  if (facts.dates.length !== 1) return { ok: false, reason: `the ordering app carries ${facts.dates.length} different ship dates for it (${facts.dates.join(', ')}) — ambiguous` };
+  if (!(facts.qty > 0)) return { ok: false, reason: `the ordering app's shipped quantity is unusable` };
+  return { ok: true, date: facts.dates[0], qty: facts.qty };
 }
 
 export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Promise<AutoAdoptSummary> {
@@ -192,10 +212,12 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
     const orderNumber = String(loc[0].order_number);
     const linesFor = (pid: string) => loc.filter(l => String(l.product_external_id ?? '') === pid);
 
-    // ---- 1 + 2: hand marks → adopt / vendor shipped --------------------
-    // planned adoptions grouped by ship date: one shipment row per date,
-    // each carrying its true shipped_at (as the Adopt button does)
-    const planned = new Map<string, { order_item_id: number; qty: string; sku: string; clamped: boolean }[]>();
+    // ---- 1 + 2: hand marks → PLAN adoptions and vendor-direct marks -----
+    // adoptions grouped by ship date: one shipment row per date, each
+    // carrying its true shipped_at (as the Adopt button does)
+    type Planned = { order_item_id: number; pid: string; qty: string; sku: string; date: string; clamped: boolean };
+    const planned = new Map<string, Planned[]>();
+    const plannedDirect: Planned[] = [];
     const seenPid = new Set<string>();
     for (const it of ups) {
       if (!it.hand || seenPid.has(it.pid)) continue;
@@ -208,22 +230,16 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
       const facts = handFacts(ups, it.pid);
       for (const l of ls) {
         if (l.digital) continue;
+        const eff = num(l.effective_qty);
         if (l.direct_ship) {
           if (l.direct_fulfilled_at) continue;
-          try {
-            const wrote = wroteRows(await deps.markDirect({
-              order_id: orderId, item_id: String(l.order_item_id), expected_ids: '',
-              fulfilled: true, vendor_carrier: '', vendor_tracking: '', actor: deps.actor,
-            }));
-            if (wrote) push({ kind: 'vendor_marked', orderNumber, orderId, message: `${l.sku_code} x${num(l.effective_qty)} marked vendor shipped — the ordering app says it shipped ${facts.dates.join(' / ') || String(it.raw)}` });
-            else push({ kind: 'skipped', orderNumber, orderId, message: `${l.sku_code}: the vendor-direct line changed before it could be marked — nothing written` });
-          } catch (e: unknown) {
-            push({ kind: 'error', orderNumber, orderId, message: `${l.sku_code}: vendor-shipped mark failed — ${e instanceof Error ? e.message : String(e)}` });
-          }
+          const mark = usableMark(facts, it.raw);
+          if (!mark.ok) { push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code} (vendor-direct): ${mark.reason} — mark it by hand on the Direct ship tab if the vendor shipped it` }); continue; }
+          if (mark.qty + 1e-9 < eff) { push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code} (vendor-direct): the ordering app marks ${mark.qty} of ${eff} shipped — a vendor-direct line is marked sent whole or not at all, so decide by hand on the Direct ship tab` }); continue; }
+          plannedDirect.push({ order_item_id: Number(l.order_item_id), pid: it.pid, qty: eff.toFixed(2), sku: l.sku_code, date: mark.date, clamped: false });
           continue;
         }
-        const eff = num(l.effective_qty), attributed = num(l.attributed_qty), shipped = num(l.shipped_qty), localBox = num(l.local_box_qty);
-        const remaining = Math.max(eff - attributed, 0);
+        const attributed = num(l.attributed_qty), shipped = num(l.shipped_qty), adopted = num(l.adopted_qty), localBox = num(l.local_box_qty);
         if (localBox > 0) {
           // a box here within a day of the hand mark is the SAME shipment
           // written down in both places (the other admin marks it there,
@@ -235,60 +251,77 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
           push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code} x${eff} is marked shipped BY HAND in the ordering app (${facts.dates.join(' / ') || String(it.raw)}) and ALSO sits in a box shipped from here (${l.boxes ?? ''}) — a possible double shipment; nothing recorded, check with the other admin` });
           continue;
         }
-        if (remaining <= 0) continue; // already adopted, nothing left to record
-        if (attributed > shipped) {
+        if (adopted > 0) {
+          // already pulled down (this pass or the Adopt button). The mark
+          // is never read twice: a larger quantity there now is a change
+          // the operator must judge, not a second adoption.
+          if (facts.qty > adopted + 1e-9 && eff - attributed > 0) {
+            push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code}: ${adopted} already recorded from the ordering app, which now marks ${facts.qty} shipped — adopt the difference by hand if a further parcel went out` });
+          }
+          continue;
+        }
+        if (attributed > 0) {
+          // a draft reserves it (attributed > shipped with no finalized
+          // box): the pass never records under a draft
           push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code}: the ordering app marks it shipped by hand, but a draft box here already reserves it — finalize or delete the draft, then run again` });
           continue;
         }
-        if (facts.unparseable) {
-          push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code}: the ordering app's ship date "${String(it.raw)}" cannot be read as a date — adopt by hand (Fulfillment › Check ordering app)` });
-          continue;
-        }
-        if (facts.dates.length !== 1) {
-          push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code}: the ordering app carries ${facts.dates.length} different ship dates for it (${facts.dates.join(', ')}) — ambiguous, adopt by hand` });
-          continue;
-        }
-        if (!(facts.qty > 0)) {
-          push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code}: the ordering app's shipped quantity is unusable — adopt by hand` });
-          continue;
-        }
-        const q = Math.min(remaining, facts.qty);
-        const date = facts.dates[0];
-        planned.set(date, [...(planned.get(date) ?? []), { order_item_id: Number(l.order_item_id), qty: q.toFixed(2), sku: l.sku_code, clamped: q < remaining }]);
+        if (!(eff > 0)) continue;
+        const mark = usableMark(facts, it.raw);
+        if (!mark.ok) { push({ kind: 'needs_you', orderNumber, orderId, message: `${l.sku_code}: ${mark.reason} — adopt by hand (Fulfillment › Check ordering app)` }); continue; }
+        const q = Math.min(eff, mark.qty);
+        planned.set(mark.date, [...(planned.get(mark.date) ?? []), { order_item_id: Number(l.order_item_id), pid: it.pid, qty: q.toFixed(2), sku: l.sku_code, date: mark.date, clamped: q < eff }]);
       }
     }
 
-    if (planned.size > 0) {
-      // confirm-time freshness, as the Adopt button does: the other admin
-      // may have corrected the ordering app since the list was pulled
+    // ---- confirm-time freshness, then the writes ------------------------
+    if (planned.size > 0 || plannedDirect.length > 0) {
+      // as the Adopt button does: the other admin may have corrected the
+      // ordering app since the list was pulled — every planned line must
+      // still carry the very mark it was planned from
       let fresh: B44Order | null = null;
       try { fresh = await deps.getUpstream(deps.cfg, String(o.id)); } catch (e: unknown) {
         push({ kind: 'error', orderNumber, orderId, message: `could not re-read the ordering-app order before recording — ${e instanceof Error ? e.message : String(e)}; nothing recorded this run` });
-        fresh = null;
       }
       if (fresh) {
         const freshUps = upstreamItems(fresh);
         const freshStatus = String(fresh.status ?? '').trim();
-        const stale = TERMINAL.test(freshStatus) || [...planned.entries()].some(([date, ls]) => ls.some(p => {
-          const line = loc.find(l => Number(l.order_item_id) === p.order_item_id);
-          const f = handFacts(freshUps, String(line?.product_external_id ?? ''));
-          return f.dates.length !== 1 || f.dates[0] !== date || f.qty + 1e-9 < Number(p.qty);
-        }));
-        if (stale) {
-          push({ kind: 'skipped', orderNumber, orderId, message: `the ordering app changed between the pull and the write — nothing recorded; the next run re-reads it` });
+        const stillHolds = (p: Planned) => {
+          const f = handFacts(freshUps, p.pid);
+          return f.dates.length === 1 && f.dates[0] === p.date && !f.unparseable && f.qty + 1e-9 >= Number(p.qty);
+        };
+        if (TERMINAL.test(freshStatus)) {
+          push({ kind: 'skipped', orderNumber, orderId, message: `the ordering app now shows the order "${freshStatus}" — nothing recorded` });
         } else {
+          for (const p of plannedDirect) {
+            if (!stillHolds(p)) { push({ kind: 'skipped', orderNumber, orderId, message: `${p.sku}: the ordering app's mark changed between the pull and the write — not marked; the next run re-reads it` }); continue; }
+            try {
+              const wrote = wroteRows(await deps.markDirect({
+                order_id: orderId, item_id: String(p.order_item_id), expected_ids: '',
+                fulfilled: true, vendor_carrier: '', vendor_tracking: '', actor: deps.actor,
+              }));
+              if (wrote) push({ kind: 'vendor_marked', orderNumber, orderId, message: `${p.sku} x${Number(p.qty)} marked vendor shipped — the ordering app says it shipped ${p.date}` });
+              else push({ kind: 'skipped', orderNumber, orderId, message: `${p.sku}: the vendor-direct line changed before it could be marked — nothing written` });
+            } catch (e: unknown) {
+              push({ kind: 'error', orderNumber, orderId, message: `${p.sku}: vendor-shipped mark failed — ${e instanceof Error ? e.message : String(e)}` });
+            }
+          }
           for (const [date, ls] of planned) {
+            const held = ls.filter(stillHolds);
+            const changed = ls.filter(p => !held.includes(p));
+            if (changed.length > 0) push({ kind: 'skipped', orderNumber, orderId, message: `${changed.map(p => p.sku).join(', ')}: the ordering app's mark changed between the pull and the write — not recorded; the next run re-reads it` });
+            if (held.length === 0) continue;
             const note = `Recorded from ordering app (status "${status}"; item shipped date ${date}) — no tracking; adopted automatically by the auto-adopt pass.`;
             try {
               const wrote = wroteRows(await deps.adopt({
                 order_id: orderId, group_buy_id: groupBuyId,
-                items: JSON.stringify(ls.map(p => ({ order_item_id: p.order_item_id, qty: p.qty }))),
+                items: JSON.stringify(held.map(p => ({ order_item_id: p.order_item_id, qty: p.qty }))),
                 shipped_date: date, note, actor: deps.actor,
               }));
-              if (wrote) push({ kind: 'adopted', orderNumber, orderId, message: `${ls.map(p => `${p.sku} x${Number(p.qty)}${p.clamped ? ' (clamped to what the ordering app shipped)' : ''}`).join(', ')} recorded as shipped ${date} from the ordering app (no tracking)` });
-              else push({ kind: 'skipped', orderNumber, orderId, message: `${ls.map(p => p.sku).join(', ')}: the database refused the record (the order changed underneath, or the date is out of range) — nothing written` });
+              if (wrote) push({ kind: 'adopted', orderNumber, orderId, message: `${held.map(p => `${p.sku} x${Number(p.qty)}${p.clamped ? ' (clamped to what the ordering app shipped)' : ''}`).join(', ')} recorded as shipped ${date} from the ordering app (no tracking)` });
+              else push({ kind: 'skipped', orderNumber, orderId, message: `${held.map(p => p.sku).join(', ')}: the database refused the record (something was recorded on the line meanwhile, the order changed, or the date is out of range) — nothing written` });
             } catch (e: unknown) {
-              push({ kind: 'error', orderNumber, orderId, message: `${ls.map(p => p.sku).join(', ')}: adoption failed — ${e instanceof Error ? e.message : String(e)}` });
+              push({ kind: 'error', orderNumber, orderId, message: `${held.map(p => p.sku).join(', ')}: adoption failed — ${e instanceof Error ? e.message : String(e)}` });
             }
           }
         }

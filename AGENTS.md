@@ -99,9 +99,12 @@ where the code fails to honour one; do not propose replacing the decision.
   the other admin marked shipped by hand in base44. A base44 item's
   `shipped_date` format names its writer (ISO = this app's push, display
   text = base44's UI), and only hand marks are acted on: a local line with
-  NO box, draft or adopted row is recorded through `adopt_upstream_shipment`
-  (the Adopt button's write, one date, clamped quantity, fresh re-read
-  first); a vendor-direct line is stamped through `markOrderDirectFulfilled`;
+  NO box, draft or adopted row is recorded through
+  `adopt_upstream_shipment_untouched` (`1790103100`: the Adopt button's
+  write behind a lock-held zero-attribution proof, so a mark is recorded
+  at most once; one date, clamped quantity, fresh re-read first); a
+  vendor-direct line whose whole quantity carries one usable mark is
+  stamped through `markOrderDirectFulfilled` after the same re-read;
   lines already shipped here that base44 shows undated get their date
   written back (`pushShippedDatesUpstream`, trail line first, verified).
   It never records over a line that already has a box or draft here (a

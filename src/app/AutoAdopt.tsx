@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
 import { useMutateAction } from '@uibakery/data';
 import listAdoptCandidates from '@/actions/fulfillment/listAdoptCandidates';
-import adoptUpstreamShipment from '@/actions/fulfillment/adoptUpstreamShipment';
+import adoptUpstreamShipmentUntouched from '@/actions/fulfillment/adoptUpstreamShipmentUntouched';
 import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfilled';
 import logAutoAdoptRun from '@/actions/fulfillment/logAutoAdoptRun';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
@@ -57,7 +57,7 @@ export function useAutoAdopt(): Api {
 export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
   const { userName, settings, groupBuys } = useApp();
   const [doCandidates] = useMutateAction(listAdoptCandidates);
-  const [doAdopt] = useMutateAction(adoptUpstreamShipment);
+  const [doAdopt] = useMutateAction(adoptUpstreamShipmentUntouched);
   const [doMarkDirect] = useMutateAction(markOrderDirectFulfilled);
   const [doLogRun] = useMutateAction(logAutoAdoptRun);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
@@ -68,10 +68,18 @@ export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
   const envRef = useRef({ userName, settings, groupBuys, doCandidates, doAdopt, doMarkDirect, doLogRun, doAppendNote });
   envRef.current = { userName, settings, groupBuys, doCandidates, doAdopt, doMarkDirect, doLogRun, doAppendNote };
 
+  // when each campaign's last run finished — a page-open trigger within
+  // RECENT_MS of it is skipped (the Fulfillment page would otherwise
+  // re-pull the whole ordering app on every visit); imports and the
+  // button always run
+  const lastRunRef = useRef<Map<number, number>>(new Map());
+  const RECENT_MS = 5 * 60 * 1000;
+
   const run = useCallback(async (groupBuyId: number, trigger: string): Promise<AutoAdoptSummary | null> => {
     const env = envRef.current;
     const gb = env.groupBuys.find(g => Number(g.id) === groupBuyId) ?? null;
     if (platformOf(gb) !== 'base44' || !gb?.external_id) return null;
+    if (trigger === 'fulfillment page' && Date.now() - (lastRunRef.current.get(groupBuyId) ?? 0) < RECENT_MS) return null;
     if (activeRef.current) {
       queuedRef.current.set(groupBuyId, trigger);
       return null;
@@ -95,6 +103,7 @@ export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
         logRun: (p) => env.doLogRun(p),
       });
       summary.trigger = trigger;
+      lastRunRef.current.set(groupBuyId, Date.now());
       setState({ running: false, groupBuyId, trigger, summary, error: null });
       return summary;
     } catch (e: unknown) {
