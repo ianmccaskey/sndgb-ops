@@ -93,6 +93,24 @@ where the code fails to honour one; do not propose replacing the decision.
   networks, a hash another order holds); do not propose widening it to
   rejections or overrides. Settled with the owner 2026-10-25.
 
+- **The ordering-app shipments pass acts only on hand marks with nothing
+  recorded here.** `src/lib/autoAdopt.ts` (run by `AutoAdoptProvider`
+  after every base44 import and when Fulfillment opens) pulls down what
+  the other admin marked shipped by hand in base44. A base44 item's
+  `shipped_date` format names its writer (ISO = this app's push, display
+  text = base44's UI), and only hand marks are acted on: a local line with
+  NO box, draft or adopted row is recorded through `adopt_upstream_shipment`
+  (the Adopt button's write, one date, clamped quantity, fresh re-read
+  first); a vendor-direct line is stamped through `markOrderDirectFulfilled`;
+  lines already shipped here that base44 shows undated get their date
+  written back (`pushShippedDatesUpstream`, trail line first, verified).
+  It never records over a line that already has a box or draft here (a
+  possible double shipment goes under "needs you" with both records),
+  never acts on an order-level status alone, never resolves two dates.
+  Flag a place where the pass would record over local evidence or act on
+  an ISO-dated item; do not propose widening it to order-level statuses
+  or to linking products. Settled with the owner 2026-11-01.
+
 - **A paid order ships even with a pending hash** (`1790102900`). The
   money gate on every pack/ship path (Ready and Direct queues, direct-ship
   candidates, the draft / manual / transfer functions, both purchase

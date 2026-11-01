@@ -14,6 +14,8 @@ import listUndeliveredShipmentTracks from '@/actions/fulfillment/listUndelivered
 import updateShipmentTracking from '@/actions/fulfillment/updateShipmentTracking';
 import listCampaignCatalogProducts from '@/actions/receiving/listCampaignCatalogProducts';
 import { useApp } from '@/app/AppContext';
+import { useAutoAdopt } from '@/app/AutoAdopt';
+import { AutoAdoptCard } from '@/components/AutoAdoptCard';
 import { useShippoHttp } from '@/lib/useShippoHttp';
 import { isTestKey, trackPackage } from '@/lib/shippo';
 import { B44_DEFAULT_APP_ID, getB44Order, listB44Orders } from '@/lib/base44';
@@ -106,6 +108,19 @@ export function FulfillmentPage() {
   const [rawProducts] = useLoadAction(listCampaignCatalogProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
   const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active && !p.digital), [rawProducts]);
   const [doMarkDirect] = useMutateAction(markOrderDirectFulfilled);
+
+  // ---- the ordering-app shipments pass (src/lib/autoAdopt.ts): once per
+  // campaign when the page opens, and on the card's button. A no-op for a
+  // campaign the ordering app does not run. The queue reloads when a run
+  // ends so adopted quantities leave "remaining to pack" at once. ----
+  const autoAdopt = useAutoAdopt();
+  useEffect(() => {
+    if (groupBuyId != null) void autoAdopt.run(groupBuyId, 'fulfillment page');
+  }, [groupBuyId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!autoAdopt.state.running && autoAdopt.state.summary) reload();
+  }, [autoAdopt.state.running]); // eslint-disable-line react-hooks/exhaustive-deps
+  const runAutoAdoptNow = () => { if (groupBuyId != null) void autoAdopt.run(groupBuyId, 'manual'); };
 
   // ---- Push All (Shipped tab): every order flagged "not pushed" gets its
   // finalized-but-unpushed boxes pushed to the ordering app, one at a
@@ -1151,6 +1166,15 @@ export function FulfillmentPage() {
 
       {error && <p className="text-sm text-rose-400">{error}</p>}
       {checkError && <p className="text-sm text-rose-400">{checkError}</p>}
+
+      {/* what the ordering-app shipments pass recorded or could not settle
+          for THIS campaign — shown only for a campaign the ordering app
+          runs (the provider never starts a run for any other) */}
+      {groupBuyId != null && groupBuy?.external_id && !groupBuy?.storefront_code && (
+        <AutoAdoptCard
+          state={autoAdopt.state.groupBuyId === groupBuyId ? autoAdopt.state : { running: false, groupBuyId, trigger: null, summary: null, error: null }}
+          onRun={runAutoAdoptNow} canRun={canCheck} />
+      )}
 
       {/* upstream check result — persists until cleared or re-pulled so the
           rose "shipped upstream" badges have a visible legend */}

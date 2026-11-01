@@ -13,6 +13,7 @@ import recordImportFailure from '@/actions/orders/recordImportFailure';
 import resolveImportFailuresForOrders from '@/actions/orders/resolveImportFailuresForOrders';
 import { useApp } from '@/app/AppContext';
 import { useAutoRecon } from '@/app/AutoRecon';
+import { useAutoAdopt } from '@/app/AutoAdopt';
 import { autoReconLine } from '@/components/AutoReconCard';
 import { ParsedOrder } from '@/lib/parseOrderImport';
 import { B44Cancellation, ClaimRelease } from '@/lib/mapB44Order';
@@ -188,6 +189,7 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   // the auto-reconcile pass follows every finished run (new hashes just
   // imported pending; stale claims released) — app-level, one at a time
   const autoRecon = useAutoRecon();
+  const autoAdopt = useAutoAdopt();
 
   const [job, setJob] = useState<ImportJob>(IDLE);
   // The loop lives across renders; the ref (not state) is the concurrency
@@ -197,8 +199,8 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
   // startImport is a stable callback, so the long-running loop must read the
   // CURRENT user and mutate functions at execution time — a first-render
   // closure would freeze 'Admin' (useUser resolves late) into audit rows.
-  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve, autoRecon });
-  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve, autoRecon };
+  const envRef = useRef({ userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve, autoRecon, autoAdopt });
+  envRef.current = { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict, doRejectedClaims, doReleaseCancelled, doSyncStatus, doRecordFailure, doAutoResolve, autoRecon, autoAdopt };
 
   const importOne = async (o: ParsedOrder, gbId: number, cancelledOnStorefront: Set<string>): Promise<ImportRowResult> => {
     const { userName, doUpsert, doUpsertItem, doPruneItems, doPayments, doClaimConflict } = envRef.current;
@@ -558,6 +560,10 @@ export function ImportRunnerProvider({ children }: { children: React.ReactNode }
         // then the pass: verify what just imported, re-point what the
         // chain says is elsewhere, fix rails — its own card reports it
         void envRef.current.autoRecon.run(args.groupBuyId, 'after import');
+        // and the ordering-app shipments pass: what the other admin marked
+        // shipped by hand over there comes down here (no-op for a campaign
+        // the ordering app does not run) — its own card reports it
+        void envRef.current.autoAdopt.run(args.groupBuyId, 'after import');
       });
     return true;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

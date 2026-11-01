@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AppProvider } from '@/app/AppContext';
 import { ImportRunnerProvider, ImportProgressWidget } from '@/app/ImportRunner';
 import { AutoReconProvider } from '@/app/AutoRecon';
+import { AutoAdoptProvider } from '@/app/AutoAdopt';
 import { AppLayout } from '@/app/layout/AppLayout';
 import { HomePage } from '@/app/pages/HomePage';
 import { OrdersPage } from '@/app/pages/orders/OrdersPage';
@@ -27,6 +28,7 @@ function App() {
     <BrowserRouter>
       <AppProvider>
         <AutoReconProvider>
+        <AutoAdoptProvider>
         <ImportRunnerProvider>
         <AppLayout>
           <Routes>
@@ -48,6 +50,7 @@ function App() {
           <ImportProgressWidget />
         </AppLayout>
         </ImportRunnerProvider>
+        </AutoAdoptProvider>
         </AutoReconProvider>
       </AppProvider>
     </BrowserRouter>

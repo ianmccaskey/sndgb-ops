@@ -220,3 +220,110 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
     return { ok: false, message: 'Push outcome UNKNOWN — could not verify the upstream order. The push is idempotent; use "Push upstream" to retry.' };
   }
 }
+
+// ---------------------------------------------------------------------------
+
+export type PushDatesLine = {
+  /** the ordering-app product id (campaign_product_links.external_id) */
+  productExternalId: string;
+  /** YYYY-MM-DD the line left — the box date, or the vendor-shipped stamp */
+  date: string;
+  /** one note fragment, e.g. "Vendor shipped UPS 1Z… — R30 x 30" */
+  label: string;
+};
+
+export type PushDatesArgs = {
+  cfg: B44Config;
+  externalId: string;
+  orderId: number;
+  orderNumber: string;
+  lines: PushDatesLine[];
+  /** every non-digital line of the order is now covered here (boxes + vendor stamps) */
+  fullyShipped: boolean;
+  actor: string;
+  appendNote: (params: { order_id: number; note: string; detail: string; actor: string }) => Promise<unknown>;
+};
+
+export type PushDatesOutcome = PushOutcome & { skipped?: boolean };
+
+/**
+ * Write ship dates the ordering app is missing for lines that ALREADY
+ * left from here: vendor-direct lines marked "Vendor shipped" (which no
+ * other path pushes), and packed lines whose box push left them undated
+ * (a partial at push time, a later quantity edit). Used by the auto-adopt
+ * pass (src/lib/autoAdopt.ts). Same discipline as pushShipmentUpstream:
+ * local trail line first, read-merge-write of items[] (only shipped_date
+ * on the named items, never over one already set), a note line appended
+ * once, status 'shipped' only when the whole order is covered and
+ * otherwise 'partially_shipped' never over a protected status, then a
+ * verifying re-read. There is no local stamp to write: the ordering
+ * app's own shipped_date is the idempotency marker — the next run sees
+ * it set and leaves the item alone.
+ */
+export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDatesOutcome> {
+  if (!d.cfg.token) return { ok: false, skipped: true, message: 'ordering-app write-back skipped — no token in Settings' };
+  if (!d.externalId || d.lines.length === 0) return { ok: false, skipped: true, message: 'nothing to write back' };
+  const today = new Date().toLocaleDateString('en-CA');
+  const labels = d.lines.map(l => l.label).join('; ');
+  const noteLine = `Shipped per Ops app — ${labels} (${today})`;
+
+  try {
+    await d.appendNote({
+      order_id: d.orderId,
+      note: `[${today}] ${d.actor} wrote ship dates to the ordering app: ${labels}; upstream status ${d.fullyShipped ? "-> 'shipped'" : "-> 'partially_shipped' (unless already shipped/terminal there)"}.`,
+      detail: JSON.stringify({ lines: d.lines, fully_shipped: d.fullyShipped }),
+      actor: d.actor,
+    });
+  } catch {
+    return { ok: false, message: 'write-back NOT sent — the local audit note could not be written, and an upstream write without a local trail is not allowed' };
+  }
+
+  let upstream: B44Order;
+  try {
+    upstream = await getB44Order(d.cfg, d.externalId);
+  } catch (e: unknown) {
+    return { ok: false, message: `write-back aborted — could not read the ordering-app order (${e instanceof Error ? e.message : 'read failed'})` };
+  }
+  const upstreamStatus = String(upstream.status ?? '').trim();
+  if (/cancel|refund|reject|void|denied/i.test(upstreamStatus)) {
+    return { ok: false, skipped: true, message: `write-back skipped — the ordering app now shows the order "${upstreamStatus}"` };
+  }
+  const dateByPid = new Map(d.lines.map(l => [l.productExternalId, l.date] as const));
+  const upstreamItems = Array.isArray(upstream.items) ? upstream.items : [];
+  let intended = 0;
+  const mergedItems: B44OrderItem[] = upstreamItems.map(it => {
+    const pid = String(it.product_id ?? '');
+    const date = dateByPid.get(pid);
+    if (date && !it.shipped_date) { intended++; return { ...it, shipped_date: date }; }
+    return it;
+  });
+  const upstreamNotes = String(upstream.notes ?? '');
+  const mergedNotes = upstreamNotes.includes(noteLine) ? upstreamNotes : (upstreamNotes ? `${upstreamNotes}\n${noteLine}` : noteLine);
+  const statusProtected = /shipped|delivered/i.test(upstreamStatus);
+  const fields: Record<string, unknown> = { items: mergedItems, notes: mergedNotes };
+  if (d.fullyShipped) fields.status = 'shipped';
+  else if (!statusProtected) fields.status = 'partially_shipped';
+
+  let putError: string | null = null;
+  try {
+    await updateB44Order(d.cfg, d.externalId, fields);
+  } catch (e: unknown) {
+    putError = e instanceof Error ? e.message : 'update failed';
+  }
+
+  try {
+    const after = await getB44Order(d.cfg, d.externalId);
+    const afterItems = Array.isArray(after.items) ? after.items : [];
+    const undated = afterItems.filter(it => dateByPid.has(String(it.product_id ?? '')) && !it.shipped_date).length;
+    const noteOk = String(after.notes ?? '').includes(noteLine);
+    const afterStatus = String(after.status ?? '').trim();
+    const statusOk = d.fullyShipped ? afterStatus === 'shipped' : statusProtected || afterStatus === 'partially_shipped';
+    if (undated === 0 && noteOk && statusOk) {
+      return { ok: true, message: `ordering app updated: ${intended} item${intended === 1 ? '' : 's'} dated (${labels})${d.fullyShipped ? ", status -> 'shipped'" : statusProtected ? '' : ", status -> 'partially_shipped'"}` };
+    }
+    const what = [undated > 0 ? `${undated} item(s) still undated` : null, noteOk ? null : 'note missing', statusOk ? null : 'status not set'].filter(Boolean).join(', ');
+    return { ok: false, message: `write-back partial — the ordering app shows ${what}${putError ? ` (transport: ${putError})` : ''}; the next run retries` };
+  } catch {
+    return { ok: false, message: `write-back outcome unknown — the update ${putError ? `threw (${putError})` : 'was sent'} and the verifying re-read failed; the next run retries (idempotent)` };
+  }
+}

@@ -11,6 +11,8 @@ import { useApp } from '@/app/AppContext';
 import { useImportRunner, importSourceKey, lastResultFor } from '@/app/ImportRunner';
 import { useAutoRecon } from '@/app/AutoRecon';
 import { AutoReconCard } from '@/components/AutoReconCard';
+import { AutoAdoptCard } from '@/components/AutoAdoptCard';
+import { useAutoAdopt } from '@/app/AutoAdopt';
 import { rows } from '@/lib/rows';
 import { fmtUSD, fmtDateTime } from '@/lib/fmt';
 import { parseOrderPaste, ParseResult } from '@/lib/parseOrderImport';
@@ -54,6 +56,7 @@ export function ImportPage() {
   const assistantTools = useAssistantTools(groupBuyId);
   // the pass the runner starts after every finished import
   const autoRecon = useAutoRecon();
+  const autoAdopt = useAutoAdopt();
 
   const enabled = groupBuyId != null;
   // The durable failure basin: open failures recorded by past runs (this
@@ -369,6 +372,11 @@ export function ImportPage() {
       {groupBuyId != null && autoRecon.state.groupBuyId === groupBuyId && autoRecon.state.trigger === 'after import'
         && (autoRecon.state.running || autoRecon.state.summary != null || autoRecon.state.error != null) && (
         <AutoReconCard state={autoRecon.state} />
+      )}
+      {/* and what the ordering-app shipments pass pulled down after the pull */}
+      {groupBuyId != null && autoAdopt.state.groupBuyId === groupBuyId && autoAdopt.state.trigger === 'after import'
+        && (autoAdopt.state.running || autoAdopt.state.summary != null || autoAdopt.state.error != null) && (
+        <AutoAdoptCard state={autoAdopt.state} />
       )}
 
       {(failures.length > 0 || failureMsg || failuresError) && (
