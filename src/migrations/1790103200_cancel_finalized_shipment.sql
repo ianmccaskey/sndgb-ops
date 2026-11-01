@@ -51,9 +51,12 @@
 -- land after that cancel's reset (Codex, 2026-11-01). A claim older than
 -- 10 minutes is a dead tab's and no longer counts.
 -- push_dispatched_at: that push's PUT was sent (stamped by the renewal
--- right before it) and not yet verified. A request that went out may land
--- whatever the tab heard back, so only the verified stamp clears it —
--- never a release — and a cancel refuses while it is under 10 minutes.
+-- right before it) and is not yet resolved. At most one is outstanding
+-- per box (no claim or renewal lands while another is under 10 minutes),
+-- so it is cleared by the verified stamp, or by its own push's release
+-- once the ordering app answered the PUT; a PUT whose connection dropped
+-- unanswered may still land, so its mark stays until a verified push or
+-- 10 minutes, and a cancel refuses meanwhile (Codex, 2026-11-01).
 ALTER TABLE shipments
   ADD COLUMN IF NOT EXISTS push_claimed_at timestamptz,
   ADD COLUMN IF NOT EXISTS push_dispatched_at timestamptz,

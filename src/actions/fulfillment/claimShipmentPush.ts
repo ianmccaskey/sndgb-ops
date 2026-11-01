@@ -8,16 +8,20 @@ import { action } from '@uibakery/data';
  * clears it. Taken under the 42001 order lock, the same lock
  * cancel_finalized_shipment holds, so the two serialize: a cancelled,
  * refund-voided, already-pushed or re-epoched box refuses a claim, and a
- * cancel refuses while a claim is fresh (under 10 minutes). The claim
- * blocks CANCELS, not other pushes — two pushes of one box are idempotent
- * with each other — so a first claim takes over any standing one; the
- * push it displaced fails its renewal and aborts before writing. The
- * renewal lands only on the caller's own claim (exact timestamp) and
- * also stamps push_dispatched_at: the PUT follows at once, and a sent
- * request may land whatever the tab hears back, so only the verified
- * stamp (markShipmentPushed) clears that mark — a release never does,
- * and the cancel refuses while it is fresh. Zero rows = refused.
- * claimed_at travels as text (microsecond-exact).
+ * cancel refuses while a claim is fresh (under 10 minutes).
+ *
+ * The renewal also stamps push_dispatched_at — the PUT follows at once —
+ * and at most ONE dispatched write is ever outstanding per box: neither a
+ * claim nor a renewal lands while another push's dispatch is under 10
+ * minutes old. Before any dispatch a first claim takes over a standing
+ * claim (pushes of one box are idempotent with each other; the displaced
+ * push fails its renewal and aborts before writing), so a retry is not
+ * locked out by a push that never sent. A dispatch is cleared by the
+ * verified stamp, or by its own push's release once the ordering app
+ * ANSWERED the PUT (any status: that request is finished); a PUT whose
+ * connection dropped with no answer may still land, so its mark stays
+ * until verified or 10 minutes old — and the cancel refuses meanwhile.
+ * Zero rows = refused. Timestamps travel as text (microsecond-exact).
  */
 function claimShipmentPush() {
   return action('claimShipmentPush', 'SQL', {
@@ -28,30 +32,30 @@ function claimShipmentPush() {
         FROM shipments s
         WHERE s.id = {{params.shipment_id}}::bigint
       ),
+      ts AS (SELECT clock_timestamp() AS t),
       up AS (
         UPDATE shipments s
-        SET push_claimed_at = clock_timestamp(),
-            -- the renewal is taken right before the PUT: from it the write
-            -- counts as dispatched until the verified stamp clears it
+        SET push_claimed_at = ts.t,
             push_dispatched_at = CASE WHEN COALESCE({{params.prior_claimed_at}}::text, '') <> ''
-                                      THEN clock_timestamp() ELSE s.push_dispatched_at END
-        FROM lck
+                                      THEN ts.t ELSE s.push_dispatched_at END
+        FROM lck, ts
         WHERE s.id = lck.sid
           AND s.finalized_at IS NOT NULL
           AND s.cancelled_at IS NULL
           AND COALESCE(s.refund_status, '') <> 'SUCCESS'
           AND s.b44_pushed_at IS NULL
           AND s.push_epoch = NULLIF({{params.expected_push_epoch}}::text, '')::int
+          -- no other push's sent write is still unresolved
+          AND (s.push_dispatched_at IS NULL OR s.push_dispatched_at < now() - interval '10 minutes')
           AND (
-            -- first claim: takes the box over from any standing claim
+            -- first claim: takes the box over from a standing (unsent) claim
             COALESCE({{params.prior_claimed_at}}::text, '') = ''
             -- renewal: only the caller's own standing claim
-            OR (COALESCE({{params.prior_claimed_at}}::text, '') <> ''
-                AND s.push_claimed_at = NULLIF({{params.prior_claimed_at}}::text, '')::timestamptz
+            OR (s.push_claimed_at = NULLIF({{params.prior_claimed_at}}::text, '')::timestamptz
                 AND s.push_claimed_at >= now() - interval '10 minutes'))
-        RETURNING s.id, s.push_claimed_at
+        RETURNING s.id, s.push_claimed_at, s.push_dispatched_at
       )
-      SELECT up.id, up.push_claimed_at::text AS claimed_at FROM up
+      SELECT up.id, up.push_claimed_at::text AS claimed_at, up.push_dispatched_at::text AS dispatched_at FROM up
     `,
   });
 }

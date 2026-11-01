@@ -151,9 +151,18 @@ export async function getB44Order(cfg: B44Config, orderId: string): Promise<B44O
 }
 
 /**
+ * The request never got an answer (the connection failed or dropped):
+ * unlike an HTTP error, the write may still be processed and land. The
+ * shipment push keeps its dispatch mark on exactly this case.
+ */
+export class B44UnreachableError extends Error {}
+
+/**
  * Partial update of one ordering-app Order (only the provided fields change).
  * Used to push corrections — e.g. a fixed transaction_hashtags list — back to
- * the source so the two systems agree on the next pull.
+ * the source so the two systems agree on the next pull. Throws
+ * B44UnreachableError when no answer came back, a plain Error when the
+ * ordering app answered with a failure.
  */
 export async function updateB44Order(cfg: B44Config, orderId: string, fields: Record<string, unknown>): Promise<void> {
   const appId = cfg.appId.trim() || B44_DEFAULT_APP_ID;
@@ -171,7 +180,7 @@ export async function updateB44Order(cfg: B44Config, orderId: string, fields: Re
       body: JSON.stringify(fields),
     });
   } catch {
-    throw new Error('Could not reach the ordering app API — check your network connection.');
+    throw new B44UnreachableError('Could not reach the ordering app API — check your network connection.');
   }
   if (!res.ok) {
     const body = await res.json().catch(() => null) as { message?: string } | null;

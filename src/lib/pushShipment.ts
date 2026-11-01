@@ -28,7 +28,7 @@
  *    status mid-push the verification fails and the idempotent retry
  *    re-reads and defers to her value.
  */
-import { getB44Order, updateB44Order } from '@/lib/base44';
+import { getB44Order, updateB44Order, B44UnreachableError } from '@/lib/base44';
 import type { B44Config, B44Order, B44OrderItem } from '@/lib/base44';
 import { isHandSetDate } from '@/lib/autoAdopt';
 
@@ -67,8 +67,19 @@ export type PushShipmentDeps = {
 
 export type PushOutcome = { ok: boolean; message: string };
 
-const claimedAtOf = (res: unknown): string =>
-  Array.isArray(res) && res.length > 0 ? String((res[0] as { claimed_at?: unknown }).claimed_at ?? '') : '';
+const claimRowOf = (res: unknown): { claimedAt: string; dispatchedAt: string } => {
+  const r = Array.isArray(res) && res.length > 0 ? res[0] as { claimed_at?: unknown; dispatched_at?: unknown } : null;
+  return { claimedAt: String(r?.claimed_at ?? ''), dispatchedAt: String(r?.dispatched_at ?? '') };
+};
+
+type PushLease = {
+  claimedAt: string;
+  /** this push's own dispatch mark, set by the renewal right before the PUT */
+  dispatchedAt: string;
+  /** the PUT went out and NO answer came back: it may still land */
+  unanswered: boolean;
+  stamped: boolean;
+};
 
 // the operator's LOCAL calendar date (en-CA renders YYYY-MM-DD): an
 // evening shipment must not be stamped with tomorrow's UTC date in the
@@ -84,32 +95,35 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   // pushed / re-epoched box refuses, and while the claim is held the box
   // cannot be cancelled — so this push can never land after a cancel's
   // ordering-app reset. The renewal right before the PUT also marks the
-  // write DISPATCHED (push_dispatched_at): a request that went out may
-  // still land whatever this tab hears back (a thrown transport, a
-  // negative re-read), so only the verified stamp clears that mark —
-  // the cancel stays refused until then or for 10 minutes. The claim
-  // itself is given back on every ending without the stamp; a retry may
-  // take it over at once.
+  // write DISPATCHED (push_dispatched_at), and at most one dispatched
+  // write is outstanding per box. The verified stamp clears both; any
+  // other ending gives the claim back, and the dispatch mark too once the
+  // ordering app ANSWERED the PUT (that request is finished, whatever it
+  // said). A PUT whose connection dropped unanswered may still land: its
+  // mark stays until a verified push or 10 minutes, and the cancel and
+  // any other push wait for it.
   let claimedAt: string;
   try {
-    claimedAt = claimedAtOf(await d.claimPush({ shipment_id: d.shipmentId, expected_push_epoch: d.pushEpoch, prior_claimed_at: '', actor: d.userName }));
+    claimedAt = claimRowOf(await d.claimPush({ shipment_id: d.shipmentId, expected_push_epoch: d.pushEpoch, prior_claimed_at: '', actor: d.userName })).claimedAt;
   } catch {
     return { ok: false, message: 'Push NOT sent — the push could not be claimed (network error). The shipment is saved; retry the push.' };
   }
   if (!claimedAt) {
-    return { ok: false, message: 'Push NOT sent — this box was cancelled, refunded or already pushed, or changed since it was read. Nothing was written; retry if it still shows "not pushed".' };
+    return { ok: false, message: 'Push NOT sent — this box was cancelled, refunded or already pushed, changed since it was read, or an earlier push of it lost its connection mid-write and may still land (wait a few minutes). Nothing was written; retry if it still shows "not pushed".' };
   }
-  const lease = { claimedAt, stamped: false };
+  const lease: PushLease = { claimedAt, dispatchedAt: '', unanswered: false, stamped: false };
   try {
     return await pushClaimed(d, lease);
   } finally {
     if (!lease.stamped) {
-      try { await d.releasePush({ shipment_id: d.shipmentId, claimed_at: lease.claimedAt }); } catch { /* it lapses in 10 minutes */ }
+      try {
+        await d.releasePush({ shipment_id: d.shipmentId, claimed_at: lease.claimedAt, dispatched_at: lease.unanswered ? '' : lease.dispatchedAt });
+      } catch { /* both lapse in 10 minutes */ }
     }
   }
 }
 
-async function pushClaimed(d: PushShipmentDeps, lease: { claimedAt: string; stamped: boolean }): Promise<PushOutcome> {
+async function pushClaimed(d: PushShipmentDeps, lease: PushLease): Promise<PushOutcome> {
   // ONE ship date per invocation: awaited network calls sit between the
   // note writes and the shipped_date merge, and a push crossing local
   // midnight must not record contradictory dates for the same shipment
@@ -205,25 +219,27 @@ async function pushClaimed(d: PushShipmentDeps, lease: { claimedAt: string; stam
   // renew the claim right before the PUT: a box cancelled or voided since
   // the claim — or a claim that lapsed and another tab took — stops here,
   // with nothing written upstream
-  let renewed = '';
+  let renewed = { claimedAt: '', dispatchedAt: '' };
   try {
-    renewed = claimedAtOf(await d.claimPush({ shipment_id: d.shipmentId, expected_push_epoch: d.pushEpoch, prior_claimed_at: lease.claimedAt, actor: d.userName }));
-  } catch { renewed = ''; }
-  if (!renewed) {
+    renewed = claimRowOf(await d.claimPush({ shipment_id: d.shipmentId, expected_push_epoch: d.pushEpoch, prior_claimed_at: lease.claimedAt, actor: d.userName }));
+  } catch { /* treated as refused */ }
+  if (!renewed.claimedAt || !renewed.dispatchedAt) {
     await followUp('PUSH ABORTED before write: the box was cancelled, voided or pushed elsewhere (or this push lost its claim) while the push was being prepared — nothing written upstream.');
     return { ok: false, message: 'Push NOT sent — the box changed (cancelled, voided or pushed elsewhere) while the push was being prepared. Nothing was written to the ordering app.' };
   }
-  lease.claimedAt = renewed;
+  lease.claimedAt = renewed.claimedAt;
+  lease.dispatchedAt = renewed.dispatchedAt;
 
-  // (the renewal above stamped push_dispatched_at: from here the request
-  // may land whatever this tab hears back, and only the stamp clears it)
   let putError: string | null = null;
   try {
     await updateB44Order(d.cfg, d.externalId, fields);
   } catch (e: unknown) {
     // do NOT trust a thrown transport: the PUT may still have landed —
-    // fall through to verification exactly like the house pushers
+    // fall through to verification exactly like the house pushers. With
+    // no answer at all it may also still be IN FLIGHT: its dispatch mark
+    // is kept (the cancel waits) unless the verification below sees it.
     putError = e instanceof Error ? e.message : 'update failed';
+    lease.unanswered = e instanceof B44UnreachableError;
   }
 
   // (3) postcondition verification on EVERY outcome
@@ -259,7 +275,7 @@ async function pushClaimed(d: PushShipmentDeps, lease: { claimedAt: string; stam
         stamped = Array.isArray(res) ? res.length > 0 : !!res;
       } catch { stamped = false; }
       // the stamp cleared the claim and the dispatch mark; anything less
-      // gives the claim back and leaves the dispatch mark to lapse
+      // gives the claim back (and an answered PUT's mark)
       lease.stamped = stamped;
       if (!stamped && fullyShipped) {
         await followUp('PUSH VERIFIED upstream but the local completion record did not save (a concurrent change may have intervened) — push again to finish recording.');

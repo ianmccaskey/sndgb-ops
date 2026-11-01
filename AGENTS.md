@@ -149,12 +149,15 @@ where the code fails to honour one; do not propose replacing the decision.
   an adopted `'upstream'` record (corrected in the ordering app first, or
   auto-adopt records it again). Every shipment push holds a claim
   (`claimShipmentPush`, under 42001, cleared by the stamp or
-  `releaseShipmentPush`, lapsing after 10 minutes; a retry may take it
-  over); its renewal right before the PUT also stamps
-  `push_dispatched_at`, which only the verified stamp clears — a sent
-  request may land whatever the tab heard back. A cancel refuses while
-  either is fresh and a cancelled box cannot be claimed, so no push
-  planned or sent before a cancel lands after its reset — pass
+  `releaseShipmentPush`, lapsing after 10 minutes; a retry may take an
+  unsent one over); its renewal right before the PUT also stamps
+  `push_dispatched_at`, and at most one dispatched write is outstanding
+  per box. It clears on the verified stamp or, once the ordering app
+  answered the PUT, on that push's release; an unanswered PUT
+  (`B44UnreachableError`) may still land, so its mark holds until a
+  verified push or 10 minutes. A cancel refuses while either is fresh and
+  a cancelled box cannot be claimed, so no push planned or sent before a
+  cancel lands after its reset — pass
   `claimPush` / `releasePush` to every `pushShipmentUpstream` caller.
   The ordering app is then
   reset for that one box (`resetVoidedShipmentUpstream`, also offered for
