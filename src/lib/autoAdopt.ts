@@ -371,8 +371,28 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
         toPush.push({ productExternalId: pid, date, label: `Shipped here — ${l.sku_code} x ${eff} (${l.boxes ?? 'box'})` });
       }
     }
-    // covered here on every non-digital line (and there is at least one)
-    const fullyShipped = uncovered.length === 0 && loc.some(l => !l.digital);
+    // what this app shipped, per ordering-app product id — the write-back
+    // re-checks every item of the freshly read upstream order against it
+    const coverage: PushDatesArgs['coverage'] = {};
+    for (const l of loc) {
+      const pid = String(l.product_external_id ?? '');
+      if (!pid) continue;
+      const eff = num(l.effective_qty);
+      const covered = l.direct_ship ? (l.direct_fulfilled_at ? eff : 0) : Math.min(num(l.shipped_qty), eff);
+      const prev = coverage[pid];
+      coverage[pid] = { covered: (prev?.covered ?? 0) + covered, digital: (prev?.digital ?? true) && l.digital };
+    }
+    // the ordering app's own lines (as pulled) that this app has not
+    // covered — a product or quantity added there since the last import:
+    // never called shipped, the operator pulls first
+    const upstreamAhead = ups.filter(it => it.qty > 0 && (!coverage[it.pid] || (!coverage[it.pid].digital && coverage[it.pid].covered + 1e-9 < it.qty)))
+      .map(it => `${it.name} x${it.qty}`);
+    // covered here on every non-digital line (and there is at least one),
+    // and nothing upstream beyond what is imported
+    const fullyShipped = uncovered.length === 0 && loc.some(l => !l.digital) && upstreamAhead.length === 0;
+    if (uncovered.length === 0 && loc.some(l => !l.digital) && upstreamAhead.length > 0 && !shippedLike(status)) {
+      push({ kind: 'needs_you', orderNumber, orderId, message: `everything imported here has shipped, but the ordering app holds ${upstreamAhead.join(', ')} beyond it (a line or quantity added there since the last pull) — pull the campaign, then this order completes` });
+    }
     const completionLogged = loc.some(l => l.completion_logged === true);
     // this pass wrote to the order upstream earlier (its note line is
     // there — written on every write-back, status-only ones included) and
@@ -401,7 +421,7 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
       try {
         const r = await deps.pushDates({
           cfg: deps.cfg, externalId: String(o.id), orderId, orderNumber,
-          lines: toPush, fullyShipped, actor: deps.actor, appendNote: deps.appendNote,
+          lines: toPush, fullyShipped, coverage, actor: deps.actor, appendNote: deps.appendNote,
         });
         if (r.ok) {
           push({ kind: 'pushed', orderNumber, orderId, message: r.message });
@@ -411,6 +431,7 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
         push({ kind: 'error', orderNumber, orderId, message: `write-back to the ordering app failed — ${e instanceof Error ? e.message : String(e)}` });
       }
     } else if (fullyShipped && shippedLike(status) && completedByUs && !completionLogged) {
+      // (fullyShipped already requires every upstream line covered)
       await logCompletion('an earlier write-back completed the order; its evidence row was missing');
     }
   }

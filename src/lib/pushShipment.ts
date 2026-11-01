@@ -241,6 +241,13 @@ export type PushDatesArgs = {
   lines: PushDatesLine[];
   /** every non-digital line of the order is now covered here (boxes + vendor stamps) */
   fullyShipped: boolean;
+  /**
+   * what this app has shipped per ordering-app product id (digital lines
+   * flagged) — the completion status is set only when EVERY item on the
+   * freshly read upstream order is covered by it, so a line or quantity
+   * added upstream since the last import can never be called shipped
+   */
+  coverage: Record<string, { covered: number; digital: boolean }>;
   actor: string;
   appendNote: (params: { order_id: number; note: string; detail: string; actor: string }) => Promise<unknown>;
 };
@@ -318,12 +325,28 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
   const mergedNotes = noteAlready ? upstreamNotes : (upstreamNotes ? `${upstreamNotes}\n${noteLine}` : noteLine);
   const delivered = /delivered/i.test(upstreamStatus);
   const statusProtected = /shipped|delivered/i.test(upstreamStatus);
+  // completion is checked against the order AS READ NOW: every upstream
+  // item must be covered by what this app shipped (digital lines aside).
+  // A product or quantity the ordering app gained since the last import
+  // is not covered, so the order is not called shipped — the caller
+  // imports first
+  const uncoveredUpstream = upstreamItems.filter(it => {
+    const pid = String(it.product_id ?? '');
+    const q = Number(it.quantity ?? 0);
+    if (!(q > 0)) return false;
+    const c = d.coverage[pid];
+    return !c || (!c.digital && c.covered + 1e-9 < q);
+  }).map(it => `${String(it.product_name ?? it.product_id)} x${Number(it.quantity ?? 0)}`);
+  const complete = d.fullyShipped && uncoveredUpstream.length === 0;
   // the status this write intends: 'shipped' when the order is covered
-  // here (unless the other admin already recorded delivery — a later
-  // fact than ours), 'partially_shipped' for a dated line on an order
-  // not yet covered unless its status already says shipped-or-beyond
-  const statusSet: PushDatesOutcome['statusSet'] = d.fullyShipped ? (delivered ? null : 'shipped') : (statusProtected ? null : 'partially_shipped');
+  // here AND upstream (unless the other admin already recorded delivery —
+  // a later fact than ours), 'partially_shipped' for a dated line on an
+  // order not yet covered unless its status already says shipped-or-beyond
+  const statusSet: PushDatesOutcome['statusSet'] = complete ? (delivered ? null : 'shipped') : (statusProtected || d.lines.length === 0 ? null : 'partially_shipped');
   const statusChanges = !!statusSet && statusSet !== upstreamStatus;
+  if (d.fullyShipped && !complete && d.lines.length === 0) {
+    return { ok: false, skipped: true, message: `not marked complete — the ordering app now holds ${uncoveredUpstream.join(', ')} beyond what is imported here; pull the campaign first` };
+  }
   if (intended === 0 && !statusChanges && noteAlready) {
     return { ok: true, statusSet, message: `the ordering app already shows it (${upstreamStatus}) — nothing to write` };
   }
@@ -345,7 +368,7 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
     const afterStatus = String(after.status ?? '').trim();
     const statusOk = statusSet ? afterStatus === statusSet : afterStatus === upstreamStatus;
     if (undated === 0 && noteOk && statusOk) {
-      return { ok: true, statusSet, message: `ordering app updated: ${intended} item${intended === 1 ? '' : 's'} dated${labels ? ` (${labels})` : ''}${statusChanges ? `, status -> '${statusSet}'` : delivered ? ' (delivered there, kept)' : ''}` };
+      return { ok: true, statusSet, message: `ordering app updated: ${intended} item${intended === 1 ? '' : 's'} dated${labels ? ` (${labels})` : ''}${statusChanges ? `, status -> '${statusSet}'` : delivered ? ' (delivered there, kept)' : ''}${d.fullyShipped && !complete ? ` — not marked complete: the ordering app holds ${uncoveredUpstream.join(', ')} beyond what is imported here, pull the campaign first` : ''}` };
     }
     const what = [undated > 0 ? `${undated} item(s) still undated` : null, noteOk ? null : 'note missing', statusOk ? null : `status is '${afterStatus}'`].filter(Boolean).join(', ');
     return { ok: false, message: `write-back partial — the ordering app shows ${what}${putError ? ` (transport: ${putError})` : ''}; the next run retries` };
