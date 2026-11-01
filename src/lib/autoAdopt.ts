@@ -1,5 +1,5 @@
 import type { B44Config, B44Order } from '@/lib/base44';
-import type { PushDatesOutcome, PushDatesArgs } from '@/lib/pushShipment';
+import type { PushDatesOutcome, PushDatesArgs, UpstreamLease } from '@/lib/pushShipment';
 
 /*
  * The deterministic auto-adopt pass (2026-11-01). The ordering app (base44)
@@ -86,6 +86,8 @@ export type AutoAdoptDeps = {
   gbExternalId: string;
   /** audit actor for every write, e.g. "Ian (auto-adopt)" */
   actor: string;
+  /** the order's ordering-app write lease (upstreamLease) — claimed before a write-back reads the local lines */
+  lease: (orderId: number) => UpstreamLease;
   listCandidates: (groupBuyId: number) => Promise<unknown>;
   /** getAdoptCandidateOrder: ONE order's lines in the same shape, read fresh around every write-back */
   getOrderLines: (orderId: number) => Promise<unknown>;
@@ -456,44 +458,55 @@ export async function runAutoAdopt(groupBuyId: number, deps: AutoAdoptDeps): Pro
     // whose status step failed); the status is the retry marker, not the
     // item dates
     const statusOwed0 = planned0.fullyShipped && !shippedLike(status);
+    // the order's upstream lease, held from BEFORE the fresh local read
+    // through the write: no box of the order can be cancelled under it, so
+    // the plan the write is built from never predates a cancel (1790103200)
     if (planned0.toPush.length > 0 || statusOwed0) {
-      // fresh local read: the plan must still hold line for line
-      let freshLoc: AdoptCandidateLine[] | null = null;
-      try { freshLoc = rowsOf<AdoptCandidateLine>(await deps.getOrderLines(orderId)); } catch (e: unknown) {
-        push({ kind: 'error', orderNumber, orderId, message: `could not re-read this order's local record before the write-back — ${e instanceof Error ? e.message : String(e)}; nothing written this run` });
-      }
-      if (freshLoc) {
-        const planned1 = planWriteBack(freshLoc, ups, status);
-        if (planKey(planned1) !== planKey(planned0) || freshLoc.length === 0) {
-          push({ kind: 'skipped', orderNumber, orderId, message: `the local record changed during the run (a box, a vendor-shipped mark or a quantity) — nothing written to the ordering app; the next run re-reads it` });
-        } else {
-          try {
-            const r = await deps.pushDates({
-              cfg: deps.cfg, externalId: String(o.id), orderId, orderNumber,
-              lines: planned1.toPush, fullyShipped: planned1.fullyShipped, coverage: planned1.coverage, actor: deps.actor, appendNote: deps.appendNote,
-            });
-            if (r.ok) {
-              push({ kind: 'pushed', orderNumber, orderId, message: r.message });
-              // the write landed: did the local record change underneath it?
-              // (the window between the re-read and the PUT) — the ordering
-              // app now shows what the local record no longer supports, and
-              // only the operator can settle which is right
-              try {
-                const after = rowsOf<AdoptCandidateLine>(await deps.getOrderLines(orderId));
-                const planned2 = planWriteBack(after, ups, status);
-                if (planKey(planned2) !== planKey(planned1)) {
-                  push({ kind: 'needs_you', orderNumber, orderId, message: `the local record changed WHILE the ordering app was being updated — the ordering app may now show shipped what this app no longer does; compare the two by hand and correct the ordering app if needed` });
-                } else if (r.statusSet === 'shipped' && !after.some(l => l.completion_logged === true)) {
-                  await logCompletion('write-back set the ordering app to shipped', planned1.toPush.map(l => l.label));
+      const lease = deps.lease(orderId);
+      if (!(await lease.claim())) {
+        push({ kind: 'skipped', orderNumber, orderId, message: `another write to this order's ordering-app record is in progress (or one is unresolved) — nothing written; the next run re-plans` });
+      } else try {
+        // fresh local read: the plan must still hold line for line
+        let freshLoc: AdoptCandidateLine[] | null = null;
+        try { freshLoc = rowsOf<AdoptCandidateLine>(await deps.getOrderLines(orderId)); } catch (e: unknown) {
+          push({ kind: 'error', orderNumber, orderId, message: `could not re-read this order's local record before the write-back — ${e instanceof Error ? e.message : String(e)}; nothing written this run` });
+        }
+        if (freshLoc) {
+          const planned1 = planWriteBack(freshLoc, ups, status);
+          if (planKey(planned1) !== planKey(planned0) || freshLoc.length === 0) {
+            push({ kind: 'skipped', orderNumber, orderId, message: `the local record changed during the run (a box, a vendor-shipped mark or a quantity) — nothing written to the ordering app; the next run re-reads it` });
+          } else {
+            try {
+              const r = await deps.pushDates({
+                cfg: deps.cfg, externalId: String(o.id), orderId, orderNumber,
+                lines: planned1.toPush, fullyShipped: planned1.fullyShipped, coverage: planned1.coverage, actor: deps.actor, appendNote: deps.appendNote,
+                lease,
+              });
+              if (r.ok) {
+                push({ kind: 'pushed', orderNumber, orderId, message: r.message });
+                // the write landed: did the local record change underneath it?
+                // (the window between the re-read and the PUT) — the ordering
+                // app now shows what the local record no longer supports, and
+                // only the operator can settle which is right
+                try {
+                  const after = rowsOf<AdoptCandidateLine>(await deps.getOrderLines(orderId));
+                  const planned2 = planWriteBack(after, ups, status);
+                  if (planKey(planned2) !== planKey(planned1)) {
+                    push({ kind: 'needs_you', orderNumber, orderId, message: `the local record changed WHILE the ordering app was being updated — the ordering app may now show shipped what this app no longer does; compare the two by hand and correct the ordering app if needed` });
+                  } else if (r.statusSet === 'shipped' && !after.some(l => l.completion_logged === true)) {
+                    await logCompletion('write-back set the ordering app to shipped', planned1.toPush.map(l => l.label));
+                  }
+                } catch (e: unknown) {
+                  push({ kind: 'error', orderNumber, orderId, message: `could not re-read the local record after the write-back — ${e instanceof Error ? e.message : String(e)}; the next run checks it${r.statusSet === 'shipped' ? ' and records the completion' : ''}` });
                 }
-              } catch (e: unknown) {
-                push({ kind: 'error', orderNumber, orderId, message: `could not re-read the local record after the write-back — ${e instanceof Error ? e.message : String(e)}; the next run checks it${r.statusSet === 'shipped' ? ' and records the completion' : ''}` });
-              }
-            } else push({ kind: r.skipped ? 'skipped' : 'error', orderNumber, orderId, message: r.message });
-          } catch (e: unknown) {
-            push({ kind: 'error', orderNumber, orderId, message: `write-back to the ordering app failed — ${e instanceof Error ? e.message : String(e)}` });
+              } else push({ kind: r.skipped ? 'skipped' : 'error', orderNumber, orderId, message: r.message });
+            } catch (e: unknown) {
+              push({ kind: 'error', orderNumber, orderId, message: `write-back to the ordering app failed — ${e instanceof Error ? e.message : String(e)}` });
+            }
           }
         }
+      } finally {
+        await lease.release();
       }
     } else if (planned0.fullyShipped && shippedLike(status) && completedByUs && !planned0.completionLogged) {
       // (fullyShipped already requires every upstream line covered) —

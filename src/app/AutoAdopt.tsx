@@ -7,9 +7,11 @@ import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfi
 import logAutoAdoptRun from '@/actions/fulfillment/logAutoAdoptRun';
 import logUpstreamCompletion from '@/actions/fulfillment/logUpstreamCompletion';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
+import claimOrderUpstream from '@/actions/fulfillment/claimOrderUpstream';
+import releaseOrderUpstream from '@/actions/fulfillment/releaseOrderUpstream';
 import { useApp, platformOf } from '@/app/AppContext';
 import { B44_DEFAULT_APP_ID, getB44Order, listB44Orders } from '@/lib/base44';
-import { pushShippedDatesUpstream } from '@/lib/pushShipment';
+import { pushShippedDatesUpstream, upstreamLease } from '@/lib/pushShipment';
 import { runAutoAdopt, AutoAdoptSummary } from '@/lib/autoAdopt';
 
 /**
@@ -65,12 +67,14 @@ export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
   const [doLogRun] = useMutateAction(logAutoAdoptRun);
   const [doLogCompletion] = useMutateAction(logUpstreamCompletion);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
+  const [doClaimLease] = useMutateAction(claimOrderUpstream);
+  const [doReleaseLease] = useMutateAction(releaseOrderUpstream);
   const [state, setState] = useState<AutoAdoptState>(IDLE);
   const activeRef = useRef(false);
   const queuedRef = useRef<Map<number, string>>(new Map());
   const runRef = useRef<(groupBuyId: number, trigger: string) => Promise<AutoAdoptSummary | null>>(async () => null);
-  const envRef = useRef({ userName, settings, groupBuys, doCandidates, doOrderLines, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote });
-  envRef.current = { userName, settings, groupBuys, doCandidates, doOrderLines, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote };
+  const envRef = useRef({ userName, settings, groupBuys, doCandidates, doOrderLines, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote, doClaimLease, doReleaseLease });
+  envRef.current = { userName, settings, groupBuys, doCandidates, doOrderLines, doAdopt, doMarkDirect, doLogRun, doLogCompletion, doAppendNote, doClaimLease, doReleaseLease };
 
   // when each campaign's last run finished — a page-open trigger within
   // RECENT_MS of it is skipped (the Fulfillment page would otherwise
@@ -93,10 +97,12 @@ export function AutoAdoptProvider({ children }: { children: React.ReactNode }) {
     try {
       const cfg = { appId: env.settings.base44_app_id || B44_DEFAULT_APP_ID, token: env.settings.base44_token || '' };
       if (!cfg.token) throw new Error('No ordering-app token in Settings — the pass cannot read the ordering app.');
+      const actor = `${env.userName} (auto-adopt)`;
       const summary = await runAutoAdopt(groupBuyId, {
         cfg,
         gbExternalId: gb.external_id,
-        actor: `${env.userName} (auto-adopt)`,
+        actor,
+        lease: (orderId) => upstreamLease({ claimLease: (p) => env.doClaimLease(p), releaseLease: (p) => env.doReleaseLease(p) }, orderId, actor),
         listCandidates: (g) => env.doCandidates({ group_buy_id: g }),
         getOrderLines: (id) => env.doOrderLines({ order_id: id }),
         listUpstream: listB44Orders,

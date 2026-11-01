@@ -11,8 +11,8 @@ import finalizeShipment from '@/actions/fulfillment/finalizeShipment';
 import deleteShipmentDraft from '@/actions/fulfillment/deleteShipmentDraft';
 import setShipmentRefund from '@/actions/fulfillment/setShipmentRefund';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
-import claimShipmentPush from '@/actions/fulfillment/claimShipmentPush';
-import releaseShipmentPush from '@/actions/fulfillment/releaseShipmentPush';
+import claimOrderUpstream from '@/actions/fulfillment/claimOrderUpstream';
+import releaseOrderUpstream from '@/actions/fulfillment/releaseOrderUpstream';
 import addShipmentPhoto from '@/actions/fulfillment/addShipmentPhoto';
 import listShipmentPhotos from '@/actions/fulfillment/listShipmentPhotos';
 import getShipmentPhoto from '@/actions/fulfillment/getShipmentPhoto';
@@ -151,8 +151,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [doDeleteDraft] = useMutateAction(deleteShipmentDraft);
   const [doSetRefund] = useMutateAction(setShipmentRefund);
   const [doMarkPushed] = useMutateAction(markShipmentPushed);
-  const [doClaimPush] = useMutateAction(claimShipmentPush);
-  const [doReleasePush] = useMutateAction(releaseShipmentPush);
+  const [doClaimLease] = useMutateAction(claimOrderUpstream);
+  const [doReleaseLease] = useMutateAction(releaseOrderUpstream);
   const [doAddPhoto] = useMutateAction(addShipmentPhoto);
   const [doDeletePhoto] = useMutateAction(deleteShipmentPhoto);
   const [doGetPhoto] = useMutateAction(getShipmentPhoto);
@@ -738,38 +738,34 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     fin.trackingCollision ? 'WARNING: this tracking number already appears on another recent shipment or transfer — verify at Shippo; one of the two may be a double-record.' : '',
   ].filter(Boolean).join(' ');
 
+  // JUST-IN-TIME authoritative read of the order's packing state — the
+  // upstream writers call it only once they hold the order's upstream
+  // lease, so what they plan from is what the DB says then, never this
+  // modal's stale hook rows
+  const loadPushPackable = async (): Promise<PushPackableLine[]> => {
+    const res = await fetchPackable({ order_id: order.id }) as unknown[] | null;
+    return (Array.isArray(res) ? res : []).map(r => {
+      const l = r as PackableLine;
+      return {
+        order_item_id: Number(l.order_item_id),
+        product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
+        sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
+        direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at, digital: l.digital,
+      };
+    });
+  };
+
   const runPush = async (shipmentId: number, pushEpoch: number, carrier: string, tracking: string, items: { order_item_id: number; qty: string; sku: string }[]) => {
     if (pushInFlight.current) return;
     pushInFlight.current = true;
     setPushMsg('Pushing to the ordering app…');
     try {
-      // JUST-IN-TIME authoritative read: the fully-shipped decision (which
-      // can advance the upstream order to 'shipped') must reflect what the
-      // DB says NOW — after this finalize, and after anything another
-      // session did meanwhile — never this modal's stale hook rows
-      let freshRows: PushPackableLine[];
-      try {
-        const res = await fetchPackable({ order_id: order.id }) as unknown[] | null;
-        freshRows = (Array.isArray(res) ? res : []).map(r => {
-          const l = r as PackableLine;
-          return {
-            order_item_id: Number(l.order_item_id),
-            product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
-            sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
-            direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at, digital: l.digital,
-          };
-        });
-        if (freshRows.length === 0) throw new Error('empty read');
-      } catch {
-        setPushMsg('Push not sent — could not re-read the order\'s packing state (needed to decide the upstream status). The shipment is saved; use "Push upstream" to retry.');
-        return;
-      }
       const out = await pushShipmentUpstream({
         cfg, externalId: order.external_id || '', orderId: order.id, orderNumber: order.order_number,
         shipmentId, pushEpoch, carrier, tracking,
         shippedItems: items.map(i => ({ sku: i.sku, qty: i.qty })),
-        packable: freshRows, userName,
-        appendNote: doAppendNote, markPushed: doMarkPushed, claimPush: doClaimPush, releasePush: doReleasePush,
+        loadPackable: loadPushPackable, userName,
+        appendNote: doAppendNote, markPushed: doMarkPushed, claimLease: doClaimLease, releaseLease: doReleaseLease,
       });
       setPushMsg(out.message);
       reloadShipments();
@@ -1335,31 +1331,15 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     setRowMsg(m => { const n = { ...m }; delete n[s.id]; return n; });
   };
 
-  const runReset = async (s: ShipmentRow, lines: ShipmentRow['items'], why: string): Promise<PushOutcome> => {
-    let fresh: PushPackableLine[];
-    try {
-      const res = await fetchPackable({ order_id: order.id }) as unknown[] | null;
-      fresh = (Array.isArray(res) ? res : []).map(r => {
-        const l = r as PackableLine;
-        return {
-          order_item_id: Number(l.order_item_id),
-          product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
-          sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
-          direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at, digital: l.digital,
-        };
-      });
-      if (fresh.length === 0) throw new Error('empty read');
-    } catch {
-      return { ok: false, message: 'Ordering app NOT reset — could not re-read the order\'s packing state. Use "Reset ordering app" to retry.' };
-    }
-    return resetVoidedShipmentUpstream({
+  const runReset = (s: ShipmentRow, lines: ShipmentRow['items'], why: string): Promise<PushOutcome> =>
+    resetVoidedShipmentUpstream({
       cfg, externalId: order.external_id || '', orderId: order.id, shipmentId: s.id,
       carrier: s.carrier || '', tracking: s.tracking_number || '',
       boxLines: lines.map(i => ({ sku: i.sku_code, qty: String(i.qty), productExternalId: i.product_external_id == null ? null : String(i.product_external_id) })),
       why, restoreStatus: restorePick[s.id] ?? defaultRestore(s),
-      packable: fresh, userName, appendNote: doAppendNote, markReset: doMarkReset,
+      loadPackable: loadPushPackable, userName, appendNote: doAppendNote, markReset: doMarkReset,
+      claimLease: doClaimLease, releaseLease: doReleaseLease,
     });
-  };
 
   const confirmCancel = async (s: ShipmentRow) => {
     if (cancelInFlight.current) return;

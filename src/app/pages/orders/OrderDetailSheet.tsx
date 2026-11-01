@@ -24,8 +24,8 @@ import { readStash, stashGet, stashRemove, stashMutateIf } from '@/lib/photoStas
 import type { StashedPhoto } from '@/lib/photoStash';
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
-import claimShipmentPush from '@/actions/fulfillment/claimShipmentPush';
-import releaseShipmentPush from '@/actions/fulfillment/releaseShipmentPush';
+import claimOrderUpstream from '@/actions/fulfillment/claimOrderUpstream';
+import releaseOrderUpstream from '@/actions/fulfillment/releaseOrderUpstream';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
 import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
 import setOrderFees from '@/actions/orders/setOrderFees';
@@ -329,8 +329,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doGetTxRefs] = useMutateAction(getOrderTxRefs);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doMarkShipPushed] = useMutateAction(markShipmentPushed);
-  const [doClaimShipPush] = useMutateAction(claimShipmentPush);
-  const [doReleaseShipPush] = useMutateAction(releaseShipmentPush);
+  const [doClaimShipLease] = useMutateAction(claimOrderUpstream);
+  const [doReleaseShipLease] = useMutateAction(releaseOrderUpstream);
   // read action invoked imperatively (getOrderTxRefs precedent): the push's
   // fully-shipped decision needs a JUST-IN-TIME authoritative read
   const [doFetchShipPackable] = useMutateAction(getPackableItems);
@@ -340,34 +340,30 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   // retry the ordering-app push for one shipped box (the fulfillment modal
   // pushes automatically; this covers failed pushes and the direct-line-
   // last case where no shipment row changed). Packable rows are fetched
-  // FRESH here — never from sheet-open hook state — because they decide
-  // whether the upstream order advances to 'shipped'.
+  // FRESH — never from sheet-open hook state — because they decide
+  // whether the upstream order advances to 'shipped'; the push reads them
+  // only once it holds the order's upstream lease.
   const pushShipRow = async (s: { id: number; push_epoch: number; carrier: string | null; tracking_number: string | null; items: { order_item_id: number; qty: string; sku_code: string }[] }) => {
     if (!o || shipPushInFlight.current) return;
     shipPushInFlight.current = true;
     setShipPushMsg('Pushing to the ordering app…');
     try {
-      let fresh: ShipPackableRow[];
-      try {
-        const res = await doFetchShipPackable({ order_id: o.id }) as unknown[] | null;
-        fresh = (Array.isArray(res) ? res : []) as ShipPackableRow[];
-        if (fresh.length === 0) throw new Error('empty read');
-      } catch {
-        setShipPushMsg('Push not sent — could not re-read the order\'s packing state. Retry.');
-        return;
-      }
+      const orderId = o.id;
       const out = await pushShipmentUpstream({
         cfg: { appId: settings.base44_app_id || B44_DEFAULT_APP_ID, token: settings.base44_token || '' },
-        externalId: o.external_id || '', orderId: o.id, orderNumber: o.order_number,
+        externalId: o.external_id || '', orderId, orderNumber: o.order_number,
         shipmentId: s.id, pushEpoch: Number(s.push_epoch || 0), carrier: s.carrier || '', tracking: s.tracking_number || '',
         shippedItems: (s.items || []).map(i => ({ sku: i.sku_code, qty: String(i.qty) })),
-        packable: fresh.map(l => ({
-          order_item_id: Number(l.order_item_id),
-          product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
-          sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
-          direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at, digital: l.digital,
-        })),
-        userName, appendNote: doAppendNote, markPushed: doMarkShipPushed, claimPush: doClaimShipPush, releasePush: doReleaseShipPush,
+        loadPackable: async () => {
+          const res = await doFetchShipPackable({ order_id: orderId }) as unknown[] | null;
+          return ((Array.isArray(res) ? res : []) as ShipPackableRow[]).map(l => ({
+            order_item_id: Number(l.order_item_id),
+            product_external_id: l.product_external_id == null ? null : String(l.product_external_id),
+            sku_code: l.sku_code, effective_qty: String(l.effective_qty), shipped_qty: String(l.shipped_qty),
+            direct_ship: l.direct_ship, direct_fulfilled_at: l.direct_fulfilled_at, digital: l.digital,
+          }));
+        },
+        userName, appendNote: doAppendNote, markPushed: doMarkShipPushed, claimLease: doClaimShipLease, releaseLease: doReleaseShipLease,
       });
       setShipPushMsg(out.message);
       reloadShipRows(); reloadOrder();

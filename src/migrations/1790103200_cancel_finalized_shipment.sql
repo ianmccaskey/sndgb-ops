@@ -35,31 +35,98 @@
 -- that is corrected in the ordering app first); not a box the carrier has
 -- reported moving, delivered, returned or failed, nor one the operator
 -- recorded delivered or reshipped (it went out — a return, not a cancel);
--- not while a push of the box holds a fresh claim or has a sent PUT not
--- yet verified; reason and actor required.
--- Refusals return zero rows. push_epoch is bumped so a push of this box
--- already in flight cannot stamp it. Audited 'shipment_cancelled'.
+-- not while any write to the order's ordering-app record holds the order's
+-- upstream lease or has a sent PUT unresolved (below); reason and actor
+-- required. Refusals return zero rows. push_epoch is bumped so a push of
+-- this box already in flight cannot stamp it. Audited 'shipment_cancelled'.
 --
 -- For every writer: a cancelled shipment takes no shipment_items (the
 -- trigger below), and its cancel record never changes or clears.
+--
+-- THE ORDER'S UPSTREAM LEASE (order_upstream_leases, Codex 2026-11-01).
+-- Every write that sets an order's ship state in the ordering app — a
+-- box's push (pushShipmentUpstream), a cancelled box's reset
+-- (resetVoidedShipmentUpstream), the auto-adopt write-back
+-- (pushShippedDatesUpstream) — recomputes the WHOLE order (dates for every
+-- covered line, the order status) and PUTs items, notes and status
+-- wholesale. So the lease is per ORDER, not per box:
+--  * claim_order_upstream() is taken under the 42001 order lock before the
+--    writer reads what shipped here; the writer reads it only after, so
+--    its plan can never predate a cancel. A push names its box, which must
+--    still be pushable (finalized, not cancelled, not voided, not pushed,
+--    same push_epoch).
+--  * the renewal right before the PUT also stamps dispatched_at; neither a
+--    claim nor a renewal lands while a dispatch is under 10 minutes old,
+--    so at most ONE sent write per order is unresolved. Before any
+--    dispatch a new claim takes over (the displaced writer fails its
+--    renewal and aborts before writing) — a retry is never locked out by
+--    a write that was not sent.
+--  * the writer releases on every ending: its claim always, its dispatch
+--    once the ordering app ANSWERED the PUT (any status — that request is
+--    finished). A PUT whose connection dropped unanswered may still land,
+--    so its dispatch stays — whatever a later re-read shows — for the
+--    10 minutes.
+--  * a cancel refuses while the order's claim or dispatch is fresh, so no
+--    write planned or sent before a cancel lands after its reset.
+-- Older than 10 minutes, either mark is a dead tab's and no longer counts.
 
--- push_claimed_at: a push of this box is in flight (claimShipmentPush,
--- taken under the 42001 order lock before the push writes anything
--- upstream, renewed right before its PUT, cleared by the stamp or a
--- release). A cancel refuses while a claim is fresh, and a push cannot
--- claim a cancelled box — so a push planned before a cancel can never
--- land after that cancel's reset (Codex, 2026-11-01). A claim older than
--- 10 minutes is a dead tab's and no longer counts.
--- push_dispatched_at: that push's PUT was sent (stamped by the renewal
--- right before it) and is not yet resolved. At most one is outstanding
--- per box (no claim or renewal lands while another is under 10 minutes),
--- so it is cleared by the verified stamp, or by its own push's release
--- once the ordering app answered the PUT; a PUT whose connection dropped
--- unanswered may still land, so its mark stays until a verified push or
--- 10 minutes, and a cancel refuses meanwhile (Codex, 2026-11-01).
+CREATE TABLE IF NOT EXISTS order_upstream_leases (
+  order_id bigint PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+  claimed_at timestamptz,
+  claimed_by text,
+  dispatched_at timestamptz
+);
+
+CREATE OR REPLACE FUNCTION claim_order_upstream(
+  p_order_id bigint,
+  p_shipment_id bigint,      -- the box a push is for; NULL for a reset or a write-back
+  p_expected_epoch int,      -- that box's push_epoch when the push started
+  p_prior_claimed_at text,   -- '' = first claim; the caller's own claim = renewal (right before the PUT)
+  p_actor text
+) RETURNS TABLE (o_claimed_at text, o_dispatched_at text)
+LANGUAGE plpgsql VOLATILE AS $fn$
+DECLARE
+  v_prior timestamptz := NULLIF(btrim(COALESCE(p_prior_claimed_at, '')), '')::timestamptz;
+  v_lease order_upstream_leases%ROWTYPE;
+  v_t timestamptz;
+BEGIN
+  IF p_order_id IS NULL OR p_actor IS NULL OR btrim(p_actor) = '' THEN RETURN; END IF;
+  -- its own statement: everything below reads after the lock
+  PERFORM pg_advisory_xact_lock(42001, p_order_id::int);
+
+  IF p_shipment_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM shipments s
+    WHERE s.id = p_shipment_id AND s.order_id = p_order_id
+      AND s.finalized_at IS NOT NULL AND s.cancelled_at IS NULL
+      AND COALESCE(s.refund_status, '') <> 'SUCCESS'
+      AND s.b44_pushed_at IS NULL
+      AND s.push_epoch = p_expected_epoch) THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO order_upstream_leases (order_id) VALUES (p_order_id) ON CONFLICT (order_id) DO NOTHING;
+  SELECT l.* INTO v_lease FROM order_upstream_leases l WHERE l.order_id = p_order_id FOR UPDATE;
+
+  -- one sent write per order may be unresolved
+  IF v_lease.dispatched_at IS NOT NULL AND v_lease.dispatched_at >= now() - interval '10 minutes' THEN RETURN; END IF;
+  -- a renewal lands only on the caller's own, still-fresh claim
+  IF v_prior IS NOT NULL AND (v_lease.claimed_at IS DISTINCT FROM v_prior
+                              OR v_lease.claimed_at < now() - interval '10 minutes') THEN
+    RETURN;
+  END IF;
+
+  v_t := clock_timestamp();
+  UPDATE order_upstream_leases l
+  SET claimed_at = v_t,
+      claimed_by = btrim(p_actor),
+      dispatched_at = CASE WHEN v_prior IS NOT NULL THEN v_t ELSE l.dispatched_at END
+  WHERE l.order_id = p_order_id;
+
+  RETURN QUERY SELECT v_t::text, CASE WHEN v_prior IS NOT NULL THEN v_t::text END;
+END;
+$fn$;
+
 ALTER TABLE shipments
-  ADD COLUMN IF NOT EXISTS push_claimed_at timestamptz,
-  ADD COLUMN IF NOT EXISTS push_dispatched_at timestamptz,
   ADD COLUMN IF NOT EXISTS cancelled_at timestamptz,
   ADD COLUMN IF NOT EXISTS cancelled_by text,
   ADD COLUMN IF NOT EXISTS cancel_reason text,
@@ -163,12 +230,17 @@ BEGIN
     -- reshipped: it went out, so it is a return, not a cancel
     AND COALESCE(s.tracking_status, '') NOT IN ('TRANSIT', 'DELIVERED', 'RETURNED', 'FAILURE')
     AND s.status NOT IN ('delivered', 'reshipped')
-    -- a push of this box is in flight, or its sent PUT is unconfirmed:
-    -- either could land after the reset
-    AND (s.push_claimed_at IS NULL OR s.push_claimed_at < now() - interval '10 minutes')
-    AND (s.push_dispatched_at IS NULL OR s.push_dispatched_at < now() - interval '10 minutes')
   FOR UPDATE;
   IF NOT FOUND THEN RETURN; END IF;
+
+  -- a write to this order's ordering-app record is being prepared or its
+  -- sent PUT is unresolved: either could land after the reset
+  IF EXISTS (SELECT 1 FROM order_upstream_leases l
+             WHERE l.order_id = v_order_id
+               AND (l.claimed_at >= now() - interval '10 minutes'
+                    OR l.dispatched_at >= now() - interval '10 minutes')) THEN
+    RETURN;
+  END IF;
 
   -- what the box recorded, with the ordering-app product id in its
   -- campaign (the reset clears ship dates by it)

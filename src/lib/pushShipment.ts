@@ -55,31 +55,88 @@ export type PushShipmentDeps = {
   carrier: string;
   tracking: string;
   shippedItems: { sku: string; qty: string }[];   // THIS box's contents (note text)
-  packable: PushPackableLine[];  // FRESH getPackableItems rows, fetched by the caller AT PUSH TIME
+  /** reads getPackableItems FRESH — called only once the order's upstream lease is held */
+  loadPackable: () => Promise<PushPackableLine[]>;
   userName: string;
   appendNote: (params: Record<string, unknown>) => Promise<unknown>;
   markPushed: (params: Record<string, unknown>) => Promise<unknown>;
-  /** claimShipmentPush: claim / renew this box's push under the order lock (zero rows = refused) */
-  claimPush: (params: Record<string, unknown>) => Promise<unknown>;
-  /** releaseShipmentPush: give the claim back when the push ends without its stamp */
-  releasePush: (params: Record<string, unknown>) => Promise<unknown>;
-};
+} & LeaseDeps;
 
 export type PushOutcome = { ok: boolean; message: string };
 
-const claimRowOf = (res: unknown): { claimedAt: string; dispatchedAt: string } => {
-  const r = Array.isArray(res) && res.length > 0 ? res[0] as { claimed_at?: unknown; dispatched_at?: unknown } : null;
-  return { claimedAt: String(r?.claimed_at ?? ''), dispatchedAt: String(r?.dispatched_at ?? '') };
+/** claimOrderUpstream / releaseOrderUpstream — every ordering-app writer of an order's ship state passes both */
+export type LeaseDeps = {
+  claimLease: (params: Record<string, unknown>) => Promise<unknown>;
+  releaseLease: (params: Record<string, unknown>) => Promise<unknown>;
 };
 
-type PushLease = {
-  claimedAt: string;
-  /** this push's own dispatch mark, set by the renewal right before the PUT */
-  dispatchedAt: string;
-  /** the PUT went out and NO answer came back: it may still land */
-  unanswered: boolean;
-  stamped: boolean;
+export type UpstreamLease = {
+  /** take the order's lease; false = refused (box changed, another write unresolved) or unreachable */
+  claim: () => Promise<boolean>;
+  /** right before the PUT: renew the own claim and mark the write dispatched; false = abort, nothing sent */
+  renew: () => Promise<boolean>;
+  /** the PUT threw: with no answer at all the request may still land */
+  noteFailure: (e: unknown) => void;
+  /** every ending: the claim always, the dispatch only once the ordering app answered */
+  release: () => Promise<void>;
 };
+
+/**
+ * The ORDER's ordering-app write lease (migration 1790103200). Every write
+ * that sets an order's ship state upstream recomputes the whole order and
+ * PUTs items, notes and status wholesale, so the box push, the cancelled
+ * box's reset and the auto-adopt write-back all hold it: claimed before
+ * the writer reads what shipped here (so its plan never predates a
+ * cancel, which refuses while the lease is held), renewed right before
+ * the PUT (marking it dispatched — at most one sent write per order is
+ * unresolved), released on every ending. A PUT that got no answer keeps
+ * its dispatch mark for the lease's 10 minutes, whatever a later re-read
+ * shows: an identical earlier write could be what that re-read sees.
+ */
+export function upstreamLease(deps: LeaseDeps, orderId: number, actor: string, box?: { shipmentId: number; pushEpoch: number }): UpstreamLease {
+  let claimedAt = '';
+  let dispatchedAt = '';
+  let unanswered = false;
+  const call = async (prior: string) => {
+    const res = await deps.claimLease({
+      order_id: orderId, shipment_id: box ? box.shipmentId : '', expected_push_epoch: box ? box.pushEpoch : '',
+      prior_claimed_at: prior, actor,
+    });
+    const r = Array.isArray(res) && res.length > 0 ? res[0] as { claimed_at?: unknown; dispatched_at?: unknown } : null;
+    return { claimed: r?.claimed_at == null ? '' : String(r.claimed_at), dispatched: r?.dispatched_at == null ? '' : String(r.dispatched_at) };
+  };
+  return {
+    claim: async () => {
+      try { claimedAt = (await call('')).claimed; } catch { claimedAt = ''; }
+      return !!claimedAt;
+    },
+    renew: async () => {
+      if (!claimedAt) return false;
+      try {
+        const r = await call(claimedAt);
+        if (!r.claimed || !r.dispatched) return false;
+        claimedAt = r.claimed;
+        dispatchedAt = r.dispatched;
+        return true;
+      } catch { return false; }
+    },
+    noteFailure: (e: unknown) => { if (e instanceof B44UnreachableError) unanswered = true; },
+    release: async () => {
+      if (!claimedAt && !dispatchedAt) return;
+      try {
+        await deps.releaseLease({ order_id: orderId, claimed_at: claimedAt, dispatched_at: unanswered ? '' : dispatchedAt });
+      } catch { /* both lapse in 10 minutes */ }
+    },
+  };
+}
+
+/** Read the order's packing state through the caller's loader; null when it fails or is empty. */
+async function freshPackable(load: () => Promise<PushPackableLine[]>): Promise<PushPackableLine[] | null> {
+  try {
+    const rows = await load();
+    return rows.length > 0 ? rows : null;
+  } catch { return null; }
+}
 
 // the operator's LOCAL calendar date (en-CA renders YYYY-MM-DD): an
 // evening shipment must not be stamped with tomorrow's UTC date in the
@@ -90,51 +147,35 @@ export async function pushShipmentUpstream(d: PushShipmentDeps): Promise<PushOut
   if (!d.cfg.token) return { ok: false, message: 'Ordering-app push skipped — no Base44 token in Settings. The shipment is saved; use "Push upstream" once the token is set.' };
   if (!d.externalId) return { ok: false, message: 'Ordering-app push skipped — this order has no ordering-app id (added locally?). The shipment is saved.' };
 
-  // (0) CLAIM the box before anything is written, local or upstream
-  // (1790103200): under the order lock a cancelled / voided / already
-  // pushed / re-epoched box refuses, and while the claim is held the box
-  // cannot be cancelled — so this push can never land after a cancel's
-  // ordering-app reset. The renewal right before the PUT also marks the
-  // write DISPATCHED (push_dispatched_at), and at most one dispatched
-  // write is outstanding per box. The verified stamp clears both; any
-  // other ending gives the claim back, and the dispatch mark too once the
-  // ordering app ANSWERED the PUT (that request is finished, whatever it
-  // said). A PUT whose connection dropped unanswered may still land: its
-  // mark stays until a verified push or 10 minutes, and the cancel and
-  // any other push wait for it.
-  let claimedAt: string;
-  try {
-    claimedAt = claimRowOf(await d.claimPush({ shipment_id: d.shipmentId, expected_push_epoch: d.pushEpoch, prior_claimed_at: '', actor: d.userName })).claimedAt;
-  } catch {
-    return { ok: false, message: 'Push NOT sent — the push could not be claimed (network error). The shipment is saved; retry the push.' };
+  // (0) the ORDER's upstream lease, before anything is read or written:
+  // a cancelled / voided / already pushed / re-epoched box refuses, and
+  // while it is held no box of the order can be cancelled
+  const lease = upstreamLease(d, d.orderId, d.userName, { shipmentId: d.shipmentId, pushEpoch: d.pushEpoch });
+  if (!(await lease.claim())) {
+    return { ok: false, message: 'Push NOT sent — this box was cancelled, refunded or already pushed, changed since it was read, or another write to this order\'s ordering-app record lost its connection mid-write and may still land (wait a few minutes). Nothing was written; retry if it still shows "not pushed".' };
   }
-  if (!claimedAt) {
-    return { ok: false, message: 'Push NOT sent — this box was cancelled, refunded or already pushed, changed since it was read, or an earlier push of it lost its connection mid-write and may still land (wait a few minutes). Nothing was written; retry if it still shows "not pushed".' };
-  }
-  const lease: PushLease = { claimedAt, dispatchedAt: '', unanswered: false, stamped: false };
   try {
-    return await pushClaimed(d, lease);
+    // what shipped here, read only now that no cancel can run underneath
+    const packable = await freshPackable(d.loadPackable);
+    if (!packable) return { ok: false, message: 'Push not sent — could not re-read the order\'s packing state (needed to decide the upstream status). The shipment is saved; use "Push upstream" to retry.' };
+    return await pushLeased(d, packable, lease);
   } finally {
-    if (!lease.stamped) {
-      try {
-        await d.releasePush({ shipment_id: d.shipmentId, claimed_at: lease.claimedAt, dispatched_at: lease.unanswered ? '' : lease.dispatchedAt });
-      } catch { /* both lapse in 10 minutes */ }
-    }
+    await lease.release();
   }
 }
 
-async function pushClaimed(d: PushShipmentDeps, lease: PushLease): Promise<PushOutcome> {
+async function pushLeased(d: PushShipmentDeps, packable: PushPackableLine[], lease: UpstreamLease): Promise<PushOutcome> {
   // ONE ship date per invocation: awaited network calls sit between the
   // note writes and the shipped_date merge, and a push crossing local
   // midnight must not record contradictory dates for the same shipment
   const shipDate = today();
 
-  // fully-shipped is computed from the FRESH packable rows the caller just
-  // loaded — never from stale modal props. DIGITAL lines (COA certificates)
+  // fully-shipped is computed from the FRESH packable rows read under the
+  // lease — never from stale modal props. DIGITAL lines (COA certificates)
   // are excluded entirely: they deliver digitally, never gate the order's
   // shipped status, and never receive an upstream shipped_date from here.
-  const packableLines = d.packable.filter(l => !l.direct_ship && !l.digital && Number(l.effective_qty) > 0);
-  const directLines = d.packable.filter(l => l.direct_ship && !l.digital);
+  const packableLines = packable.filter(l => !l.direct_ship && !l.digital && Number(l.effective_qty) > 0);
+  const directLines = packable.filter(l => l.direct_ship && !l.digital);
   // zero-PHYSICAL orders are vacuously fully shipped (the order must have
   // at least one line of any kind): an order whose only lines are digital
   // has nothing left for fulfillment to withhold status on. In practice a
@@ -142,7 +183,7 @@ async function pushClaimed(d: PushShipmentDeps, lease: PushLease): Promise<PushO
   // vacuous branch covers mid-life transitions (e.g. the last physical
   // line removed after an earlier box).
   const fullyShipped =
-    d.packable.length > 0
+    packable.length > 0
     && packableLines.every(l => Number(l.shipped_qty) >= Number(l.effective_qty))
     && directLines.every(l => l.direct_fulfilled_at != null);
 
@@ -216,19 +257,13 @@ async function pushClaimed(d: PushShipmentDeps, lease: PushLease): Promise<PushO
   if (fullyShipped) fields.status = 'shipped';
   else if (setPartial) fields.status = 'partially_shipped';
 
-  // renew the claim right before the PUT: a box cancelled or voided since
-  // the claim — or a claim that lapsed and another tab took — stops here,
-  // with nothing written upstream
-  let renewed = { claimedAt: '', dispatchedAt: '' };
-  try {
-    renewed = claimRowOf(await d.claimPush({ shipment_id: d.shipmentId, expected_push_epoch: d.pushEpoch, prior_claimed_at: lease.claimedAt, actor: d.userName }));
-  } catch { /* treated as refused */ }
-  if (!renewed.claimedAt || !renewed.dispatchedAt) {
-    await followUp('PUSH ABORTED before write: the box was cancelled, voided or pushed elsewhere (or this push lost its claim) while the push was being prepared — nothing written upstream.');
-    return { ok: false, message: 'Push NOT sent — the box changed (cancelled, voided or pushed elsewhere) while the push was being prepared. Nothing was written to the ordering app.' };
+  // renew the lease right before the PUT: a box voided or pushed since the
+  // claim — or a lease another write took over — stops here, with nothing
+  // written upstream
+  if (!(await lease.renew())) {
+    await followUp('PUSH ABORTED before write: the box was voided or pushed elsewhere, or another write to this order took over, while the push was being prepared — nothing written upstream.');
+    return { ok: false, message: 'Push NOT sent — the box or the order changed (voided, pushed elsewhere, or another write to its ordering-app record started) while the push was being prepared. Nothing was written to the ordering app; retry.' };
   }
-  lease.claimedAt = renewed.claimedAt;
-  lease.dispatchedAt = renewed.dispatchedAt;
 
   let putError: string | null = null;
   try {
@@ -236,10 +271,10 @@ async function pushClaimed(d: PushShipmentDeps, lease: PushLease): Promise<PushO
   } catch (e: unknown) {
     // do NOT trust a thrown transport: the PUT may still have landed —
     // fall through to verification exactly like the house pushers. With
-    // no answer at all it may also still be IN FLIGHT: its dispatch mark
-    // is kept (the cancel waits) unless the verification below sees it.
+    // no answer at all it may also still be IN FLIGHT: the lease keeps its
+    // dispatch mark (the cancel waits) whatever the verification shows.
     putError = e instanceof Error ? e.message : 'update failed';
-    lease.unanswered = e instanceof B44UnreachableError;
+    lease.noteFailure(e);
   }
 
   // (3) postcondition verification on EVERY outcome
@@ -274,9 +309,6 @@ async function pushClaimed(d: PushShipmentDeps, lease: PushLease): Promise<PushO
         }) as unknown[] | null;
         stamped = Array.isArray(res) ? res.length > 0 : !!res;
       } catch { stamped = false; }
-      // the stamp cleared the claim and the dispatch mark; anything less
-      // gives the claim back (and an answered PUT's mark)
-      lease.stamped = stamped;
       if (!stamped && fullyShipped) {
         await followUp('PUSH VERIFIED upstream but the local completion record did not save (a concurrent change may have intervened) — push again to finish recording.');
         return { ok: false, message: "Upstream verified (status 'shipped' landed) but the LOCAL completion record did not save — use \"Push upstream\" once more to finish recording; the retry is idempotent." };
@@ -325,6 +357,12 @@ export type PushDatesArgs = {
   coverage: Record<string, { covered: number; digital: boolean }>;
   actor: string;
   appendNote: (params: { order_id: number; note: string; detail: string; actor: string }) => Promise<unknown>;
+  /**
+   * the order's upstream lease, CLAIMED by the caller before it read the
+   * local lines this write is planned from (autoAdopt) — renewed here
+   * right before the PUT; the caller releases it
+   */
+  lease: UpstreamLease;
 };
 
 export type PushDatesOutcome = PushOutcome & {
@@ -459,12 +497,18 @@ export async function pushShippedDatesUpstream(d: PushDatesArgs): Promise<PushDa
   if (moved) {
     return { ok: false, skipped: true, message: `write-back held — the ordering app's order changed while it was being prepared (now "${String(latest.status ?? '')}"); nothing written, the next run re-plans from the new state` };
   }
+  // the lease, renewed right before the PUT: another write to this order
+  // took it over (or a sent write of its is unresolved) — nothing written
+  if (!(await d.lease.renew())) {
+    return { ok: false, skipped: true, message: 'write-back held — another write to this order\'s ordering-app record started meanwhile; nothing written, the next run re-plans' };
+  }
 
   let putError: string | null = null;
   try {
     await updateB44Order(d.cfg, d.externalId, fields);
   } catch (e: unknown) {
     putError = e instanceof Error ? e.message : 'update failed';
+    d.lease.noteFailure(e);
   }
 
   try {
@@ -499,13 +543,13 @@ export type ResetVoidedArgs = {
   why: string;
   /** the status to restore when NOTHING else on the order has shipped — the operator's pick */
   restoreStatus: string;
-  /** FRESH getPackableItems rows, read by the caller after the cancel/void */
-  packable: PushPackableLine[];
+  /** reads getPackableItems FRESH — called only once the order's upstream lease is held */
+  loadPackable: () => Promise<PushPackableLine[]>;
   userName: string;
   appendNote: (params: Record<string, unknown>) => Promise<unknown>;
   /** markShipmentUpstreamReset: stamps upstream_reset_at; refuses a live box or one already stamped */
   markReset: (params: Record<string, unknown>) => Promise<unknown>;
-};
+} & LeaseDeps;
 
 /**
  * Take back what a push told the ordering app about a box that did NOT
@@ -527,11 +571,13 @@ export type ResetVoidedArgs = {
  *    order still complete here keeps 'shipped' (a duplicate box); a
  *    remaining hand-typed date leaves the status to the operator;
  *    'delivered' and terminal states refuse the whole reset.
- * Same discipline as the pushes: local trail line first, a planning read,
- * a re-read right before the PUT that refuses if anything moved, then a
- * verifying re-read; only a verified (or a nothing-to-do) outcome stamps
- * upstream_reset_at. A second run finds its own marker and changes
- * nothing.
+ * Same discipline as the pushes, under the order's upstream lease (no
+ * push or write-back of the order runs meanwhile, and what shipped here
+ * is read only once it is held): local trail line first, a planning read,
+ * a re-read right before the PUT that refuses if anything moved, the
+ * lease renewed, then a verifying re-read; only a verified (or a
+ * nothing-to-do) outcome stamps upstream_reset_at. A second run finds its
+ * own marker and changes nothing.
  */
 export async function resetVoidedShipmentUpstream(d: ResetVoidedArgs): Promise<PushOutcome> {
   const stamp = async (detail: Record<string, unknown>) => {
@@ -550,6 +596,21 @@ export async function resetVoidedShipmentUpstream(d: ResetVoidedArgs): Promise<P
   if (!restore || /ship|deliver|cancel|refund|reject|void|denied/i.test(restore)) {
     return { ok: false, message: 'Ordering app NOT reset — pick the status the order goes back to (e.g. verified).' };
   }
+  const lease = upstreamLease(d, d.orderId, d.userName);
+  if (!(await lease.claim())) {
+    return { ok: false, message: 'Ordering app NOT reset — another write to this order\'s ordering-app record is in progress, or one lost its connection mid-write and may still land. Use "Reset ordering app" again in a few minutes.' };
+  }
+  try {
+    const packable = await freshPackable(d.loadPackable);
+    if (!packable) return { ok: false, message: 'Ordering app NOT reset — could not re-read the order\'s packing state. Use "Reset ordering app" to retry.' };
+    return await resetLeased(d, restore, packable, lease, stamp);
+  } finally {
+    await lease.release();
+  }
+}
+
+async function resetLeased(d: ResetVoidedArgs, restore: string, packable: PushPackableLine[], lease: UpstreamLease,
+  stamp: (detail: Record<string, unknown>) => Promise<boolean>): Promise<PushOutcome> {
   const today = new Date().toLocaleDateString('en-CA');
   const carrierU = d.carrier.toUpperCase();
   const trackPrefix = d.tracking ? `Shipped ${carrierU} ${d.tracking}` : '';
@@ -573,7 +634,7 @@ export async function resetVoidedShipmentUpstream(d: ResetVoidedArgs): Promise<P
   // what is covered HERE now, per ordering-app product (the voided box no
   // longer counts), against the ordering app's quantity for it
   const coverage = new Map<string, number>();
-  for (const l of d.packable) {
+  for (const l of packable) {
     if (l.digital || !l.product_external_id) continue;
     const eff = Number(l.effective_qty);
     const c = l.direct_ship ? (l.direct_fulfilled_at ? eff : 0) : Math.min(Number(l.shipped_qty), eff);
@@ -613,12 +674,12 @@ export async function resetVoidedShipmentUpstream(d: ResetVoidedArgs): Promise<P
   const markerThere = upstreamNotes.includes(marker);
 
   // the order's state here without the box (fully-shipped exactly as the push computes it)
-  const packableLines = d.packable.filter(l => !l.direct_ship && !l.digital && Number(l.effective_qty) > 0);
-  const directLines = d.packable.filter(l => l.direct_ship && !l.digital);
-  const stillComplete = d.packable.length > 0
+  const packableLines = packable.filter(l => !l.direct_ship && !l.digital && Number(l.effective_qty) > 0);
+  const directLines = packable.filter(l => l.direct_ship && !l.digital);
+  const stillComplete = packable.length > 0
     && packableLines.every(l => Number(l.shipped_qty) >= Number(l.effective_qty))
     && directLines.every(l => l.direct_fulfilled_at != null);
-  const stillShippedHere = d.packable.some(l => !l.digital && (l.direct_ship ? !!l.direct_fulfilled_at : Number(l.shipped_qty) > 0));
+  const stillShippedHere = packable.some(l => !l.digital && (l.direct_ship ? !!l.direct_fulfilled_at : Number(l.shipped_qty) > 0));
   const datedAfter = mergedItems.some(it => !!it.shipped_date);
   // the status is this box's to take back only when its push evidently set it
   const ours = struck > 0 || cleared.length > 0;
@@ -680,12 +741,16 @@ export async function resetVoidedShipmentUpstream(d: ResetVoidedArgs): Promise<P
   if (moved) {
     return { ok: false, message: `Ordering app NOT reset — the order changed there while this was being prepared (now "${String(latest.status ?? '')}"); nothing written. Retry "Reset ordering app" to plan from the new state.` };
   }
+  if (!(await lease.renew())) {
+    return { ok: false, message: 'Ordering app NOT reset — another write to this order\'s ordering-app record started meanwhile; nothing written. Use "Reset ordering app" again.' };
+  }
 
   let putError: string | null = null;
   try {
     await updateB44Order(d.cfg, d.externalId, fields);
   } catch (e: unknown) {
     putError = e instanceof Error ? e.message : 'update failed';
+    lease.noteFailure(e);
   }
 
   try {

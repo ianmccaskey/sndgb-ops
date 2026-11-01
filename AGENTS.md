@@ -147,19 +147,23 @@ where the code fails to honour one; do not propose replacing the decision.
   carrier reported moving / delivered / returned / failed, or the
   operator recorded delivered / reshipped (a return, not a cancel), and
   an adopted `'upstream'` record (corrected in the ordering app first, or
-  auto-adopt records it again). Every shipment push holds a claim
-  (`claimShipmentPush`, under 42001, cleared by the stamp or
-  `releaseShipmentPush`, lapsing after 10 minutes; a retry may take an
-  unsent one over); its renewal right before the PUT also stamps
-  `push_dispatched_at`, and at most one dispatched write is outstanding
-  per box. It clears on the verified stamp or, once the ordering app
-  answered the PUT, on that push's release; an unanswered PUT
-  (`B44UnreachableError`) may still land, so its mark holds until a
-  verified push or 10 minutes. A cancel refuses while either is fresh and
-  a cancelled box cannot be claimed, so no push planned or sent before a
-  cancel lands after its reset — pass
-  `claimPush` / `releasePush` to every `pushShipmentUpstream` caller.
-  The ordering app is then
+  auto-adopt records it again). Every write of an order's SHIP STATE to
+  the ordering app — a box's push, a cancelled box's reset, the
+  auto-adopt write-back — recomputes the whole order, so all three hold
+  the ORDER's upstream lease (`upstreamLease` in `src/lib/pushShipment.ts`
+  over `claim_order_upstream()` / `releaseOrderUpstream`,
+  `order_upstream_leases`): claimed under 42001 BEFORE the writer reads
+  what shipped here (a push's box must still be pushable), renewed right
+  before the PUT (stamping `dispatched_at`; at most one sent write per
+  order is unresolved), released on every ending — the dispatch only once
+  the ordering app answered the PUT; an unanswered one
+  (`B44UnreachableError`) holds for 10 minutes whatever a re-read shows.
+  A cancel refuses while the order's lease or dispatch is fresh, so no
+  write planned or sent before a cancel lands after its reset. Pass the
+  lease deps and a `loadPackable` loader (never pre-read rows) to every
+  such writer. The order-sheet payment pushers (tx refs, rail) also PUT
+  `notes` but never items, dates or status; they are outside the lease
+  and carry the house read-to-PUT residual. The ordering app is then
   reset for that one box (`resetVoidedShipmentUpstream`, also offered for
   a refund-voided pushed box): only ISO ship dates this app wrote, only
   on items no longer covered here, the box's tracking note marked

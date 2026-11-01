@@ -5,8 +5,8 @@ import markOrderDirectFulfilled from '@/actions/fulfillment/markOrderDirectFulfi
 import getPackableItems from '@/actions/fulfillment/getPackableItems';
 import listOrderShipments from '@/actions/fulfillment/listOrderShipments';
 import markShipmentPushed from '@/actions/fulfillment/markShipmentPushed';
-import claimShipmentPush from '@/actions/fulfillment/claimShipmentPush';
-import releaseShipmentPush from '@/actions/fulfillment/releaseShipmentPush';
+import claimOrderUpstream from '@/actions/fulfillment/claimOrderUpstream';
+import releaseOrderUpstream from '@/actions/fulfillment/releaseOrderUpstream';
 import appendOrderAdminNote from '@/actions/orders/appendOrderAdminNote';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
 import type { PushPackableLine } from '@/lib/pushShipment';
@@ -135,8 +135,8 @@ export function FulfillmentPage() {
   const [fetchPackableJit] = useMutateAction(getPackableItems);
   const [doAppendNote] = useMutateAction(appendOrderAdminNote);
   const [doMarkPushed] = useMutateAction(markShipmentPushed);
-  const [doClaimPush] = useMutateAction(claimShipmentPush);
-  const [doReleasePush] = useMutateAction(releaseShipmentPush);
+  const [doClaimLease] = useMutateAction(claimOrderUpstream);
+  const [doReleaseLease] = useMutateAction(releaseOrderUpstream);
   const pushAllInFlight = useRef(false);
   const [pushAllBusy, setPushAllBusy] = useState(false);
   const [pushAllMsg, setPushAllMsg] = useState('');
@@ -161,15 +161,20 @@ export function FulfillmentPage() {
           items: { order_item_id: number; qty: string; sku_code: string }[];
         };
         let ships: JitShip[];
-        let packable: PushPackableLine[];
         try {
-          const [shipRes, pkRes] = [
-            await fetchShipmentsJit({ order_id: r.id }) as unknown[] | null,
-            await fetchPackableJit({ order_id: r.id }) as unknown[] | null,
-          ];
+          const shipRes = await fetchShipmentsJit({ order_id: r.id }) as unknown[] | null;
           ships = (Array.isArray(shipRes) ? shipRes as JitShip[] : [])
             .filter(s => s.finalized_at && !s.b44_pushed_at && s.refund_status !== 'SUCCESS' && !s.cancelled_at);
-          packable = (Array.isArray(pkRes) ? pkRes : []).map(row => {
+        } catch {
+          failures.push(`${r.order_number}: could not read its shipments`);
+          continue;
+        }
+        if (ships.length === 0) continue;   // pushed meanwhile in another session
+        // the packing state, read by each push only once it holds the
+        // order's upstream lease
+        const loadPackable = async (): Promise<PushPackableLine[]> => {
+          const pkRes = await fetchPackableJit({ order_id: r.id }) as unknown[] | null;
+          return (Array.isArray(pkRes) ? pkRes : []).map(row => {
             const l = row as Record<string, unknown>;
             return {
               order_item_id: Number(l.order_item_id),
@@ -180,19 +185,14 @@ export function FulfillmentPage() {
               digital: !!l.digital,
             };
           });
-          if (packable.length === 0) throw new Error('empty packable read');
-        } catch {
-          failures.push(`${r.order_number}: could not read its shipments/packing state`);
-          continue;
-        }
-        if (ships.length === 0) continue;   // pushed meanwhile in another session
+        };
         for (const s of ships) {
           const out = await pushShipmentUpstream({
             cfg, externalId: r.external_id || '', orderId: r.id, orderNumber: r.order_number,
             shipmentId: s.id, pushEpoch: Number(s.push_epoch || 0),
             carrier: s.carrier || '', tracking: s.tracking_number == null ? '' : dbText(s.tracking_number),
             shippedItems: (s.items || []).map(it => ({ sku: it.sku_code, qty: String(it.qty) })),
-            packable, userName, appendNote: doAppendNote, markPushed: doMarkPushed, claimPush: doClaimPush, releasePush: doReleasePush,
+            loadPackable, userName, appendNote: doAppendNote, markPushed: doMarkPushed, claimLease: doClaimLease, releaseLease: doReleaseLease,
           });
           if (out.ok) pushedBoxes++;
           else failures.push(`${r.order_number}: ${out.message}`);
