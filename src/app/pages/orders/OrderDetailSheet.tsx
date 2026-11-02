@@ -29,6 +29,7 @@ import releaseOrderUpstream from '@/actions/fulfillment/releaseOrderUpstream';
 import { pushShipmentUpstream } from '@/lib/pushShipment';
 import addLocalOrderItem from '@/actions/orders/addLocalOrderItem';
 import setOrderFees from '@/actions/orders/setOrderFees';
+import setManualOrderAddress from '@/actions/orders/setManualOrderAddress';
 import setOrderItemQty from '@/actions/orders/setOrderItemQty';
 import removeOrderItem from '@/actions/orders/removeOrderItem';
 import addOrderCredit from '@/actions/orders/addOrderCredit';
@@ -380,6 +381,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [doMarkDirectFulfilled] = useMutateAction(markOrderDirectFulfilled);
   const [doAddLocalItem] = useMutateAction(addLocalOrderItem);
   const [doSetFees] = useMutateAction(setOrderFees);
+  const [doSetAddress] = useMutateAction(setManualOrderAddress);
   const [doSetItemQty] = useMutateAction(setOrderItemQty);
   const [doRemoveItem] = useMutateAction(removeOrderItem);
   const [fetchFreshOrder] = useMutateAction(getOrder);
@@ -438,6 +440,14 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [feeInsurance, setFeeInsurance] = useState('');
   const [feeTip, setFeeTip] = useState('');
   const [feeMsg, setFeeMsg] = useState('');
+  // ship-to of a manual order (no pull ever writes it)
+  const [editingAddr, setEditingAddr] = useState(false);
+  const [addrStreet1, setAddrStreet1] = useState('');
+  const [addrStreet2, setAddrStreet2] = useState('');
+  const [addrCity, setAddrCity] = useState('');
+  const [addrState, setAddrState] = useState('');
+  const [addrZip, setAddrZip] = useState('');
+  const [addrMsg, setAddrMsg] = useState('');
   const [compQty, setCompQty] = useState('');
   const [compReason, setCompReason] = useState('');
   const [compMsg, setCompMsg] = useState('');
@@ -470,6 +480,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       setCompingId(null); setCompQty(''); setCompReason(''); setCompMsg('');
       setWoEditing(false); setWoAmt(''); setWoReason(''); setWoMsg('');
       setRailMsg('');
+      setEditingAddr(false); setAddrMsg('');
     }
   }, [o?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -877,6 +888,41 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       reloadOrder();
     } catch (e: unknown) {
       setFeeMsg(e instanceof Error ? e.message : 'Failed to save fees');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Ship-to of a MANUAL order: nothing upstream holds it, so this is the
+  // only place it is ever set (an imported order's address is the ordering
+  // app's — the next pull would overwrite an edit). Every ship path refuses
+  // an order with no street, so a manual order created without one could
+  // never be packed until this was set.
+  const isManualOrder = (x: OrderRow) => !x.external_id && x.raw_import?.source === 'manual';
+  const openAddrEditor = () => {
+    if (!o) return;
+    setAddrStreet1(o.address_line1 ?? ''); setAddrStreet2(o.address_line2 ?? '');
+    setAddrCity(o.city ?? ''); setAddrState(o.state_code ?? '');
+    // row boundary: a digit-only ZIP can arrive as a JS number
+    setAddrZip(o.postal_code == null ? '' : String(o.postal_code));
+    setAddrMsg(''); setEditingAddr(true);
+  };
+  const saveAddress = async () => {
+    if (!o) return;
+    if (!addrStreet1.trim() || !addrCity.trim()) { setAddrMsg('Street and city are required.'); return; }
+    if (!/^[A-Za-z]{2}$/.test(addrState.trim())) { setAddrMsg('State must be the 2-letter code (e.g. TX).'); return; }
+    if (!/^\d{5}(?:-\d{4})?$/.test(addrZip.trim())) { setAddrMsg('ZIP must be 5 digits, or ZIP+4 (12345-6789).'); return; }
+    setSaving(true); setAddrMsg('');
+    try {
+      const res = await doSetAddress({
+        order_id: o.id, street1: addrStreet1.trim(), street2: addrStreet2.trim(),
+        city: addrCity.trim(), state: addrState.trim(), zip: addrZip.trim(), actor: userName,
+      }) as unknown[] | null;
+      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setAddrMsg('Refused — only a manual order that is not cancelled or refunded takes an address here.');
+      else setEditingAddr(false);
+      reloadOrder();
+    } catch (e: unknown) {
+      setAddrMsg(e instanceof Error ? e.message : 'Failed to save the address');
     } finally {
       setSaving(false);
     }
@@ -1523,9 +1569,38 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
               <div>
                 <div className="font-medium">{o.customer_name}</div>
                 <div className="text-muted-foreground">{o.contact_email} {o.contact_phone ? `· ${o.contact_phone}` : ''} {o.discord_username ? `· ${o.discord_username}` : ''}</div>
-                <div className="text-muted-foreground mt-1">
-                  {o.address_line1}{o.address_line2 ? `, ${o.address_line2}` : ''}, {o.city}, {o.state_code} {o.postal_code}
-                </div>
+                {o.address_line1 ? (
+                  <div className="text-muted-foreground mt-1">
+                    {o.address_line1}{o.address_line2 ? `, ${o.address_line2}` : ''}, {o.city}, {o.state_code} {o.postal_code}
+                  </div>
+                ) : (
+                  <div className="text-amber-300 mt-1">
+                    No ship-to address — it can't be packed or shipped until one is set{isManualOrder(o) ? '' : ' (it comes from the ordering app: fix it there, then pull)'}.
+                  </div>
+                )}
+                {isManualOrder(o) && !['cancelled', 'refunded'].includes(o.status) && (
+                  !editingAddr ? (
+                    <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] mt-1" onClick={openAddrEditor}>
+                      {o.address_line1 ? 'Edit ship-to' : 'Add ship-to address'}
+                    </Button>
+                  ) : (
+                    <div className="space-y-1.5 mt-1.5 rounded border p-2">
+                      <Input placeholder="Street" value={addrStreet1} onChange={e => setAddrStreet1(e.target.value)} className="h-8 text-xs" />
+                      <Input placeholder="Apt / suite · optional" value={addrStreet2} onChange={e => setAddrStreet2(e.target.value)} className="h-8 text-xs" />
+                      <div className="flex flex-wrap gap-1.5">
+                        <Input placeholder="City" value={addrCity} onChange={e => setAddrCity(e.target.value)} className="h-8 text-xs flex-1 min-w-[120px]" />
+                        <Input placeholder="State" maxLength={2} value={addrState} onChange={e => setAddrState(e.target.value.toUpperCase())} className="h-8 text-xs w-16" />
+                        <Input placeholder="ZIP" inputMode="numeric" value={addrZip} onChange={e => setAddrZip(e.target.value)} className="h-8 text-xs w-28" />
+                      </div>
+                      <div className="flex gap-1.5">
+                        <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={saveAddress}>Save address</Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingAddr(false)}>Cancel</Button>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">US only. A label already quoted for the old address will refuse to buy, so re-quote after changing it.</p>
+                      {addrMsg && <p className="text-xs text-rose-400">{addrMsg}</p>}
+                    </div>
+                  )
+                )}
                 <div className="text-xs text-muted-foreground mt-1">Placed {fmtDateTime(o.placed_at)} · rail: {o.payment_rail}</div>
               </div>
 

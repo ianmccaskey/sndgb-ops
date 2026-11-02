@@ -112,6 +112,7 @@ export type QueueOrder = {
   address_line1: string | null; address_line2: string | null; city: string | null;
   state_code: string | null; postal_code: string | null; customer_note: string | null;
   shipping_insurance_usd: string | null; shipping_insurance_override_usd: string | null;
+  hold_shipping?: boolean | null;
 };
 
 const QTY_RE = /^\d+(?:\.\d{1,2})?$/;
@@ -664,6 +665,16 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     street1: s(order.address_line1), street2: s(order.address_line2),
     city: s(order.city), state: s(order.state_code), zip: s(order.postal_code),
   };
+  // what every ship path (draft, label purchase, manual record) refuses,
+  // said BEFORE the operator types a label in — the refusal after the
+  // fact can only list possible causes. A manual order's address is set
+  // in its order sheet; an imported one's comes from the ordering app.
+  const shipBlockers = [
+    order.hold_shipping ? 'On hold — turn off "Hold shipping" in the order sheet\'s Admin section, then ship it.' : '',
+    !order.address_line1 ? (order.external_id
+      ? 'No ship-to address — it comes from the ordering app: fix it there, then pull.'
+      : 'No ship-to address — add it in the order sheet (Orders → this order → Add ship-to address).') : '',
+  ].filter(Boolean);
 
   // rate signature: ship-from CONTENTS + ship-to + dims/weight + the CHOSEN
   // QUANTITIES (an attribution edit changes the draft, so it re-quotes).
@@ -684,7 +695,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     setMsg(''); setRatesResult(null); setPickedRate('');
     if (!shippoKey) { setMsg('Add your Shippo API token in Settings first.'); return; }
     if (!fromRow) { setMsg('Pick the ship-from address.'); return; }
-    if (!shipTo) { setMsg('This order has no street address — fix it in the order sheet first.'); return; }
+    if (shipBlockers.length > 0 || !shipTo) { setMsg(shipBlockers.join(' ') || 'This order has no street address.'); return; }
     const lineError = validateChosen();
     if (lineError) { setMsg(lineError); return; }
     for (const k of (packaging === 'polymailer' ? ['length', 'width'] as const : ['length', 'width', 'height'] as const)) {
@@ -957,6 +968,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     manualInFlight.current = true;
     setManualBusy(true); setMsg('');
     try {
+      if (shipBlockers.length > 0) { setMsg(shipBlockers.join(' ')); return; }
       const carrier = mCarrier === 'other' ? mCarrierOther.trim() : mCarrier;
       if (!carrier) { setMsg('Pick or type the carrier.'); return; }
       // tracking stays a string end-to-end; a re-typed JS number past safe
@@ -1424,8 +1436,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           <div className="rounded border p-3 text-sm">
             <p className="text-xs font-semibold uppercase text-muted-foreground mb-1">Ship to</p>
             <p className="font-medium">{order.contact_name || order.customer_name}</p>
-            <p>{order.address_line1}{order.address_line2 ? `, ${order.address_line2}` : ''}</p>
-            <p>{order.city}, {order.state_code} {order.postal_code}</p>
+            {order.address_line1 && (
+              <>
+                <p>{order.address_line1}{order.address_line2 ? `, ${order.address_line2}` : ''}</p>
+                <p>{order.city}, {order.state_code} {order.postal_code}</p>
+              </>
+            )}
+            {shipBlockers.map(b => <p key={b} className="text-xs text-rose-400 mt-1">{b}</p>)}
             {(order.contact_phone || order.contact_email) && (
               <p className="text-xs text-muted-foreground mt-1">{[order.contact_phone, order.contact_email].filter(Boolean).join(' · ')}</p>
             )}
@@ -1725,12 +1742,12 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
               <Field label="Cost $ · optional">
                 <Input inputMode="decimal" value={mCost} onChange={e => setMCost(e.target.value)} className="h-9" />
               </Field>
-              <Button size="sm" className="h-9 self-end justify-self-start" disabled={manualBusy} onClick={recordManual}>{manualBusy ? 'Recording…' : 'Record shipment'}</Button>
+              <Button size="sm" className="h-9 self-end justify-self-start" disabled={manualBusy || shipBlockers.length > 0} onClick={recordManual}>{manualBusy ? 'Recording…' : 'Record shipment'}</Button>
             </div>
           ) : (
             <div className="space-y-2">
               <div className="flex gap-2 items-center">
-                <Button size="sm" variant="outline" disabled={ratesLoading} onClick={fetchRates}>{ratesLoading ? 'Quoting…' : 'Get rates'}</Button>
+                <Button size="sm" variant="outline" disabled={ratesLoading || shipBlockers.length > 0} onClick={fetchRates}>{ratesLoading ? 'Quoting…' : 'Get rates'}</Button>
                 {ratesResult && ratesResult.rates.length > 0 && pickedRate && (
                   <Button size="sm" disabled={purchasing} onClick={purchase}>
                     {purchasing ? 'Purchasing…' : `Buy label — ${fmtUSD(ratesResult.rates.find(r => r.object_id === pickedRate)?.amount || 0)}${testMode ? ' (TEST)' : ''}`}
