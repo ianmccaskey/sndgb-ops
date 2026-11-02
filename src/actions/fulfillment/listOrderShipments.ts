@@ -35,8 +35,22 @@ function listOrderShipments() {
               WHERE al.table_name = 'shipments' AND al.row_pk = s.id::text
                 AND al.action = 'shipment_pushed_upstream'
               ORDER BY al.id DESC LIMIT 1) AS pushed_prior_status,
+             -- a MANUAL order's address changes only by setManualOrderAddress,
+             -- so a box whose label snapshot differs was made for an earlier
+             -- ship-to: the old street and city, else NULL (imported orders'
+             -- addresses move with every pull — not flagged)
+             CASE WHEN o.external_id IS NULL AND o.raw_import->>'source' = 'manual'
+                   AND s.destination ? 'street1'
+                   AND (COALESCE(s.destination->>'street1', '') <> COALESCE(o.address_line1, '')
+                     OR COALESCE(s.destination->>'street2', '') <> COALESCE(o.address_line2, '')
+                     OR COALESCE(s.destination->>'city', '')    <> COALESCE(o.city, '')
+                     OR COALESCE(s.destination->>'state', '')   <> COALESCE(o.state_code, '')
+                     OR COALESCE(s.destination->>'zip', '')     <> COALESCE(o.postal_code, ''))
+                  THEN concat_ws(', ', NULLIF(s.destination->>'street1', ''), NULLIF(s.destination->>'city', ''))
+             END AS dest_differs,
              COALESCE(si.items, '[]'::jsonb) AS items
       FROM shipments s
+      JOIN orders o ON o.id = s.order_id
       LEFT JOIN LATERAL (
         SELECT jsonb_agg(jsonb_build_object(
                  'order_item_id', si.order_item_id,

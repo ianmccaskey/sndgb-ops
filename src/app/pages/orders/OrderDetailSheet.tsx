@@ -448,6 +448,8 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
   const [addrState, setAddrState] = useState('');
   const [addrZip, setAddrZip] = useState('');
   const [addrMsg, setAddrMsg] = useState('');
+  // live boxes the server named: their labels carry the current address
+  const [addrAck, setAddrAck] = useState<{ id: number; carrier: string | null; tracking: string }[] | null>(null);
   const [compQty, setCompQty] = useState('');
   const [compReason, setCompReason] = useState('');
   const [compMsg, setCompMsg] = useState('');
@@ -480,7 +482,7 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
       setCompingId(null); setCompQty(''); setCompReason(''); setCompMsg('');
       setWoEditing(false); setWoAmt(''); setWoReason(''); setWoMsg('');
       setRailMsg('');
-      setEditingAddr(false); setAddrMsg('');
+      setEditingAddr(false); setAddrMsg(''); setAddrAck(null);
     }
   }, [o?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -905,21 +907,30 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     setAddrCity(o.city ?? ''); setAddrState(o.state_code ?? '');
     // row boundary: a digit-only ZIP can arrive as a JS number
     setAddrZip(o.postal_code == null ? '' : String(o.postal_code));
-    setAddrMsg(''); setEditingAddr(true);
+    setAddrMsg(''); setAddrAck(null); setEditingAddr(true);
   };
-  const saveAddress = async () => {
+  // ackIds: the live boxes the operator confirmed after the server named
+  // them — a label already made for the current address stays on its box
+  const saveAddress = async (ackIds = '') => {
     if (!o) return;
     if (!addrStreet1.trim() || !addrCity.trim()) { setAddrMsg('Street and city are required.'); return; }
     if (!/^[A-Za-z]{2}$/.test(addrState.trim())) { setAddrMsg('State must be the 2-letter code (e.g. TX).'); return; }
     if (!/^\d{5}(?:-\d{4})?$/.test(addrZip.trim())) { setAddrMsg('ZIP must be 5 digits, or ZIP+4 (12345-6789).'); return; }
-    setSaving(true); setAddrMsg('');
+    setSaving(true); setAddrMsg(''); setAddrAck(null);
     try {
-      const res = await doSetAddress({
-        order_id: o.id, street1: addrStreet1.trim(), street2: addrStreet2.trim(),
-        city: addrCity.trim(), state: addrState.trim(), zip: addrZip.trim(), actor: userName,
-      }) as unknown[] | null;
-      if (!(Array.isArray(res) ? res.length > 0 : !!res)) setAddrMsg('Refused — only a manual order that is not cancelled or refunded takes an address here.');
-      else setEditingAddr(false);
+      const row = firstRow<{ id: string | null; refused: string | null; boxes: { id: number; carrier: string | null; tracking: string; unsettled: boolean }[] | null }>(
+        await doSetAddress({
+          order_id: o.id, street1: addrStreet1.trim(), street2: addrStreet2.trim(),
+          city: addrCity.trim(), state: addrState.trim(), zip: addrZip.trim(),
+          ack_box_ids: ackIds, actor: userName,
+        }) as unknown[]);
+      const boxes = (row?.boxes || []).map(b => ({ ...b, tracking: dbText(b.tracking) }));
+      if (row?.id) setEditingAddr(false);
+      else if (row?.refused === 'boxes') setAddrAck(boxes);
+      else if (row?.refused === 'purchase') {
+        setAddrMsg(`A label purchase on box ${boxes.filter(b => b.unsettled).map(b => `#${b.id}`).join(', ')} hasn't settled — finish it, or verify there's no label, in the Ship dialog first. Then change the address.`);
+      } else if (row?.refused === 'order') setAddrMsg('Refused — only a manual order that is not cancelled or refunded takes an address here.');
+      else setAddrMsg('Refused — check the address and try again.');
       reloadOrder();
     } catch (e: unknown) {
       setAddrMsg(e instanceof Error ? e.message : 'Failed to save the address');
@@ -1593,9 +1604,21 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
                         <Input placeholder="ZIP" inputMode="numeric" value={addrZip} onChange={e => setAddrZip(e.target.value)} className="h-8 text-xs w-28" />
                       </div>
                       <div className="flex gap-1.5">
-                        <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={saveAddress}>Save address</Button>
-                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingAddr(false)}>Cancel</Button>
+                        <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={() => saveAddress()}>Save address</Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setEditingAddr(false); setAddrAck(null); }}>Cancel</Button>
                       </div>
+                      {addrAck && (
+                        <div className="rounded border border-amber-400/40 p-2 space-y-1.5">
+                          <p className="text-xs text-amber-300">
+                            {addrAck.map(b => `Box #${b.id}${b.carrier ? ` (${b.carrier.toUpperCase()} ${b.tracking})` : ''}`).join(', ')} {addrAck.length === 1 ? 'has a label' : 'have labels'} for the current address, and a label can't be changed.
+                            The new address applies only to boxes shipped from now on. If {addrAck.length === 1 ? 'that box hasn\'t' : 'one hasn\'t'} gone out yet, cancel it or refund its label in the Ship dialog instead.
+                          </p>
+                          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={saving}
+                            onClick={() => saveAddress(addrAck.map(b => String(b.id)).join(','))}>
+                            {addrAck.length === 1 ? 'That box went out — change the address' : 'Those boxes went out — change the address'}
+                          </Button>
+                        </div>
+                      )}
                       <p className="text-[11px] text-muted-foreground">US only. A label already quoted for the old address will refuse to buy, so re-quote after changing it.</p>
                       {addrMsg && <p className="text-xs text-rose-400">{addrMsg}</p>}
                     </div>

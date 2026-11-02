@@ -99,6 +99,8 @@ type ShipmentRow = {
   cancelled_at: string | null; cancelled_by: string | null; cancel_reason: string | null;
   cancelled_items: { order_item_id: number; qty: string; sku_code: string; product_id: number; product_external_id: string | null }[];
   upstream_reset_at: string | null; pushed_prior_status: string | null;
+  /** manual orders: the label's street/city when it differs from the order's current ship-to */
+  dest_differs: string | null;
 };
 
 // statuses a reset may put an order back to — never a shipped or terminal one
@@ -2050,6 +2052,11 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                       })()}
                       {fixMsg && <p className={`text-[11px] ${fixMsg.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{fixMsg.text}</p>}
                     </div>
+                  )}
+                  {s.dest_differs && !isVoid(s) && (
+                    <p className="text-[11px] text-amber-300">
+                      This label was made for {s.dest_differs} — the order's ship-to has changed since. If the box hasn't gone out, cancel it or refund the label and ship again.
+                    </p>
                   )}
                   {s.cancelled_at && (
                     <p className="text-[11px] text-muted-foreground">
