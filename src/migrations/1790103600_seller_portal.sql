@@ -196,6 +196,11 @@ CREATE TABLE IF NOT EXISTS storefront.store_shipments (
   created_by            text NOT NULL,
   created_at            timestamptz NOT NULL DEFAULT now(),
   purchase_started_at   timestamptz,
+  -- the Shippo account the purchase was started on: sha256 of the shop's key
+  -- at begin_label and its last 4, so a recovery proof ("no transaction for
+  -- this rate") is only trusted while the shop still holds THAT key
+  key_fingerprint       text,
+  key_last4             text,
   recorded_at           timestamptz,
   cancelled_at          timestamptz,
   cancelled_by          text,
@@ -235,6 +240,9 @@ CREATE TABLE IF NOT EXISTS storefront.store_shipments (
 COMMENT ON TABLE storefront.store_shipments IS
   'What a shop recorded for a store order: a manual carrier+tracking, or a Shippo label (a draft row BEFORE the money POST, recorded after). store_orders stays the buyer-facing truth. One live (uncancelled) row per order. A cancelled, recorded Shippo row with refund_status NULL is a late label whose refund has not been requested yet.';
 
+ALTER TABLE storefront.store_shipments ADD COLUMN IF NOT EXISTS key_fingerprint text;
+ALTER TABLE storefront.store_shipments ADD COLUMN IF NOT EXISTS key_last4 text;
+
 -- drafts count: two operators cannot buy two labels for one order
 CREATE UNIQUE INDEX IF NOT EXISTS store_shipments_one_live ON storefront.store_shipments (store_order_id) WHERE cancelled_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS store_shipments_txn_uniq ON storefront.store_shipments (shippo_transaction_id) WHERE shippo_transaction_id IS NOT NULL;
@@ -264,6 +272,7 @@ BEGIN
        OR NEW.shippo_rate_id IS DISTINCT FROM OLD.shippo_rate_id OR NEW.rate_amount IS DISTINCT FROM OLD.rate_amount
        OR NEW.created_by IS DISTINCT FROM OLD.created_by OR NEW.created_at IS DISTINCT FROM OLD.created_at
        OR NEW.purchase_started_at IS DISTINCT FROM OLD.purchase_started_at
+       OR NEW.key_fingerprint IS DISTINCT FROM OLD.key_fingerprint OR NEW.key_last4 IS DISTINCT FROM OLD.key_last4
        OR NEW.store_order_id IS DISTINCT FROM OLD.store_order_id OR NEW.seller_id IS DISTINCT FROM OLD.seller_id
        OR (NOT v_late AND (NEW.carrier IS DISTINCT FROM OLD.carrier OR NEW.tracking_number IS DISTINCT FROM OLD.tracking_number
            OR NEW.shippo_transaction_id IS DISTINCT FROM OLD.shippo_transaction_id OR NEW.label_url IS DISTINCT FROM OLD.label_url
@@ -304,20 +313,20 @@ GRANT USAGE ON SCHEMA storefront TO p2_seller_portal;
 -- role reaches rows only through the portal_* functions granted below
 
 -- ── 6. row types shared by core and wrapper ────────────────────────────────
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_me_row AS (
+-- dropped and recreated on every apply (every dependent function is recreated
+-- below), so a later shape change needs no hand-written ALTER TYPE
+DROP TYPE IF EXISTS storefront.shop_me_row CASCADE;
+CREATE TYPE storefront.shop_me_row AS (
     seller_id bigint, slug text, display_name text, seller_status text, fee_pct numeric, managed_in_ops boolean,
     wallet_count int, has_default_wallet boolean, ship_from_complete boolean,
     has_shippo_key boolean, shippo_key_last4 text, shippo_key_is_test boolean, to_ship int);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_counts_row AS (
+DROP TYPE IF EXISTS storefront.shop_counts_row CASCADE;
+CREATE TYPE storefront.shop_counts_row AS (
     awaiting_payment int, to_ship int, label_in_progress int, in_transit int, delivered int, cancelled int, total int);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_order_row AS (
+DROP TYPE IF EXISTS storefront.shop_order_row CASCADE;
+CREATE TYPE storefront.shop_order_row AS (
     id bigint, order_number text, listing_id bigint, listing_title text, qty int,
     unit_price_usd numeric, shipping_fee_usd numeric, total_usd numeric, fee_usd numeric, payment_rail text,
     status text, telegram_username text, discord_username text, buyer_note text,
@@ -325,71 +334,59 @@ DO $mig$ BEGIN
     ship_city text, ship_state text, ship_postal text,
     carrier text, tracking_number text, shipped_at timestamptz, delivered_at timestamptz, paid_at timestamptz,
     created_at timestamptz, live_shipment_id bigint, live_shipment_source text, live_shipment_status text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_shipment_row AS (
+DROP TYPE IF EXISTS storefront.shop_shipment_row CASCADE;
+CREATE TYPE storefront.shop_shipment_row AS (
     id bigint, store_order_id bigint, source text, status text, carrier text, servicelevel text, tracking_number text,
     rate_amount numeric, label_url text, label_cost_usd numeric, shippo_rate_id text, shippo_transaction_id text,
     created_by text, created_at timestamptz, recorded_at timestamptz, cancelled_at timestamptz, cancelled_by text,
-    cancel_reason text, refund_status text, refund_object_id text, refund_note text, refund_recorded_at timestamptz, is_live boolean);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
+    cancel_reason text, refund_status text, refund_object_id text, refund_note text, refund_recorded_at timestamptz, is_live boolean,
+    key_last4 text, key_matches_current boolean);
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_order_result AS (
+DROP TYPE IF EXISTS storefront.shop_order_result CASCADE;
+CREATE TYPE storefront.shop_order_result AS (
     order_id bigint, order_number text, order_status text, corrected boolean, shipment_id bigint, message text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_label_begin_result AS (shipment_id bigint, created_at timestamptz, message text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
+DROP TYPE IF EXISTS storefront.shop_label_begin_result CASCADE;
+CREATE TYPE storefront.shop_label_begin_result AS (shipment_id bigint, created_at timestamptz, message text);
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_label_result AS (
+DROP TYPE IF EXISTS storefront.shop_label_result CASCADE;
+CREATE TYPE storefront.shop_label_result AS (
     shipment_id bigint, order_id bigint, order_number text, order_status text, order_updated boolean,
     recorded_at timestamptz, message text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_void_result AS (
+DROP TYPE IF EXISTS storefront.shop_void_result CASCADE;
+CREATE TYPE storefront.shop_void_result AS (
     shipment_id bigint, order_id bigint, shipment_status text, order_reset boolean, order_status text, refund_status text, message text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_refund_result AS (shipment_id bigint, refund_status text, message text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
+DROP TYPE IF EXISTS storefront.shop_refund_result CASCADE;
+CREATE TYPE storefront.shop_refund_result AS (shipment_id bigint, refund_status text, message text);
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_listing_row AS (
+DROP TYPE IF EXISTS storefront.shop_listing_row CASCADE;
+CREATE TYPE storefront.shop_listing_row AS (
     id bigint, title text, description_md text, mass_label text, price_usd numeric, shipping_fee_usd numeric,
     qty_available int, max_per_order int, status text, effective_status text, organizer_managed boolean,
     created_at timestamptz, updated_at timestamptz);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_listing_result AS (listing_id bigint, status text, qty_available int, message text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
+DROP TYPE IF EXISTS storefront.shop_listing_result CASCADE;
+CREATE TYPE storefront.shop_listing_result AS (listing_id bigint, status text, qty_available int, message text);
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_wallet_row AS (
+DROP TYPE IF EXISTS storefront.shop_wallet_row CASCADE;
+CREATE TYPE storefront.shop_wallet_row AS (
     id bigint, rail text, token text, address text, label text, is_default boolean, can_be_default boolean,
     removal_block text, created_at timestamptz);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_wallet_result AS (wallet_id bigint, is_default boolean, restored boolean, previous_default_id bigint, message text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
+DROP TYPE IF EXISTS storefront.shop_wallet_result CASCADE;
+CREATE TYPE storefront.shop_wallet_result AS (wallet_id bigint, is_default boolean, restored boolean, previous_default_id bigint, message text);
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_ship_from_row AS (
+DROP TYPE IF EXISTS storefront.shop_ship_from_row CASCADE;
+CREATE TYPE storefront.shop_ship_from_row AS (
     name text, company text, street1 text, street2 text, city text, state text, zip text, country text,
     phone text, email text, complete boolean, has_shippo_key boolean, shippo_key_last4 text, shippo_key_is_test boolean,
     updated_at timestamptz, message text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
 
-DO $mig$ BEGIN
-  CREATE TYPE storefront.shop_key_row AS (shippo_api_key text);
-EXCEPTION WHEN duplicate_object THEN NULL; END $mig$;
+DROP TYPE IF EXISTS storefront.shop_key_row CASCADE;
+CREATE TYPE storefront.shop_key_row AS (shippo_api_key text);
 
 -- ── 7. private helpers (owner-only; run as the owner inside the entry points)
 DROP FUNCTION IF EXISTS storefront.portal_resolve_seller(text);
@@ -523,6 +520,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, p
   SELECT EXISTS (SELECT 1 FROM storefront.seller_wallets w WHERE w.seller_id = p_seller_id AND w.active AND w.rail <> 'cash')
 $fn$;
 REVOKE EXECUTE ON FUNCTION storefront.shop_has_wallet(bigint) FROM PUBLIC;
+
+-- sha256 of the shop's current Shippo key (NULL when none); compared with the
+-- fingerprint a draft stored at begin_label
+DROP FUNCTION IF EXISTS storefront.shop_key_fingerprint(bigint);
+CREATE FUNCTION storefront.shop_key_fingerprint(p_seller_id bigint) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
+  SELECT encode(sha256(convert_to(f.shippo_api_key, 'UTF8')), 'hex') FROM storefront.seller_ship_from f WHERE f.seller_id = p_seller_id AND f.shippo_api_key IS NOT NULL
+$fn$;
+REVOKE EXECUTE ON FUNCTION storefront.shop_key_fingerprint(bigint) FROM PUBLIC;
 
 -- the storefront's walletRemovalBlock, in order: orders waiting to pay this
 -- wallet → the last wallet behind live listings → a default another USDC
@@ -708,7 +714,9 @@ BEGIN
            sh.label_cost_usd, sh.shippo_rate_id, sh.shippo_transaction_id,
            sh.created_by, sh.created_at, sh.recorded_at, sh.cancelled_at, sh.cancelled_by,
            sh.cancel_reason, sh.refund_status, sh.refund_object_id, sh.refund_note, sh.refund_recorded_at,
-           sh.cancelled_at IS NULL
+           sh.cancelled_at IS NULL,
+           sh.key_last4,
+           CASE WHEN sh.key_fingerprint IS NULL THEN NULL ELSE sh.key_fingerprint IS NOT DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) END
       FROM storefront.store_shipments sh
       JOIN storefront.store_orders o ON o.id = sh.store_order_id
      WHERE sh.store_order_id = v_id AND sh.seller_id = p_seller_id AND o.seller_id = p_seller_id
@@ -819,6 +827,7 @@ RETURNS SETOF storefront.shop_label_begin_result
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
 DECLARE v_id bigint; v_o storefront.store_orders%ROWTYPE; v_rate text := lower(btrim(COALESCE(p_rate_id, '')));
         v_carrier text := btrim(COALESCE(p_carrier, '')); v_amt numeric; v_ship bigint; v_created timestamptz; v_live storefront.store_shipments%ROWTYPE;
+        v_key text;
 BEGIN
   PERFORM storefront.shop_lock_seller(p_seller_id);
   v_id := storefront.shop_parse_id(p_order_id, 'order');
@@ -829,7 +838,8 @@ BEGIN
     RAISE EXCEPTION 'Pick the carrier.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:carrier';
   END IF;
   v_amt := storefront.shop_parse_usd(p_rate_amount, 'rate', false, true, 1000, 'The rate has no price. Quote again.', 'That rate is over $1,000. Quote again.');
-  IF NOT EXISTS (SELECT 1 FROM storefront.seller_ship_from f WHERE f.seller_id = p_seller_id AND f.shippo_api_key IS NOT NULL) THEN
+  SELECT f.shippo_api_key INTO v_key FROM storefront.seller_ship_from f WHERE f.seller_id = p_seller_id;
+  IF v_key IS NULL THEN
     RAISE EXCEPTION 'Add your ship-from address and Shippo key in Settings before buying a label.' USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
 
@@ -854,15 +864,16 @@ BEGIN
   END IF;
 
   BEGIN
-    INSERT INTO storefront.store_shipments (store_order_id, seller_id, source, shippo_rate_id, rate_amount, carrier, servicelevel, created_by, purchase_started_at)
-    VALUES (v_o.id, p_seller_id, 'shippo', v_rate, v_amt, v_carrier, NULLIF(btrim(COALESCE(p_servicelevel, '')), ''), p_actor, now())
+    INSERT INTO storefront.store_shipments (store_order_id, seller_id, source, shippo_rate_id, rate_amount, carrier, servicelevel, created_by, purchase_started_at, key_fingerprint, key_last4)
+    VALUES (v_o.id, p_seller_id, 'shippo', v_rate, v_amt, v_carrier, NULLIF(btrim(COALESCE(p_servicelevel, '')), ''), p_actor, now(),
+            encode(sha256(convert_to(v_key, 'UTF8')), 'hex'), right(v_key, 4))
     RETURNING id, created_at INTO v_ship, v_created;
   EXCEPTION WHEN unique_violation THEN
     RAISE EXCEPTION 'That rate was already used for a label. Quote again and pick a fresh rate.' USING ERRCODE = 'object_not_in_prerequisite_state';
   END;
 
   PERFORM storefront.shop_audit('storefront.store_shipments', v_ship, 'label_purchase_started', p_actor, NULL,
-    jsonb_build_object('orderId', v_o.id, 'orderNumber', v_o.order_number, 'rateId', v_rate, 'rateAmount', v_amt, 'carrier', v_carrier));
+    jsonb_build_object('orderId', v_o.id, 'orderNumber', v_o.order_number, 'rateId', v_rate, 'rateAmount', v_amt, 'carrier', v_carrier, 'keyLast4', right(v_key, 4)));
   RETURN QUERY SELECT v_ship, v_created, 'Label started.'::text;
 END
 $fn$;
@@ -987,6 +998,11 @@ BEGIN
     -- awaiting its refund, so bought postage is never lost (Codex 2026-11-08).
     IF v_refund = 'refused' THEN
       v_reason := 'purchase refused by Shippo';
+    ELSIF v_s.key_fingerprint IS NOT NULL AND v_s.key_fingerprint IS DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) THEN
+      -- "no transaction found" was looked up on a different Shippo account than
+      -- the one this label was started on: it proves nothing about the postage
+      RAISE EXCEPTION 'The Shippo key changed since this label was started (it was on the key ending …%). Put that key back in Settings to check Shippo, or message the organizers.', v_s.key_last4
+        USING ERRCODE = 'object_not_in_prerequisite_state';
     ELSIF COALESCE(v_s.purchase_started_at, v_s.created_at) > now() - interval '10 minutes' THEN
       RAISE EXCEPTION 'This label was started at % by % and its purchase may still be in flight. Wait until % or use "Check Shippo & retry".',
         to_char(COALESCE(v_s.purchase_started_at, v_s.created_at) AT TIME ZONE 'America/New_York', 'HH24:MI'), v_s.created_by,
@@ -1056,6 +1072,10 @@ BEGIN
   END IF;
   IF v_s.cancelled_at IS NULL OR v_s.source <> 'shippo' OR v_s.recorded_at IS NULL THEN
     RAISE EXCEPTION 'Only a voided Shippo label carries a refund.' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF v_s.key_fingerprint IS NOT NULL AND v_s.key_fingerprint IS DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) THEN
+    RAISE EXCEPTION 'The Shippo key changed since this label was bought (it was on the key ending …%). Put that key back in Settings to manage its refund, or message the organizers.', v_s.key_last4
+      USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
   UPDATE storefront.store_shipments
      SET refund_status = v_refund, refund_object_id = COALESCE(v_obj, refund_object_id), refund_note = v_note, refund_recorded_at = now()
