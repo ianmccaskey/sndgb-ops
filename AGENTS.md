@@ -305,6 +305,20 @@ where the code fails to honour one; do not propose replacing the decision.
   `group_buy_products.unit_cost_usd` to match one batch. Settled with the
   owner 2026-10-28.
 
+- **The store has TWO house shops, each selling from its own app**
+  (`1790103800`). `storefront.sellers.house_source` ('p2' | 'prt'; one
+  house per source, replacing `sellers_one_house`) names the database a
+  house sells from: P² from the P² Orders app, PRT from the PRT Operations
+  app ("Peptide Ops DB"). `store_listings.p2_product_id` and
+  `store_orders.p2_sales_order_id` / `_number` keep their names but mean
+  the HOUSE database's ids (a PRT order's are NULL until the storefront
+  writes it, which happens only once its payment verified on-chain; P²
+  still writes a quote at placement). `store_listings` is unique on
+  (seller_id, p2_product_id). PRT orders are fulfilled in the PRT app — not
+  here, not in P2 Collective Orders (the 1790103600 header's wording is
+  superseded). The PRT row is seeded SUSPENDED; approving it is the launch
+  switch. Settled with the owner 2026-11-08.
+
 ## Verifying changes
 
 Serena's LSP diagnostics are the only type check. SQL actions are probed on
