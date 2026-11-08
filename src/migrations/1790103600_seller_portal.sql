@@ -209,6 +209,9 @@ CREATE TABLE IF NOT EXISTS storefront.store_shipments (
   refund_object_id      text CHECK (refund_object_id IS NULL OR refund_object_id ~ '^[0-9a-f]{32}$'),
   refund_note           text,
   refund_recorded_at    timestamptz,
+  -- the refund POST for a voided label is claimed here first (shop_dispatch_refund),
+  -- so two tabs that both found "no refund yet" cannot both ask Shippo
+  refund_dispatched_at  timestamptz,
   updated_at            timestamptz NOT NULL DEFAULT now(),
   status                text GENERATED ALWAYS AS (
                           CASE WHEN cancelled_at IS NOT NULL THEN 'cancelled'
@@ -242,6 +245,7 @@ COMMENT ON TABLE storefront.store_shipments IS
 
 ALTER TABLE storefront.store_shipments ADD COLUMN IF NOT EXISTS key_fingerprint text;
 ALTER TABLE storefront.store_shipments ADD COLUMN IF NOT EXISTS key_last4 text;
+ALTER TABLE storefront.store_shipments ADD COLUMN IF NOT EXISTS refund_dispatched_at timestamptz;
 
 -- drafts count: two operators cannot buy two labels for one order
 CREATE UNIQUE INDEX IF NOT EXISTS store_shipments_one_live ON storefront.store_shipments (store_order_id) WHERE cancelled_at IS NULL;
@@ -341,7 +345,7 @@ CREATE TYPE storefront.shop_shipment_row AS (
     rate_amount numeric, label_url text, label_cost_usd numeric, shippo_rate_id text, shippo_transaction_id text,
     created_by text, created_at timestamptz, recorded_at timestamptz, cancelled_at timestamptz, cancelled_by text,
     cancel_reason text, refund_status text, refund_object_id text, refund_note text, refund_recorded_at timestamptz, is_live boolean,
-    key_last4 text, key_matches_current boolean, dispatched_at timestamptz);
+    key_last4 text, key_matches_current boolean, dispatched_at timestamptz, refund_dispatched_at timestamptz);
 
 DROP TYPE IF EXISTS storefront.shop_order_result CASCADE;
 CREATE TYPE storefront.shop_order_result AS (
@@ -741,7 +745,7 @@ BEGIN
            sh.cancelled_at IS NULL,
            sh.key_last4,
            CASE WHEN sh.key_fingerprint IS NULL THEN NULL ELSE sh.key_fingerprint IS NOT DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) END,
-           sh.purchase_started_at
+           sh.purchase_started_at, sh.refund_dispatched_at
       FROM storefront.store_shipments sh
       JOIN storefront.store_orders o ON o.id = sh.store_order_id
      WHERE sh.store_order_id = v_id AND sh.seller_id = p_seller_id AND o.seller_id = p_seller_id
@@ -1166,6 +1170,45 @@ END
 $fn$;
 REVOKE EXECUTE ON FUNCTION storefront.shop_void_shipment(bigint, text, text, text, text) FROM PUBLIC;
 
+-- The browser is about to ask Shippo for this voided label's refund: claim
+-- that request here first, so two tabs that both reconciled "no refund yet"
+-- cannot both POST (Codex 2026-11-08). Only a cancelled, recorded Shippo row
+-- whose refund is not yet requested (refund_status NULL, or 'error' for a
+-- retry) can be claimed, under the key that bought the label, and a claim
+-- younger than 10 minutes refuses — reconcile with Shippo instead.
+DROP FUNCTION IF EXISTS storefront.shop_dispatch_refund(bigint, text, text);
+CREATE FUNCTION storefront.shop_dispatch_refund(p_seller_id bigint, p_actor text, p_shipment_id text) RETURNS SETOF storefront.shop_label_dispatch_result
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
+DECLARE v_sid bigint; v_s storefront.store_shipments%ROWTYPE; v_now timestamptz := now();
+BEGIN
+  PERFORM storefront.shop_lock_seller(p_seller_id);
+  v_sid := storefront.shop_parse_id(p_shipment_id, 'shipment');
+  SELECT * INTO v_s FROM storefront.store_shipments sh WHERE sh.id = v_sid AND sh.seller_id = p_seller_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'That shipment isn''t on your list. Reload the page.' USING ERRCODE = 'no_data_found';
+  END IF;
+  IF v_s.cancelled_at IS NULL OR v_s.source <> 'shippo' OR v_s.recorded_at IS NULL THEN
+    RAISE EXCEPTION 'Only a voided Shippo label carries a refund.' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF v_s.key_fingerprint IS NOT NULL AND v_s.key_fingerprint IS DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) THEN
+    RAISE EXCEPTION 'The Shippo key changed since this label was bought (it was on the key ending …%). Put that key back in Settings to manage its refund, or message the organizers.', v_s.key_last4
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF v_s.refund_status IS NOT NULL AND v_s.refund_status <> 'error' THEN
+    RAISE EXCEPTION 'This label''s refund is already %. Check Shippo instead of asking again.', v_s.refund_status USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF v_s.refund_dispatched_at IS NOT NULL AND v_s.refund_dispatched_at > v_now - interval '10 minutes' THEN
+    RAISE EXCEPTION 'A refund request for this label was sent at %. Check Shippo for its outcome instead of asking again.',
+      to_char(v_s.refund_dispatched_at AT TIME ZONE 'America/New_York', 'HH24:MI') USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  UPDATE storefront.store_shipments SET refund_dispatched_at = v_now WHERE id = v_s.id;
+  PERFORM storefront.shop_audit('storefront.store_shipments', v_s.id, 'label_refund_dispatched', p_actor, NULL,
+    jsonb_build_object('transactionId', v_s.shippo_transaction_id, 'keyLast4', v_s.key_last4));
+  RETURN QUERY SELECT v_s.id, v_now, 'Asking Shippo for the refund.'::text;
+END
+$fn$;
+REVOKE EXECUTE ON FUNCTION storefront.shop_dispatch_refund(bigint, text, text) FROM PUBLIC;
+
 -- later refund outcomes on a voided Shippo label (requested → success / error)
 DROP FUNCTION IF EXISTS storefront.shop_set_refund_status(bigint, text, text, text, text, text);
 CREATE FUNCTION storefront.shop_set_refund_status(p_seller_id bigint, p_actor text, p_shipment_id text, p_refund_status text, p_refund_object_id text, p_note text)
@@ -1191,6 +1234,14 @@ BEGIN
   END IF;
   IF v_s.key_fingerprint IS NOT NULL AND v_s.key_fingerprint IS DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) THEN
     RAISE EXCEPTION 'The Shippo key changed since this label was bought (it was on the key ending …%). Put that key back in Settings to manage its refund, or message the organizers.', v_s.key_last4
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  -- an accepted request is never overwritten by a duplicate's refusal, and a
+  -- settled refund is final: requested → success | error only; success → success
+  IF (v_s.refund_status = 'requested' AND v_refund IN ('unavailable', 'requested') AND v_obj IS DISTINCT FROM v_s.refund_object_id)
+     OR (v_s.refund_status = 'requested' AND v_refund = 'unavailable')
+     OR (v_s.refund_status = 'success' AND v_refund <> 'success') THEN
+    RAISE EXCEPTION 'This label''s refund is already %. Check Shippo for its outcome instead of recording a new one.', v_s.refund_status
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
   UPDATE storefront.store_shipments
@@ -1699,6 +1750,12 @@ DROP FUNCTION IF EXISTS storefront.portal_void_shipment(text, text, text, text);
 CREATE FUNCTION storefront.portal_void_shipment(p_email text, p_shipment_id text, p_refund_status text, p_refund_object_id text) RETURNS SETOF storefront.shop_void_result
 LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
   SELECT * FROM storefront.shop_void_shipment(storefront.portal_resolve_seller(p_email), storefront.portal_actor(p_email), p_shipment_id, p_refund_status, p_refund_object_id)
+$fn$;
+
+DROP FUNCTION IF EXISTS storefront.portal_dispatch_refund(text, text);
+CREATE FUNCTION storefront.portal_dispatch_refund(p_email text, p_shipment_id text) RETURNS SETOF storefront.shop_label_dispatch_result
+LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
+  SELECT * FROM storefront.shop_dispatch_refund(storefront.portal_resolve_seller(p_email), storefront.portal_actor(p_email), p_shipment_id)
 $fn$;
 
 DROP FUNCTION IF EXISTS storefront.portal_set_refund_status(text, text, text, text, text);
