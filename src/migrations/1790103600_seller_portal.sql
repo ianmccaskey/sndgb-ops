@@ -341,7 +341,7 @@ CREATE TYPE storefront.shop_shipment_row AS (
     rate_amount numeric, label_url text, label_cost_usd numeric, shippo_rate_id text, shippo_transaction_id text,
     created_by text, created_at timestamptz, recorded_at timestamptz, cancelled_at timestamptz, cancelled_by text,
     cancel_reason text, refund_status text, refund_object_id text, refund_note text, refund_recorded_at timestamptz, is_live boolean,
-    key_last4 text, key_matches_current boolean);
+    key_last4 text, key_matches_current boolean, dispatched_at timestamptz);
 
 DROP TYPE IF EXISTS storefront.shop_order_result CASCADE;
 CREATE TYPE storefront.shop_order_result AS (
@@ -349,6 +349,9 @@ CREATE TYPE storefront.shop_order_result AS (
 
 DROP TYPE IF EXISTS storefront.shop_label_begin_result CASCADE;
 CREATE TYPE storefront.shop_label_begin_result AS (shipment_id bigint, created_at timestamptz, message text);
+
+DROP TYPE IF EXISTS storefront.shop_label_dispatch_result CASCADE;
+CREATE TYPE storefront.shop_label_dispatch_result AS (shipment_id bigint, dispatched_at timestamptz, message text);
 
 DROP TYPE IF EXISTS storefront.shop_label_result CASCADE;
 CREATE TYPE storefront.shop_label_result AS (
@@ -669,18 +672,13 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, p
 $fn$;
 REVOKE EXECUTE ON FUNCTION storefront.shop_order_counts(bigint) FROM PUBLIC;
 
--- the shop's orders, newest first. The buyer's email is never selected; the
--- ship-to comes back NULL outside its window (shop_ship_to_visible).
-DROP FUNCTION IF EXISTS storefront.shop_list_orders(bigint, text, text);
-CREATE FUNCTION storefront.shop_list_orders(p_seller_id bigint, p_status text DEFAULT '', p_limit text DEFAULT '100') RETURNS SETOF storefront.shop_order_row
-LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
-DECLARE v_status text := lower(btrim(COALESCE(p_status, ''))); v_limit int;
-BEGIN
-  IF v_status <> '' AND v_status NOT IN ('unpaid', 'payment_submitted', 'paid', 'shipped', 'delivered', 'cancelled') THEN
-    RAISE EXCEPTION 'Unknown order status filter.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:status';
-  END IF;
-  v_limit := LEAST(200, GREATEST(1, CASE WHEN btrim(COALESCE(p_limit, '')) ~ '^[0-9]{1,3}$' THEN btrim(p_limit)::int ELSE 100 END));
-  RETURN QUERY
+-- the shop's orders, newest first (by id — identities are monotonic with
+-- creation), a page at a time: p_before_id is the cursor (the last id of the
+-- previous page), p_limit capped at 200. The buyer's email is never selected;
+-- the ship-to comes back NULL outside its window (shop_ship_to_visible).
+DROP FUNCTION IF EXISTS storefront.shop_order_rows(bigint, text, int, bigint, bigint);
+CREATE FUNCTION storefront.shop_order_rows(p_seller_id bigint, p_status text, p_limit int, p_before_id bigint, p_order_id bigint) RETURNS SETOF storefront.shop_order_row
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
     SELECT o.id, o.order_number, o.listing_id, o.listing_title_snapshot, o.qty,
            o.unit_price_usd, o.shipping_fee_usd, o.total_usd, o.fee_usd, o.payment_rail::text,
            o.status::text, o.telegram_username, o.discord_username, o.buyer_note,
@@ -693,12 +691,38 @@ BEGIN
       FROM storefront.store_orders o
       CROSS JOIN LATERAL (SELECT storefront.shop_ship_to_visible(o.status, o.shipped_at, o.delivered_at) AS visible) v
       LEFT JOIN storefront.store_shipments sh ON sh.store_order_id = o.id AND sh.cancelled_at IS NULL
-     WHERE o.seller_id = p_seller_id AND (v_status = '' OR o.status::text = v_status)
-     ORDER BY o.created_at DESC, o.id DESC
-     LIMIT v_limit;
+     WHERE o.seller_id = p_seller_id
+       AND (p_status = '' OR o.status::text = p_status)
+       AND (p_before_id IS NULL OR o.id < p_before_id)
+       AND (p_order_id IS NULL OR o.id = p_order_id)
+     ORDER BY o.id DESC
+     LIMIT p_limit
+$fn$;
+REVOKE EXECUTE ON FUNCTION storefront.shop_order_rows(bigint, text, int, bigint, bigint) FROM PUBLIC;
+
+DROP FUNCTION IF EXISTS storefront.shop_list_orders(bigint, text, text);
+DROP FUNCTION IF EXISTS storefront.shop_list_orders(bigint, text, text, text);
+CREATE FUNCTION storefront.shop_list_orders(p_seller_id bigint, p_status text DEFAULT '', p_limit text DEFAULT '100', p_before_id text DEFAULT '') RETURNS SETOF storefront.shop_order_row
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
+DECLARE v_status text := lower(btrim(COALESCE(p_status, ''))); v_limit int; v_before bigint;
+BEGIN
+  IF v_status <> '' AND v_status NOT IN ('unpaid', 'payment_submitted', 'paid', 'shipped', 'delivered', 'cancelled') THEN
+    RAISE EXCEPTION 'Unknown order status filter.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:status';
+  END IF;
+  v_limit := LEAST(200, GREATEST(1, CASE WHEN btrim(COALESCE(p_limit, '')) ~ '^[0-9]{1,3}$' THEN btrim(p_limit)::int ELSE 100 END));
+  v_before := CASE WHEN btrim(COALESCE(p_before_id, '')) ~ '^[1-9][0-9]{0,17}$' THEN btrim(p_before_id)::bigint END;
+  RETURN QUERY SELECT * FROM storefront.shop_order_rows(p_seller_id, v_status, v_limit, v_before, NULL);
 END
 $fn$;
-REVOKE EXECUTE ON FUNCTION storefront.shop_list_orders(bigint, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION storefront.shop_list_orders(bigint, text, text, text) FROM PUBLIC;
+
+-- one order, for the drawer: independent of any list page
+DROP FUNCTION IF EXISTS storefront.shop_get_order(bigint, text);
+CREATE FUNCTION storefront.shop_get_order(p_seller_id bigint, p_order_id text) RETURNS SETOF storefront.shop_order_row
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
+  SELECT * FROM storefront.shop_order_rows(p_seller_id, '', 1, NULL, storefront.shop_parse_id(p_order_id, 'order'))
+$fn$;
+REVOKE EXECUTE ON FUNCTION storefront.shop_get_order(bigint, text) FROM PUBLIC;
 
 -- every shipment row of one order (live first). The label PDF carries the
 -- buyer's address, so its URL follows the ship-to window too.
@@ -716,7 +740,8 @@ BEGIN
            sh.cancel_reason, sh.refund_status, sh.refund_object_id, sh.refund_note, sh.refund_recorded_at,
            sh.cancelled_at IS NULL,
            sh.key_last4,
-           CASE WHEN sh.key_fingerprint IS NULL THEN NULL ELSE sh.key_fingerprint IS NOT DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) END
+           CASE WHEN sh.key_fingerprint IS NULL THEN NULL ELSE sh.key_fingerprint IS NOT DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) END,
+           sh.purchase_started_at
       FROM storefront.store_shipments sh
       JOIN storefront.store_orders o ON o.id = sh.store_order_id
      WHERE sh.store_order_id = v_id AND sh.seller_id = p_seller_id AND o.seller_id = p_seller_id
@@ -820,7 +845,7 @@ REVOKE EXECUTE ON FUNCTION storefront.shop_mark_delivered(bigint, text, text) FR
 -- A label purchase starts HERE, before the money POST: the draft row holds
 -- the rate so a second operator, a double click or a dead tab cannot buy a
 -- second label (one live row per order, one row per rate). Nothing has been
--- charged when this refuses.
+-- charged when this refuses. The draft is UNSENT until shop_dispatch_label.
 DROP FUNCTION IF EXISTS storefront.shop_begin_label(bigint, text, text, text, text, text, text);
 DROP FUNCTION IF EXISTS storefront.shop_begin_label(bigint, text, text, text, text, text, text, text);
 CREATE FUNCTION storefront.shop_begin_label(p_seller_id bigint, p_actor text, p_order_id text, p_rate_id text, p_rate_amount text, p_carrier text, p_servicelevel text, p_key_fingerprint text)
@@ -869,14 +894,17 @@ BEGIN
   SELECT * INTO v_live FROM storefront.store_shipments sh WHERE sh.store_order_id = v_o.id AND sh.cancelled_at IS NULL FOR UPDATE;
   IF FOUND THEN
     RAISE EXCEPTION '%', CASE WHEN v_live.recorded_at IS NULL
-      THEN 'A label for this order was started ' || to_char(v_live.created_at AT TIME ZONE 'America/New_York', 'Mon DD HH24:MI') || ' by ' || v_live.created_by || '. Finish it, or discard that draft, first.'
+      THEN 'A label for this order was started ' || to_char(v_live.created_at AT TIME ZONE 'America/New_York', 'Mon DD HH24:MI') || ' by ' || v_live.created_by
+           || CASE WHEN v_live.purchase_started_at IS NULL THEN ' and never sent — discard that draft first.' ELSE ' and sent to Shippo — finish it with "Check Shippo & retry" first.' END
       ELSE 'This order already has a shipment recorded. Reload the page.' END
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
 
   BEGIN
-    INSERT INTO storefront.store_shipments (store_order_id, seller_id, source, shippo_rate_id, rate_amount, carrier, servicelevel, created_by, purchase_started_at, key_fingerprint, key_last4)
-    VALUES (v_o.id, p_seller_id, 'shippo', v_rate, v_amt, v_carrier, NULLIF(btrim(COALESCE(p_servicelevel, '')), ''), p_actor, now(),
+    -- purchase_started_at stays NULL: the draft is UNSENT until shop_dispatch_label
+    -- stamps it, right before the browser sends the money POST
+    INSERT INTO storefront.store_shipments (store_order_id, seller_id, source, shippo_rate_id, rate_amount, carrier, servicelevel, created_by, key_fingerprint, key_last4)
+    VALUES (v_o.id, p_seller_id, 'shippo', v_rate, v_amt, v_carrier, NULLIF(btrim(COALESCE(p_servicelevel, '')), ''), p_actor,
             encode(sha256(convert_to(v_key, 'UTF8')), 'hex'), right(v_key, 4))
     RETURNING id, created_at INTO v_ship, v_created;
   EXCEPTION WHEN unique_violation THEN
@@ -889,6 +917,54 @@ BEGIN
 END
 $fn$;
 REVOKE EXECUTE ON FUNCTION storefront.shop_begin_label(bigint, text, text, text, text, text, text, text) FROM PUBLIC;
+
+-- The browser is about to send the money POST for this draft: stamp it as
+-- dispatched, atomically, so from this moment the draft can no longer be
+-- discarded as "unsent" by any tab (Codex 2026-11-08: a second tab of the
+-- same login could otherwise discard a purchase in flight). Re-verifies the
+-- key the browser will charge. Refuses a draft that was already dispatched
+-- (that POST may be in flight — use "Check Shippo & retry") or discarded.
+DROP FUNCTION IF EXISTS storefront.shop_dispatch_label(bigint, text, text, text);
+CREATE FUNCTION storefront.shop_dispatch_label(p_seller_id bigint, p_actor text, p_shipment_id text, p_key_fingerprint text)
+RETURNS SETOF storefront.shop_label_dispatch_result
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
+DECLARE v_sid bigint; v_order_id bigint; v_s storefront.store_shipments%ROWTYPE; v_key text; v_now timestamptz := now();
+BEGIN
+  PERFORM storefront.shop_lock_seller(p_seller_id);
+  v_sid := storefront.shop_parse_id(p_shipment_id, 'label');
+  IF lower(btrim(COALESCE(p_key_fingerprint, ''))) !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'Quote again before buying.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:keyFingerprint';
+  END IF;
+  SELECT f.shippo_api_key INTO v_key FROM storefront.seller_ship_from f WHERE f.seller_id = p_seller_id FOR UPDATE;
+  IF v_key IS NULL OR lower(btrim(p_key_fingerprint)) <> encode(sha256(convert_to(v_key, 'UTF8')), 'hex') THEN
+    RAISE EXCEPTION 'The shop''s Shippo key changed while you were quoting. Quote again.' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  SELECT sh.store_order_id INTO v_order_id FROM storefront.store_shipments sh WHERE sh.id = v_sid AND sh.seller_id = p_seller_id;
+  IF v_order_id IS NULL THEN
+    RAISE EXCEPTION 'That label isn''t on your list. Reload the page.' USING ERRCODE = 'no_data_found';
+  END IF;
+  PERFORM 1 FROM storefront.store_orders o WHERE o.id = v_order_id AND o.seller_id = p_seller_id FOR UPDATE;
+  SELECT * INTO v_s FROM storefront.store_shipments sh WHERE sh.id = v_sid AND sh.seller_id = p_seller_id FOR UPDATE;
+  IF v_s.cancelled_at IS NOT NULL THEN
+    RAISE EXCEPTION 'This draft was discarded. Quote again.' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF v_s.source <> 'shippo' OR v_s.recorded_at IS NOT NULL THEN
+    RAISE EXCEPTION 'This shipment is already recorded.' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF v_s.purchase_started_at IS NOT NULL THEN
+    RAISE EXCEPTION 'This label''s purchase was already sent to Shippo at %. Use "Check Shippo & retry" instead of buying again.',
+      to_char(v_s.purchase_started_at AT TIME ZONE 'America/New_York', 'HH24:MI') USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF v_s.key_fingerprint IS DISTINCT FROM lower(btrim(p_key_fingerprint)) THEN
+    RAISE EXCEPTION 'This draft was started on a different Shippo key. Discard it and quote again.' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  UPDATE storefront.store_shipments SET purchase_started_at = v_now WHERE id = v_s.id;
+  PERFORM storefront.shop_audit('storefront.store_shipments', v_s.id, 'label_purchase_dispatched', p_actor, NULL,
+    jsonb_build_object('orderId', v_order_id, 'rateId', v_s.shippo_rate_id, 'keyLast4', v_s.key_last4));
+  RETURN QUERY SELECT v_s.id, v_now, 'Sending the purchase to Shippo.'::text;
+END
+$fn$;
+REVOKE EXECUTE ON FUNCTION storefront.shop_dispatch_label(bigint, text, text, text) FROM PUBLIC;
 
 -- The label was bought: record it on the draft and, if the order is still
 -- paid, ship the order in the same call. It never refuses because the order
@@ -1007,28 +1083,27 @@ BEGIN
     -- app's own shipment pushes carry. A label that still lands on a
     -- discarded draft is recorded by shop_record_label as a cancelled row
     -- awaiting its refund, so bought postage is never lost (Codex 2026-11-08).
-    IF v_refund = 'refused' THEN
-      v_reason := 'purchase refused by Shippo';
+    IF v_s.purchase_started_at IS NULL THEN
+      -- never dispatched: shop_dispatch_label stamps a draft right before the
+      -- browser sends the money POST, so no POST was ever sent for this one and
+      -- nothing can have been charged — any tab may discard it at once
+      v_reason := CASE WHEN v_refund = 'refused' THEN 'purchase refused by Shippo' ELSE 'purchase never sent' END;
     ELSIF v_refund = 'unsent' THEN
-      -- the flow that started this draft was abandoned before the money POST
-      -- (inputs changed, operator backed out). Only that flow knows, so only the
-      -- operator who started the draft may say so; another operator waits the
-      -- 10 minutes or proves it on Shippo.
-      IF v_s.created_by IS DISTINCT FROM p_actor THEN
-        RAISE EXCEPTION 'This label was started by %; only they can discard it as unsent. Wait until % or use "Check Shippo & retry".',
-          v_s.created_by, to_char((COALESCE(v_s.purchase_started_at, v_s.created_at) + interval '10 minutes') AT TIME ZONE 'America/New_York', 'HH24:MI')
-          USING ERRCODE = 'object_not_in_prerequisite_state';
-      END IF;
-      v_reason := 'purchase never sent';
+      RAISE EXCEPTION 'This label''s purchase was sent to Shippo at %. Use "Check Shippo & retry", or wait until %.',
+        to_char(v_s.purchase_started_at AT TIME ZONE 'America/New_York', 'HH24:MI'),
+        to_char((v_s.purchase_started_at + interval '10 minutes') AT TIME ZONE 'America/New_York', 'HH24:MI')
+        USING ERRCODE = 'object_not_in_prerequisite_state';
+    ELSIF v_refund = 'refused' THEN
+      v_reason := 'purchase refused by Shippo';
     ELSIF v_s.key_fingerprint IS NOT NULL AND v_s.key_fingerprint IS DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) THEN
       -- "no transaction found" was looked up on a different Shippo account than
       -- the one this label was started on: it proves nothing about the postage
       RAISE EXCEPTION 'The Shippo key changed since this label was started (it was on the key ending …%). Put that key back in Settings to check Shippo, or message the organizers.', v_s.key_last4
         USING ERRCODE = 'object_not_in_prerequisite_state';
-    ELSIF COALESCE(v_s.purchase_started_at, v_s.created_at) > now() - interval '10 minutes' THEN
-      RAISE EXCEPTION 'This label was started at % by % and its purchase may still be in flight. Wait until % or use "Check Shippo & retry".',
-        to_char(COALESCE(v_s.purchase_started_at, v_s.created_at) AT TIME ZONE 'America/New_York', 'HH24:MI'), v_s.created_by,
-        to_char((COALESCE(v_s.purchase_started_at, v_s.created_at) + interval '10 minutes') AT TIME ZONE 'America/New_York', 'HH24:MI')
+    ELSIF v_s.purchase_started_at > now() - interval '10 minutes' THEN
+      RAISE EXCEPTION 'This label was sent to Shippo at % by % and its purchase may still be in flight. Wait until % or use "Check Shippo & retry".',
+        to_char(v_s.purchase_started_at AT TIME ZONE 'America/New_York', 'HH24:MI'), v_s.created_by,
+        to_char((v_s.purchase_started_at + interval '10 minutes') AT TIME ZONE 'America/New_York', 'HH24:MI')
         USING ERRCODE = 'object_not_in_prerequisite_state';
     ELSE
       v_reason := 'draft discarded (no label)';
@@ -1562,9 +1637,16 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, p
 $fn$;
 
 DROP FUNCTION IF EXISTS storefront.portal_list_orders(text, text, text);
-CREATE FUNCTION storefront.portal_list_orders(p_email text, p_status text DEFAULT '', p_limit text DEFAULT '100') RETURNS SETOF storefront.shop_order_row
+DROP FUNCTION IF EXISTS storefront.portal_list_orders(text, text, text, text);
+CREATE FUNCTION storefront.portal_list_orders(p_email text, p_status text DEFAULT '', p_limit text DEFAULT '100', p_before_id text DEFAULT '') RETURNS SETOF storefront.shop_order_row
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
-  SELECT * FROM storefront.shop_list_orders(storefront.portal_resolve_seller(p_email), p_status, p_limit)
+  SELECT * FROM storefront.shop_list_orders(storefront.portal_resolve_seller(p_email), p_status, p_limit, p_before_id)
+$fn$;
+
+DROP FUNCTION IF EXISTS storefront.portal_get_order(text, text);
+CREATE FUNCTION storefront.portal_get_order(p_email text, p_order_id text) RETURNS SETOF storefront.shop_order_row
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
+  SELECT * FROM storefront.shop_get_order(storefront.portal_resolve_seller(p_email), p_order_id)
 $fn$;
 
 DROP FUNCTION IF EXISTS storefront.portal_list_shipments(text, text);
@@ -1590,6 +1672,12 @@ DROP FUNCTION IF EXISTS storefront.portal_begin_label(text, text, text, text, te
 CREATE FUNCTION storefront.portal_begin_label(p_email text, p_order_id text, p_rate_id text, p_rate_amount text, p_carrier text, p_servicelevel text, p_key_fingerprint text) RETURNS SETOF storefront.shop_label_begin_result
 LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
   SELECT * FROM storefront.shop_begin_label(storefront.portal_resolve_seller(p_email), storefront.portal_actor(p_email), p_order_id, p_rate_id, p_rate_amount, p_carrier, p_servicelevel, p_key_fingerprint)
+$fn$;
+
+DROP FUNCTION IF EXISTS storefront.portal_dispatch_label(text, text, text);
+CREATE FUNCTION storefront.portal_dispatch_label(p_email text, p_shipment_id text, p_key_fingerprint text) RETURNS SETOF storefront.shop_label_dispatch_result
+LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
+  SELECT * FROM storefront.shop_dispatch_label(storefront.portal_resolve_seller(p_email), storefront.portal_actor(p_email), p_shipment_id, p_key_fingerprint)
 $fn$;
 
 DROP FUNCTION IF EXISTS storefront.portal_record_label(text, text, text, text, text, text, text);
