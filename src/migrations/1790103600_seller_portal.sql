@@ -1116,11 +1116,19 @@ BEGIN
     IF v_s.source = 'manual' THEN
       v_refund := 'not_applicable'; v_obj := NULL; v_reason := 'shipment voided by seller'; v_action := 'shipment_voided_by_seller';
     ELSE
-      IF v_refund NOT IN ('requested', 'unavailable', 'error') THEN
-        RAISE EXCEPTION 'Request the Shippo refund first; its outcome is recorded with the void.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:refundStatus';
+      -- 'pending' = void NOW, request the refund AFTER (the app's normal order:
+      -- the database settles eligibility — not delivered, still the label's
+      -- tracking — before any Shippo call, so an accepted refund can never be
+      -- left unrecorded by a void that is then refused; Codex 2026-11-08).
+      -- The outcome then arrives through shop_set_refund_status. An outcome
+      -- already known (reconciled before the void) may still be passed.
+      IF v_refund NOT IN ('pending', 'requested', 'unavailable', 'error') THEN
+        RAISE EXCEPTION 'Void the label first, then request its refund.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:refundStatus';
       END IF;
       v_reason := 'label voided by seller'; v_action := 'shipment_voided_by_seller';
-      IF v_s.key_fingerprint IS NOT NULL AND v_s.key_fingerprint IS DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) THEN
+      IF v_refund = 'pending' THEN
+        v_refund := NULL; v_obj := NULL; v_note := 'voided — refund not requested yet';
+      ELSIF v_s.key_fingerprint IS NOT NULL AND v_s.key_fingerprint IS DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) THEN
         -- the refund outcome was obtained on another Shippo account than the one
         -- that bought the label: it proves nothing. The void still happens (the
         -- order can be re-shipped now), the refund stays unresolved until the
@@ -1152,7 +1160,8 @@ BEGIN
     (CASE WHEN v_s.source = 'shippo' AND v_s.recorded_at IS NULL THEN 'Draft discarded. Quote again when you''re ready.'
           WHEN v_reset THEN 'Shipment voided — ' || v_o.order_number || ' is back on To ship.'
           ELSE 'Shipment voided. The order''s tracking was changed elsewhere, so the order was left as it is.' END)
-    || CASE WHEN v_key_changed THEN ' The refund is not recorded: the label was bought on the Shippo key ending …' || COALESCE(v_s.key_last4, '????') || '; put that key back to request it.' ELSE '' END;
+    || CASE WHEN v_key_changed THEN ' The refund is not recorded: the label was bought on the Shippo key ending …' || COALESCE(v_s.key_last4, '????') || '; put that key back to request it.'
+            WHEN v_note = 'voided — refund not requested yet' THEN ' Requesting the label refund next.' ELSE '' END;
 END
 $fn$;
 REVOKE EXECUTE ON FUNCTION storefront.shop_void_shipment(bigint, text, text, text, text) FROM PUBLIC;
