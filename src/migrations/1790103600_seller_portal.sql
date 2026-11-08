@@ -822,7 +822,8 @@ REVOKE EXECUTE ON FUNCTION storefront.shop_mark_delivered(bigint, text, text) FR
 -- second label (one live row per order, one row per rate). Nothing has been
 -- charged when this refuses.
 DROP FUNCTION IF EXISTS storefront.shop_begin_label(bigint, text, text, text, text, text, text);
-CREATE FUNCTION storefront.shop_begin_label(p_seller_id bigint, p_actor text, p_order_id text, p_rate_id text, p_rate_amount text, p_carrier text, p_servicelevel text)
+DROP FUNCTION IF EXISTS storefront.shop_begin_label(bigint, text, text, text, text, text, text, text);
+CREATE FUNCTION storefront.shop_begin_label(p_seller_id bigint, p_actor text, p_order_id text, p_rate_id text, p_rate_amount text, p_carrier text, p_servicelevel text, p_key_fingerprint text)
 RETURNS SETOF storefront.shop_label_begin_result
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
 DECLARE v_id bigint; v_o storefront.store_orders%ROWTYPE; v_rate text := lower(btrim(COALESCE(p_rate_id, '')));
@@ -838,9 +839,19 @@ BEGIN
     RAISE EXCEPTION 'Pick the carrier.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:carrier';
   END IF;
   v_amt := storefront.shop_parse_usd(p_rate_amount, 'rate', false, true, 1000, 'The rate has no price. Quote again.', 'That rate is over $1,000. Quote again.');
-  SELECT f.shippo_api_key INTO v_key FROM storefront.seller_ship_from f WHERE f.seller_id = p_seller_id;
+  -- the key the browser quoted with and is about to charge: its sha256, computed
+  -- there. Read the shop's key under the row lock and refuse if it is not that
+  -- key — another operator saved a different key between the quote and this
+  -- click — so the draft is only ever stamped with the account that pays.
+  SELECT f.shippo_api_key INTO v_key FROM storefront.seller_ship_from f WHERE f.seller_id = p_seller_id FOR UPDATE;
   IF v_key IS NULL THEN
     RAISE EXCEPTION 'Add your ship-from address and Shippo key in Settings before buying a label.' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF lower(btrim(COALESCE(p_key_fingerprint, ''))) !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'Quote again before buying.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:keyFingerprint';
+  END IF;
+  IF lower(btrim(p_key_fingerprint)) <> encode(sha256(convert_to(v_key, 'UTF8')), 'hex') THEN
+    RAISE EXCEPTION 'The shop''s Shippo key changed while you were quoting. Quote again.' USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
 
   SELECT * INTO v_o FROM storefront.store_orders o WHERE o.id = v_id AND o.seller_id = p_seller_id FOR UPDATE;
@@ -877,7 +888,7 @@ BEGIN
   RETURN QUERY SELECT v_ship, v_created, 'Label started.'::text;
 END
 $fn$;
-REVOKE EXECUTE ON FUNCTION storefront.shop_begin_label(bigint, text, text, text, text, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION storefront.shop_begin_label(bigint, text, text, text, text, text, text, text) FROM PUBLIC;
 
 -- The label was bought: record it on the draft and, if the order is still
 -- paid, ship the order in the same call. It never refuses because the order
@@ -998,6 +1009,17 @@ BEGIN
     -- awaiting its refund, so bought postage is never lost (Codex 2026-11-08).
     IF v_refund = 'refused' THEN
       v_reason := 'purchase refused by Shippo';
+    ELSIF v_refund = 'unsent' THEN
+      -- the flow that started this draft was abandoned before the money POST
+      -- (inputs changed, operator backed out). Only that flow knows, so only the
+      -- operator who started the draft may say so; another operator waits the
+      -- 10 minutes or proves it on Shippo.
+      IF v_s.created_by IS DISTINCT FROM p_actor THEN
+        RAISE EXCEPTION 'This label was started by %; only they can discard it as unsent. Wait until % or use "Check Shippo & retry".',
+          v_s.created_by, to_char((COALESCE(v_s.purchase_started_at, v_s.created_at) + interval '10 minutes') AT TIME ZONE 'America/New_York', 'HH24:MI')
+          USING ERRCODE = 'object_not_in_prerequisite_state';
+      END IF;
+      v_reason := 'purchase never sent';
     ELSIF v_s.key_fingerprint IS NOT NULL AND v_s.key_fingerprint IS DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) THEN
       -- "no transaction found" was looked up on a different Shippo account than
       -- the one this label was started on: it proves nothing about the postage
@@ -1564,9 +1586,10 @@ LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront,
 $fn$;
 
 DROP FUNCTION IF EXISTS storefront.portal_begin_label(text, text, text, text, text, text);
-CREATE FUNCTION storefront.portal_begin_label(p_email text, p_order_id text, p_rate_id text, p_rate_amount text, p_carrier text, p_servicelevel text) RETURNS SETOF storefront.shop_label_begin_result
+DROP FUNCTION IF EXISTS storefront.portal_begin_label(text, text, text, text, text, text, text);
+CREATE FUNCTION storefront.portal_begin_label(p_email text, p_order_id text, p_rate_id text, p_rate_amount text, p_carrier text, p_servicelevel text, p_key_fingerprint text) RETURNS SETOF storefront.shop_label_begin_result
 LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
-  SELECT * FROM storefront.shop_begin_label(storefront.portal_resolve_seller(p_email), storefront.portal_actor(p_email), p_order_id, p_rate_id, p_rate_amount, p_carrier, p_servicelevel)
+  SELECT * FROM storefront.shop_begin_label(storefront.portal_resolve_seller(p_email), storefront.portal_actor(p_email), p_order_id, p_rate_id, p_rate_amount, p_carrier, p_servicelevel, p_key_fingerprint)
 $fn$;
 
 DROP FUNCTION IF EXISTS storefront.portal_record_label(text, text, text, text, text, text, text);
