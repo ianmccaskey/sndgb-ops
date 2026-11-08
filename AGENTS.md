@@ -33,8 +33,11 @@ where the code fails to honour one; do not propose replacing the decision.
   (`1790103600`). Every rule a shop operator can exercise — mark shipped /
   fix tracking / mark delivered, the draft-first Shippo label (a
   `store_shipments` row BEFORE the money POST, the label recorded and the
-  order shipped in one call, a void that returns the order to paid only
-  while its tracking is still that label's), listings and stock
+  order shipped in one call, a draft discarded only once Shippo refused it or
+  10 minutes passed — a purchase may be in flight in another tab — and a
+  label that still lands on a discarded draft recorded as a cancelled row
+  awaiting its refund, a void that returns the order to paid only while its
+  tracking is still that label's), listings and stock
   (compare-and-set), payout wallets, the ship-from address and the shop's
   OWN Shippo key — lives in a `storefront.shop_*(p_seller_id, p_actor, …)`
   core function (owner-only; P2 Collective Orders calls these for the

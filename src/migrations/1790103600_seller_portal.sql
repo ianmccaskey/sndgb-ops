@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS storefront.store_shipments (
     source <> 'manual' OR refund_status IS NULL OR refund_status = 'not_applicable')
 );
 COMMENT ON TABLE storefront.store_shipments IS
-  'What a shop recorded for a store order: a manual carrier+tracking, or a Shippo label (a draft row BEFORE the money POST, recorded after). store_orders stays the buyer-facing truth. One live (uncancelled) row per order.';
+  'What a shop recorded for a store order: a manual carrier+tracking, or a Shippo label (a draft row BEFORE the money POST, recorded after). store_orders stays the buyer-facing truth. One live (uncancelled) row per order. A cancelled, recorded Shippo row with refund_status NULL is a late label whose refund has not been requested yet.';
 
 -- drafts count: two operators cannot buy two labels for one order
 CREATE UNIQUE INDEX IF NOT EXISTS store_shipments_one_live ON storefront.store_shipments (store_order_id) WHERE cancelled_at IS NULL;
@@ -250,19 +250,24 @@ CREATE TRIGGER store_shipments_updated_at
 -- once cancelled only the refund columns move; a recorded label never changes; a cancel never clears
 CREATE OR REPLACE FUNCTION storefront.store_shipments_immutable() RETURNS trigger
 LANGUAGE plpgsql AS $fn$
+DECLARE v_late boolean;
 BEGIN
   IF OLD.cancelled_at IS NOT NULL THEN
     IF NEW.cancelled_at IS DISTINCT FROM OLD.cancelled_at OR NEW.cancelled_by IS DISTINCT FROM OLD.cancelled_by
        OR NEW.cancel_reason IS DISTINCT FROM OLD.cancel_reason THEN
       RAISE EXCEPTION 'shipment % cancel record is immutable', OLD.id USING ERRCODE = 'check_violation';
     END IF;
-    IF NEW.source IS DISTINCT FROM OLD.source OR NEW.carrier IS DISTINCT FROM OLD.carrier OR NEW.servicelevel IS DISTINCT FROM OLD.servicelevel
-       OR NEW.tracking_number IS DISTINCT FROM OLD.tracking_number OR NEW.shippo_rate_id IS DISTINCT FROM OLD.shippo_rate_id
-       OR NEW.rate_amount IS DISTINCT FROM OLD.rate_amount OR NEW.shippo_transaction_id IS DISTINCT FROM OLD.shippo_transaction_id
-       OR NEW.label_url IS DISTINCT FROM OLD.label_url OR NEW.label_cost_usd IS DISTINCT FROM OLD.label_cost_usd
+    -- the one allowed fill: a late Shippo label landing on a discarded draft
+    -- (shop_record_label) — its label columns and recorded_at, once
+    v_late := OLD.source = 'shippo' AND OLD.recorded_at IS NULL AND NEW.recorded_at IS NOT NULL;
+    IF NEW.source IS DISTINCT FROM OLD.source OR NEW.servicelevel IS DISTINCT FROM OLD.servicelevel
+       OR NEW.shippo_rate_id IS DISTINCT FROM OLD.shippo_rate_id OR NEW.rate_amount IS DISTINCT FROM OLD.rate_amount
        OR NEW.created_by IS DISTINCT FROM OLD.created_by OR NEW.created_at IS DISTINCT FROM OLD.created_at
-       OR NEW.purchase_started_at IS DISTINCT FROM OLD.purchase_started_at OR NEW.recorded_at IS DISTINCT FROM OLD.recorded_at
-       OR NEW.store_order_id IS DISTINCT FROM OLD.store_order_id OR NEW.seller_id IS DISTINCT FROM OLD.seller_id THEN
+       OR NEW.purchase_started_at IS DISTINCT FROM OLD.purchase_started_at
+       OR NEW.store_order_id IS DISTINCT FROM OLD.store_order_id OR NEW.seller_id IS DISTINCT FROM OLD.seller_id
+       OR (NOT v_late AND (NEW.carrier IS DISTINCT FROM OLD.carrier OR NEW.tracking_number IS DISTINCT FROM OLD.tracking_number
+           OR NEW.shippo_transaction_id IS DISTINCT FROM OLD.shippo_transaction_id OR NEW.label_url IS DISTINCT FROM OLD.label_url
+           OR NEW.label_cost_usd IS DISTINCT FROM OLD.label_cost_usd OR NEW.recorded_at IS DISTINCT FROM OLD.recorded_at)) THEN
       RAISE EXCEPTION 'shipment % was cancelled — only its refund outcome may change', OLD.id USING ERRCODE = 'check_violation';
     END IF;
   END IF;
@@ -456,13 +461,19 @@ REVOKE EXECUTE ON FUNCTION storefront.shop_parse_id(text, text) FROM PUBLIC;
 DROP FUNCTION IF EXISTS storefront.shop_parse_usd(text, text, boolean, boolean, numeric, text, text);
 CREATE FUNCTION storefront.shop_parse_usd(p_raw text, p_field text, p_blank_is_zero boolean, p_zero_ok boolean, p_max numeric, p_shape_msg text, p_range_msg text)
 RETURNS numeric LANGUAGE plpgsql IMMUTABLE AS $fn$
-DECLARE s text := regexp_replace(COALESCE(p_raw, ''), '[$,\s]', '', 'g'); v numeric;
+DECLARE s text := regexp_replace(btrim(COALESCE(p_raw, '')), '^\$\s*', ''); v numeric;
 BEGIN
   IF s = '' THEN
     IF p_blank_is_zero THEN RETURN 0; END IF;
     RAISE EXCEPTION '%', p_shape_msg USING ERRCODE = 'invalid_parameter_value', HINT = 'field:' || p_field;
   END IF;
-  IF s !~ '^([0-9]{1,10})?(\.[0-9]{1,2})?$' OR s !~ '[0-9]' THEN
+  -- the storefront's parseUsdCents: thousands commas only in their places
+  -- ("1,234.50"), at most two decimals; "12,50" is a mistake, not $1,250
+  IF s !~ '^(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,10})?(?:\.[0-9]{1,2})?$' OR s !~ '[0-9]' THEN
+    RAISE EXCEPTION '%', p_shape_msg USING ERRCODE = 'invalid_parameter_value', HINT = 'field:' || p_field;
+  END IF;
+  s := replace(s, ',', '');
+  IF char_length(split_part(s, '.', 1)) > 10 THEN
     RAISE EXCEPTION '%', p_shape_msg USING ERRCODE = 'invalid_parameter_value', HINT = 'field:' || p_field;
   END IF;
   v := ('0' || s)::numeric;
@@ -566,7 +577,7 @@ BEGIN
   RETURN QUERY SELECT v_title, v_mass, v_desc,
     storefront.shop_parse_usd(p_price_usd, 'price', false, false, 100000,
       CASE WHEN btrim(COALESCE(p_price_usd, '')) = '' THEN 'Enter a price in USD.' ELSE 'Enter the price as dollars and cents, like 45 or 45.50.' END,
-      CASE WHEN regexp_replace(COALESCE(p_price_usd, ''), '[$,\s]', '', 'g') ~ '^0*(\.0{1,2})?$' THEN 'Price must be more than $0.' ELSE 'Price must be under $100,000. Check the decimal point.' END),
+      CASE WHEN regexp_replace(COALESCE(p_price_usd, ''), '[$,\s]', '', 'g') ~ '^0+(\.0{1,2})?$|^\.0{1,2}$' THEN 'Price must be more than $0.' ELSE 'Price must be under $100,000. Check the decimal point.' END),
     storefront.shop_parse_usd(p_shipping_usd, 'shipping', true, true, 1000,
       'Enter shipping as dollars and cents, like 8 or 8.50 — or 0 for free.', 'Shipping must be $1,000 or less.'),
     storefront.shop_parse_stock(p_qty, 'qty'),
@@ -897,7 +908,21 @@ BEGIN
     RAISE EXCEPTION 'A different label is already recorded on this shipment. Message the organizers.' USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
   IF v_s.cancelled_at IS NOT NULL THEN
-    RAISE EXCEPTION 'This draft was discarded, but Shippo shows a label was bought. Message the organizers with the transaction id.' USING ERRCODE = 'object_not_in_prerequisite_state';
+    -- a late label on a discarded draft (the POST was in flight when the draft
+    -- was discarded): put the postage in the ledger on the cancelled row —
+    -- refund_status NULL on a cancelled, recorded Shippo row means "refund
+    -- not requested yet" — and leave the order alone
+    UPDATE storefront.store_shipments
+       SET recorded_at = v_now, shippo_transaction_id = v_txn, carrier = v_carrier, tracking_number = v_track, label_url = v_url, label_cost_usd = v_cost,
+           refund_status = NULL, refund_object_id = NULL, refund_recorded_at = NULL,
+           refund_note = 'late label on a discarded draft — request its refund'
+     WHERE id = v_s.id;
+    PERFORM storefront.shop_audit('storefront.store_shipments', v_s.id, 'label_bought_by_seller', p_actor, NULL,
+      jsonb_build_object('orderId', v_o.id, 'orderNumber', v_o.order_number, 'transactionId', v_txn, 'carrier', v_carrier,
+                         'trackingNumber', v_track, 'labelCostUsd', v_cost, 'orderUpdated', false, 'lateOnDiscardedDraft', true));
+    RETURN QUERY SELECT v_s.id, v_o.id, v_o.order_number, v_o.status::text, false, v_now,
+      'This draft had been discarded, but the label was bought — it is recorded; request its refund. Nothing shipped.'::text;
+    RETURN;
   END IF;
 
   UPDATE storefront.store_shipments
@@ -953,8 +978,24 @@ BEGIN
   END IF;
 
   IF v_s.source = 'shippo' AND v_s.recorded_at IS NULL THEN
-    -- a draft: the app proved no label was bought (or never sent the POST)
-    v_refund := 'not_applicable'; v_obj := NULL; v_reason := 'draft discarded (no label)'; v_action := 'label_purchase_abandoned';
+    -- A draft. Its purchase may be in flight in another tab (the POST goes
+    -- out right after begin_label), so a discard is allowed only when Shippo
+    -- REFUSED that purchase ('refused': no label can exist for the rate) or
+    -- when the draft is older than 10 minutes — the lease horizon the Ops
+    -- app's own shipment pushes carry. A label that still lands on a
+    -- discarded draft is recorded by shop_record_label as a cancelled row
+    -- awaiting its refund, so bought postage is never lost (Codex 2026-11-08).
+    IF v_refund = 'refused' THEN
+      v_reason := 'purchase refused by Shippo';
+    ELSIF COALESCE(v_s.purchase_started_at, v_s.created_at) > now() - interval '10 minutes' THEN
+      RAISE EXCEPTION 'This label was started at % by % and its purchase may still be in flight. Wait until % or use "Check Shippo & retry".',
+        to_char(COALESCE(v_s.purchase_started_at, v_s.created_at) AT TIME ZONE 'America/New_York', 'HH24:MI'), v_s.created_by,
+        to_char((COALESCE(v_s.purchase_started_at, v_s.created_at) + interval '10 minutes') AT TIME ZONE 'America/New_York', 'HH24:MI')
+        USING ERRCODE = 'object_not_in_prerequisite_state';
+    ELSE
+      v_reason := 'draft discarded (no label)';
+    END IF;
+    v_refund := 'not_applicable'; v_obj := NULL; v_action := 'label_purchase_abandoned';
   ELSE
     IF v_o.status = 'delivered' THEN
       RAISE EXCEPTION 'This order is marked delivered — that''s a return, not a void.' USING ERRCODE = 'object_not_in_prerequisite_state';
