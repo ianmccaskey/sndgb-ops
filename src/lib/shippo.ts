@@ -522,6 +522,13 @@ export async function findTransactionByRate(http: ShippoHttp, key: string, rateI
     if (matches.some(t => t.status === 'QUEUED' || t.status === 'WAITING')) {
       throw new Error('A purchase for this rate is still processing at Shippo — wait a minute and check again; do NOT re-purchase or delete.');
     }
+    // A match that is a SUCCESS without a label URL, or carries a status
+    // this walk does not know, is evidence of a purchase it cannot read —
+    // it must never fall through to "provably no label" (Codex 2026-11-08,
+    // found in the seller-portal copy of this walk). Fail CLOSED.
+    if (matches.some(t => t.status !== 'ERROR' && !(t.status === 'SUCCESS' && t.label_url))) {
+      throw new Error('Shippo shows a purchase for this rate that could not be read (a success without a label link, or an unknown status) — do NOT re-purchase or delete; find it in the Shippo dashboard.');
+    }
     // an ERROR-status match proves the purchase attempt failed — keep
     // walking in case a later retry succeeded on the same rate
     if (!pageNext) return null; // walked every page — provably no label
