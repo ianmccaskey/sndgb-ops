@@ -971,7 +971,7 @@ RETURNS SETOF storefront.shop_void_result
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
 DECLARE v_sid bigint; v_order_id bigint; v_o storefront.store_orders%ROWTYPE; v_s storefront.store_shipments%ROWTYPE;
         v_refund text := lower(btrim(COALESCE(p_refund_status, ''))); v_obj text := NULLIF(lower(btrim(COALESCE(p_refund_object_id, ''))), '');
-        v_reset boolean := false; v_reason text; v_action text;
+        v_reset boolean := false; v_reason text; v_action text; v_key_changed boolean := false; v_note text;
 BEGIN
   PERFORM storefront.shop_lock_seller(p_seller_id);
   v_sid := storefront.shop_parse_id(p_shipment_id, 'shipment');
@@ -1023,6 +1023,14 @@ BEGIN
         RAISE EXCEPTION 'Request the Shippo refund first; its outcome is recorded with the void.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:refundStatus';
       END IF;
       v_reason := 'label voided by seller'; v_action := 'shipment_voided_by_seller';
+      IF v_s.key_fingerprint IS NOT NULL AND v_s.key_fingerprint IS DISTINCT FROM storefront.shop_key_fingerprint(p_seller_id) THEN
+        -- the refund outcome was obtained on another Shippo account than the one
+        -- that bought the label: it proves nothing. The void still happens (the
+        -- order can be re-shipped now), the refund stays unresolved until the
+        -- original key is back (shop_set_refund_status, same guard).
+        v_key_changed := true; v_refund := NULL; v_obj := NULL;
+        v_note := 'voided while the shop held a different Shippo key — request the refund with the key ending …' || COALESCE(v_s.key_last4, '????');
+      END IF;
     END IF;
     IF v_o.status = 'shipped' AND v_o.tracking_number IS NOT DISTINCT FROM v_s.tracking_number THEN
       UPDATE storefront.store_orders o SET status = 'paid', carrier = NULL, tracking_number = NULL, shipped_at = NULL
@@ -1036,16 +1044,18 @@ BEGIN
 
   UPDATE storefront.store_shipments
      SET cancelled_at = now(), cancelled_by = p_actor, cancel_reason = v_reason,
-         refund_status = v_refund, refund_object_id = v_obj, refund_recorded_at = CASE WHEN v_refund <> 'not_applicable' THEN now() END
+         refund_status = v_refund, refund_object_id = v_obj, refund_note = v_note,
+         refund_recorded_at = CASE WHEN v_refund IS NOT NULL AND v_refund <> 'not_applicable' THEN now() END
    WHERE id = v_s.id;
   PERFORM storefront.shop_audit('storefront.store_shipments', v_s.id, v_action, p_actor,
     jsonb_build_object('status', v_s.status, 'source', v_s.source, 'trackingNumber', v_s.tracking_number, 'transactionId', v_s.shippo_transaction_id, 'labelCostUsd', v_s.label_cost_usd),
-    jsonb_build_object('orderId', v_o.id, 'orderReset', v_reset, 'refundStatus', v_refund, 'refundObjectId', v_obj));
+    jsonb_build_object('orderId', v_o.id, 'orderReset', v_reset, 'refundStatus', v_refund, 'refundObjectId', v_obj, 'keyChanged', v_key_changed));
 
   RETURN QUERY SELECT v_s.id, v_o.id, 'cancelled'::text, v_reset, CASE WHEN v_reset THEN 'paid' ELSE v_o.status::text END, v_refund,
-    CASE WHEN v_s.source = 'shippo' AND v_s.recorded_at IS NULL THEN 'Draft discarded. Quote again when you''re ready.'
-         WHEN v_reset THEN 'Shipment voided — ' || v_o.order_number || ' is back on To ship.'
-         ELSE 'Shipment voided. The order''s tracking was changed elsewhere, so the order was left as it is.' END;
+    (CASE WHEN v_s.source = 'shippo' AND v_s.recorded_at IS NULL THEN 'Draft discarded. Quote again when you''re ready.'
+          WHEN v_reset THEN 'Shipment voided — ' || v_o.order_number || ' is back on To ship.'
+          ELSE 'Shipment voided. The order''s tracking was changed elsewhere, so the order was left as it is.' END)
+    || CASE WHEN v_key_changed THEN ' The refund is not recorded: the label was bought on the Shippo key ending …' || COALESCE(v_s.key_last4, '????') || '; put that key back to request it.' ELSE '' END;
 END
 $fn$;
 REVOKE EXECUTE ON FUNCTION storefront.shop_void_shipment(bigint, text, text, text, text) FROM PUBLIC;
