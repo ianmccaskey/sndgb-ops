@@ -13,14 +13,20 @@
 --    order is backfilled with its one line. shipping_fee_usd, total_usd and
 --    fee_usd stay on the order (one shipment, one fee).
 --  * The order's old single-line columns become its SUMMARY, kept by the
---    trigger store_order_items_summarize for every writer: listing_id = the
---    first line's listing, listing_title_snapshot = the first title, with
---    " + N more" when there are more lines, qty = units over every line,
---    subtotal_usd = the lines' sum, unit_price_usd = subtotal / units (the
---    exact unit price of a one-line order, the blended price otherwise), and
---    the new item_count. Readers that still show "title × qty" (the P2
---    Collective Orders Shop orders page, the Seller Portal drawer) stay
---    truthful; a reader that packs a box reads the lines.
+--    trigger store_order_items_summarize for every writer: listing_id,
+--    listing_title_snapshot (with " + N more" when there are more lines),
+--    qty and unit_price_usd are the FIRST line's, subtotal_usd is the
+--    lines' sum, and item_count counts the lines. The first line and not
+--    the totals, on purpose: a reader from before this migration (a
+--    storefront build still running during a deploy, or a rollback) treats
+--    those columns as one product — restoring qty to listing_id on a cancel,
+--    writing one house line from them when paid — and with the first line's
+--    own figures that reader is exactly right for that line and merely
+--    blind to the others (stock under-counted, never over-sold); with
+--    totals it would hand listing_id every unit of the order. Readers that
+--    show "title × qty" (the P2 Collective Orders Shop orders page, the
+--    Seller Portal drawer) read the first line and its "+ N more"; a reader
+--    that packs a box reads the lines.
 --  * Lines are guarded (trigger store_order_items_guard, parent locked
 --    first): written only while the order is 'unpaid' — money follows the
 --    lines, so nothing changes them after a payment attaches — only for a
@@ -68,9 +74,9 @@ COMMENT ON COLUMN storefront.store_orders.listing_id IS
 COMMENT ON COLUMN storefront.store_orders.listing_title_snapshot IS
   'SUMMARY since 1790103900: the first line''s title, with " + N more" when the order has more lines.';
 COMMENT ON COLUMN storefront.store_orders.qty IS
-  'SUMMARY since 1790103900: units over every line of the order.';
+  'SUMMARY since 1790103900: the FIRST line''s quantity (not the order''s units: a pre-1790103900 reader restores this many to listing_id on a cancel). Units over every line = sum(store_order_items.qty).';
 COMMENT ON COLUMN storefront.store_orders.unit_price_usd IS
-  'SUMMARY since 1790103900: subtotal_usd / qty — the unit price of a one-line order, the blended price otherwise.';
+  'SUMMARY since 1790103900: the FIRST line''s unit price.';
 COMMENT ON COLUMN storefront.store_orders.subtotal_usd IS
   'SUMMARY since 1790103900: the sum of the lines'' subtotal_usd.';
 COMMENT ON COLUMN storefront.store_orders.item_count IS
@@ -90,13 +96,15 @@ BEGIN
   UPDATE storefront.store_orders o
      SET listing_id = s.first_listing,
          listing_title_snapshot = CASE WHEN s.n > 1 THEN s.first_title || ' + ' || (s.n - 1) || ' more' ELSE s.first_title END,
-         qty = s.units,
+         qty = s.first_qty,
          subtotal_usd = s.subtotal,
-         unit_price_usd = round(s.subtotal / s.units, 2),
+         unit_price_usd = s.first_unit,
          item_count = s.n
-    FROM (SELECT count(*)::int AS n, sum(i.qty)::int AS units, sum(i.subtotal_usd) AS subtotal,
+    FROM (SELECT count(*)::int AS n, sum(i.subtotal_usd) AS subtotal,
                  (array_agg(i.listing_id ORDER BY i.sort, i.id))[1] AS first_listing,
-                 (array_agg(i.listing_title_snapshot ORDER BY i.sort, i.id))[1] AS first_title
+                 (array_agg(i.listing_title_snapshot ORDER BY i.sort, i.id))[1] AS first_title,
+                 (array_agg(i.qty ORDER BY i.sort, i.id))[1] AS first_qty,
+                 (array_agg(i.unit_price_usd ORDER BY i.sort, i.id))[1] AS first_unit
             FROM storefront.store_order_items i WHERE i.store_order_id = v_order) s
    WHERE o.id = v_order AND s.n > 0;
   RETURN NULL;
