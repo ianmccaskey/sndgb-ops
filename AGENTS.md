@@ -11,15 +11,44 @@ write, advisory lock class 42001 per order wherever money moves) are in
 These were decided by the owner and are enforced as described. Flag a place
 where the code fails to honour one; do not propose replacing the decision.
 
-- **Tenant boundary is the storefront's server, not row-level security.**
-  Only the storefront's Node server (and its worker) connects to this database,
-  with a privileged role; browsers never hold a connection, the Neon Data API is
-  not enabled, and no client-side SQL exists. Every member-facing query in that
-  app scopes by the Neon Auth session's `auth_user_id` in server code and takes
-  the user from the session, never from the request body. RLS would bind to
-  nothing in this topology (a privileged role bypasses it); it becomes the right
-  tool if a less-privileged app role or the Data API is ever introduced, and
-  that is the point to add it — not before.
+- **Tenant boundary is the server, not row-level security.** Members reach
+  this database only through servers. The storefront's Node server (and its
+  worker) connects with a privileged role; browsers never hold a connection,
+  the Neon Data API is not enabled, and no client-side SQL exists. Every
+  member-facing query in that app scopes by the Neon Auth session's
+  `auth_user_id` in server code and takes the user from the session, never
+  from the request body. Since `1790103600` (2026-11-08) the **P2 Seller
+  Portal** (a UI Bakery app) is the one less-privileged connection: its role
+  `p2_seller_portal` holds NO table privilege, only EXECUTE on the
+  `storefront.portal_*` SECURITY DEFINER wrappers, each of which resolves the
+  shop from UI Bakery's server-substituted `{{user.email}}` through
+  `storefront.seller_operators` (`portal_resolve_seller`) and filters every
+  row by that shop. That is the "less-privileged app role" this bullet named
+  as the point to revisit RLS; it was revisited and RLS still binds to
+  nothing, because the role reaches rows only through owner-run functions,
+  which bypass RLS — the function boundary IS the tenant boundary for the
+  portal. Revisit RLS if any role is ever given direct table access or the
+  Data API is enabled. Settled with the owner 2026-11-08.
+- **One implementation of the seller rules, two entry points**
+  (`1790103600`). Every rule a shop operator can exercise — mark shipped /
+  fix tracking / mark delivered, the draft-first Shippo label (a
+  `store_shipments` row BEFORE the money POST, the label recorded and the
+  order shipped in one call, a void that returns the order to paid only
+  while its tracking is still that label's), listings and stock
+  (compare-and-set), payout wallets, the ship-from address and the shop's
+  OWN Shippo key — lives in a `storefront.shop_*(p_seller_id, p_actor, …)`
+  core function (owner-only; P2 Collective Orders calls these for the
+  organizer-run shops: P², PRT, Papa Porgy's, Paige's, flagged
+  `sellers.managed_in_ops`), and the granted `portal_*(p_email, …)` wrapper
+  only swaps the first argument. Every refusal RAISEs a plain sentence
+  (`insufficient_privilege` identity, `invalid_parameter_value` + `HINT
+  field:<name>` input, `no_data_found` not-yours, `object_not_in_prerequisite_state`
+  stale/CAS); audit rows never carry the buyer's email, the ship-to, a label
+  URL or a key; the buyer's email is never selected and the ship-to is NULL
+  outside its 30-day window. `store_orders.carrier/tracking_number/shipped_at/status`
+  stay the buyer-facing truth. Flag a new rule written in only one place, a
+  `portal_*` function that does anything but resolve-and-delegate, or a
+  grant to the portal role beyond those wrappers; do not propose RLS here.
 - **The storefront is another upstream.** Its orders import through the same
   `importUpsertOrder` / items / `importPayments` / cancellation path base44
   orders use; this app verifies every hash itself and the storefront's verdict
@@ -43,10 +72,13 @@ where the code fails to honour one; do not propose replacing the decision.
   `src/app/pages/storefront/` — names kept, label changed): order-number code,
   payment options, published flag, import stats. Campaign-side admin that
   follows (COA reports for campaign products, polls) belongs here too. Store
-  admin — house listings, seller applications and approval, store orders,
-  member verification status — belongs in the **P2 Collective Orders** app,
-  even though some of those tables live in this database. Settled with the
-  owner 2026-10-08; do not add store pages here.
+  admin — house listings, seller creation and portal operators, store orders
+  of the organizer-run shops, member verification status — belongs in the
+  **P2 Collective Orders** app, even though some of those tables live in this
+  database; member shops run their own orders in the **P2 Seller Portal**
+  (`1790103600`). Selling is by invitation: the organizers create sellers in
+  P2 Collective Orders, nobody applies. Settled with the owner 2026-10-08 and
+  2026-11-08; do not add store pages here.
 - **A campaign runs on ONE ordering platform** (`1790101100`): the database
   refuses storefront settings on a base44-linked campaign or one with other-
   source orders, refuses linking a storefront campaign to base44, and refuses
