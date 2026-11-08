@@ -27,7 +27,12 @@
 --    listing the order's own shop sells (one shop per order is a database
 --    rule, not just the checkout's), and an order keeps at least one line.
 --    A line is never edited in the store either — the buyer cancels and
---    orders again.
+--    orders again. The first line of an order that has none (a legacy
+--    order) may land whatever its status.
+--  * An order inserted without lines gets its one line from its summary at
+--    COMMIT (constraint trigger store_orders_need_line), so the storefront
+--    build running while this applies keeps writing orders that have lines,
+--    and a re-apply never has to backfill a paid order.
 --  * The shop readers: storefront.shop_order_items(p_seller_id, p_order_ids)
 --    (owner-only core, the seller's own orders only) and the granted
 --    storefront.portal_order_items(p_email, p_order_ids) wrapper, in the
@@ -114,8 +119,12 @@ BEGIN
     RAISE EXCEPTION 'Store order % does not exist.', v_order USING ERRCODE = 'foreign_key_violation';
   END IF;
   IF v_status <> 'unpaid' THEN
-    RAISE EXCEPTION 'The lines of store order % cannot change once it is %.', v_order, v_status
-      USING ERRCODE = 'object_not_in_prerequisite_state';
+    -- an order with no line yet is a legacy one (placed before this migration, or by a writer from
+    -- before it): its one line, from its summary, may land whatever its status; anything else is frozen
+    IF NOT (TG_OP = 'INSERT' AND NOT EXISTS (SELECT 1 FROM storefront.store_order_items i WHERE i.store_order_id = v_order)) THEN
+      RAISE EXCEPTION 'The lines of store order % cannot change once it is %.', v_order, v_status
+        USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
   END IF;
   IF TG_OP = 'UPDATE' AND NEW.store_order_id <> OLD.store_order_id THEN
     RAISE EXCEPTION 'A store order line cannot move to another order.' USING ERRCODE = 'object_not_in_prerequisite_state';
@@ -146,6 +155,33 @@ DROP TRIGGER IF EXISTS store_order_items_summarize ON storefront.store_order_ite
 CREATE TRIGGER store_order_items_summarize
   AFTER INSERT OR UPDATE OR DELETE ON storefront.store_order_items
   FOR EACH ROW EXECUTE FUNCTION storefront.store_order_items_summarize();
+
+-- ── 3b. every order has a line by the end of its transaction ──────────────
+-- A writer from before this migration (the storefront build still running
+-- while this applies) inserts a store_orders row with its single-line
+-- columns and no line. At COMMIT this constraint trigger writes that one
+-- line from the summary, so no order is ever without lines and a re-apply
+-- never meets a paid order it has to backfill. The new writer inserts its
+-- lines itself in the same transaction; then there is nothing to do.
+CREATE OR REPLACE FUNCTION storefront.store_orders_need_line() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
+BEGIN
+  IF EXISTS (SELECT 1 FROM storefront.store_orders o WHERE o.id = NEW.id)
+     AND NOT EXISTS (SELECT 1 FROM storefront.store_order_items i WHERE i.store_order_id = NEW.id) THEN
+    INSERT INTO storefront.store_order_items (store_order_id, listing_id, listing_title_snapshot, qty, unit_price_usd, subtotal_usd, sort, created_at)
+    SELECT o.id, o.listing_id, o.listing_title_snapshot, o.qty, o.unit_price_usd, o.subtotal_usd, 0, o.created_at
+      FROM storefront.store_orders o WHERE o.id = NEW.id;
+  END IF;
+  RETURN NULL;
+END
+$fn$;
+REVOKE EXECUTE ON FUNCTION storefront.store_orders_need_line() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS store_orders_need_line ON storefront.store_orders;
+CREATE CONSTRAINT TRIGGER store_orders_need_line
+  AFTER INSERT ON storefront.store_orders
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION storefront.store_orders_need_line();
 
 -- ── 4. the shop readers ────────────────────────────────────────────────────
 DROP TYPE IF EXISTS storefront.shop_order_item_row CASCADE;
