@@ -510,8 +510,13 @@ export async function findTransactionByRate(http: ShippoHttp, key: string, rateI
     // the decision depends on — a page whose rows renamed/dropped status
     // or rate is not semantically readable and must not prove absence
     for (const t of pageRows) {
-      if (!t || typeof t !== 'object' || !('status' in t) || !('rate' in t)
-          || !(typeof t.rate === 'string' || (typeof t.rate === 'object' && t.rate !== null))) {
+      // the rate identity must be a non-empty id (string, or object.object_id):
+      // a row whose rate cannot be identified (`rate: {}`, `rate: ''`) can never
+      // match and would otherwise let the walk end in "no label" (Codex 2026-11-08)
+      const rid = !t || typeof t !== 'object' ? undefined
+        : typeof t.rate === 'string' ? t.rate
+        : (t.rate && typeof t.rate === 'object' ? t.rate.object_id : undefined);
+      if (!t || typeof t !== 'object' || !('status' in t) || typeof rid !== 'string' || rid === '') {
         throw new Error('Shippo transaction rows came back in an unrecognized shape — do not re-purchase or delete until this check succeeds.');
       }
     }
@@ -594,8 +599,13 @@ export async function findRefundByTransaction(http: ShippoHttp, key: string, tra
     const pageNext = b.next as string | null;
     // ROW-LEVEL gate, same rule as the transaction walk
     for (const r of pageRows) {
-      if (!r || typeof r !== 'object' || !('status' in r) || !('transaction' in r)
-          || !(typeof r.transaction === 'string' || (typeof r.transaction === 'object' && r.transaction !== null))) {
+      // same rule as the transaction walk: the transaction identity must be a
+      // non-empty id, or the row could never match and the walk would end in
+      // "no refund" on a history it could not read
+      const tid = !r || typeof r !== 'object' ? undefined
+        : typeof r.transaction === 'string' ? r.transaction
+        : (r.transaction && typeof r.transaction === 'object' ? r.transaction.object_id : undefined);
+      if (!r || typeof r !== 'object' || !('status' in r) || typeof tid !== 'string' || tid === '') {
         throw new Error('Shippo refund rows came back in an unrecognized shape — do not re-request until this check succeeds.');
       }
     }
