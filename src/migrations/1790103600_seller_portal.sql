@@ -933,6 +933,7 @@ CREATE FUNCTION storefront.shop_dispatch_label(p_seller_id bigint, p_actor text,
 RETURNS SETOF storefront.shop_label_dispatch_result
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
 DECLARE v_sid bigint; v_order_id bigint; v_s storefront.store_shipments%ROWTYPE; v_key text; v_now timestamptz := now();
+        v_order_status storefront.store_order_status;
 BEGIN
   PERFORM storefront.shop_lock_seller(p_seller_id);
   v_sid := storefront.shop_parse_id(p_shipment_id, 'label');
@@ -947,7 +948,14 @@ BEGIN
   IF v_order_id IS NULL THEN
     RAISE EXCEPTION 'That label isn''t on your list. Reload the page.' USING ERRCODE = 'no_data_found';
   END IF;
-  PERFORM 1 FROM storefront.store_orders o WHERE o.id = v_order_id AND o.seller_id = p_seller_id FOR UPDATE;
+  -- the order is re-read under its lock at the moment of dispatch: an order the
+  -- organizers cancelled (or anyone shipped) after begin_label buys no postage
+  -- (Codex 2026-11-08, found in the portal's purchase flow)
+  SELECT o.status INTO v_order_status FROM storefront.store_orders o WHERE o.id = v_order_id AND o.seller_id = p_seller_id FOR UPDATE;
+  IF v_order_status IS DISTINCT FROM 'paid' THEN
+    RAISE EXCEPTION 'This order is no longer paid (it is % now) — the label was not bought. Reload the page.', replace(COALESCE(v_order_status::text, 'gone'), '_', ' ')
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
   SELECT * INTO v_s FROM storefront.store_shipments sh WHERE sh.id = v_sid AND sh.seller_id = p_seller_id FOR UPDATE;
   IF v_s.cancelled_at IS NOT NULL THEN
     RAISE EXCEPTION 'This draft was discarded. Quote again.' USING ERRCODE = 'object_not_in_prerequisite_state';
