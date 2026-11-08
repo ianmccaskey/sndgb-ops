@@ -21,10 +21,13 @@
 --    the new item_count. Readers that still show "title × qty" (the P2
 --    Collective Orders Shop orders page, the Seller Portal drawer) stay
 --    truthful; a reader that packs a box reads the lines.
---  * Lines are frozen once the order leaves 'unpaid': money follows the
---    lines, so nothing changes them after a payment attaches (trigger
---    store_order_items_frozen). A line is never edited in the store either —
---    the buyer cancels and orders again.
+--  * Lines are guarded (trigger store_order_items_guard, parent locked
+--    first): written only while the order is 'unpaid' — money follows the
+--    lines, so nothing changes them after a payment attaches — only for a
+--    listing the order's own shop sells (one shop per order is a database
+--    rule, not just the checkout's), and an order keeps at least one line.
+--    A line is never edited in the store either — the buyer cancels and
+--    orders again.
 --  * The shop readers: storefront.shop_order_items(p_seller_id, p_order_ids)
 --    (owner-only core, the seller's own orders only) and the granted
 --    storefront.portal_order_items(p_email, p_order_ids) wrapper, in the
@@ -51,7 +54,7 @@ CREATE TABLE IF NOT EXISTS storefront.store_order_items (
 );
 CREATE INDEX IF NOT EXISTS store_order_items_listing_idx ON storefront.store_order_items (listing_id);
 COMMENT ON TABLE storefront.store_order_items IS
-  'The lines of a store order (1790103900): one row per listing bought, title and prices snapshotted at placement. All lines of an order belong to the order''s seller. Frozen once the order leaves unpaid.';
+  'The lines of a store order (1790103900): one row per listing bought, title and prices snapshotted at placement. All lines of an order belong to the order''s seller. Written only while the order is unpaid, only for the order''s own shop, at least one per order (trigger store_order_items_guard).';
 
 ALTER TABLE storefront.store_orders ADD COLUMN IF NOT EXISTS item_count INTEGER NOT NULL DEFAULT 1 CHECK (item_count > 0);
 
@@ -96,14 +99,19 @@ END
 $fn$;
 REVOKE EXECUTE ON FUNCTION storefront.store_order_items_summarize() FROM PUBLIC;
 
--- lines change only while nothing has been paid toward them
-CREATE OR REPLACE FUNCTION storefront.store_order_items_frozen() RETURNS trigger
+-- a line is written only while nothing has been paid toward the order, only
+-- for a listing of the order's own shop, and never as the order's last line
+-- going away: the parent is locked first so a payment landing at the same
+-- moment either freezes the lines before this (refused) or waits for it
+CREATE OR REPLACE FUNCTION storefront.store_order_items_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
-DECLARE v_order bigint := COALESCE(NEW.store_order_id, OLD.store_order_id); v_status text;
+DECLARE v_order bigint := COALESCE(NEW.store_order_id, OLD.store_order_id); v_status text; v_seller bigint; v_lines int;
 BEGIN
-  SELECT o.status::text INTO v_status FROM storefront.store_orders o WHERE o.id = v_order;
+  SELECT o.status::text, o.seller_id INTO v_status, v_seller FROM storefront.store_orders o WHERE o.id = v_order FOR UPDATE;
   IF v_status IS NULL THEN
-    RETURN NULL; -- the order is being deleted (ON DELETE CASCADE): nothing to protect
+    -- the order itself is being deleted (ON DELETE CASCADE reaches its lines after the parent is gone): let the cascade finish
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RAISE EXCEPTION 'Store order % does not exist.', v_order USING ERRCODE = 'foreign_key_violation';
   END IF;
   IF v_status <> 'unpaid' THEN
     RAISE EXCEPTION 'The lines of store order % cannot change once it is %.', v_order, v_status
@@ -112,15 +120,27 @@ BEGIN
   IF TG_OP = 'UPDATE' AND NEW.store_order_id <> OLD.store_order_id THEN
     RAISE EXCEPTION 'A store order line cannot move to another order.' USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE') AND NOT EXISTS (SELECT 1 FROM storefront.store_listings l WHERE l.id = NEW.listing_id AND l.seller_id = v_seller) THEN
+    RAISE EXCEPTION 'Listing % is not sold by the shop of store order %: one shop per order.', NEW.listing_id, v_order
+      USING ERRCODE = 'invalid_parameter_value', HINT = 'field:listing_id';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    SELECT count(*) INTO v_lines FROM storefront.store_order_items i WHERE i.store_order_id = v_order;
+    IF v_lines <= 1 THEN
+      RAISE EXCEPTION 'Store order % keeps at least one line; cancel the order instead.', v_order USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+  END IF;
   RETURN COALESCE(NEW, OLD);
 END
 $fn$;
-REVOKE EXECUTE ON FUNCTION storefront.store_order_items_frozen() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION storefront.store_order_items_guard() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS store_order_items_frozen ON storefront.store_order_items;
-CREATE TRIGGER store_order_items_frozen
+DROP FUNCTION IF EXISTS storefront.store_order_items_frozen();
+DROP TRIGGER IF EXISTS store_order_items_guard ON storefront.store_order_items;
+CREATE TRIGGER store_order_items_guard
   BEFORE INSERT OR UPDATE OR DELETE ON storefront.store_order_items
-  FOR EACH ROW EXECUTE FUNCTION storefront.store_order_items_frozen();
+  FOR EACH ROW EXECUTE FUNCTION storefront.store_order_items_guard();
 
 DROP TRIGGER IF EXISTS store_order_items_summarize ON storefront.store_order_items;
 CREATE TRIGGER store_order_items_summarize
