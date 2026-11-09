@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { FlaskConical, ExternalLink, Plus } from 'lucide-react';
@@ -20,9 +21,13 @@ import { FlaskConical, ExternalLink, Plus } from 'lucide-react';
 /**
  * Lab reports (COAs) for the selected campaign's lines, kept in
  * storefront.coa_reports for p2collective.app's COA library. A report is a
- * link to the lab-hosted COA; PDF upload is not handled here. Every write is
- * one row, audited, and edits/deletes are version-checked so a stale tab is
- * refused instead of overwriting another admin's change.
+ * link to the lab-hosted COA; PDF upload is not handled here. Every report
+ * states the tested mass and the purity — the two figures the library
+ * summarises it by (Ian, 2026-11-09; required by the form, the actions and
+ * the table, 1790104000) — and the endotoxin screening's outcome when the lab
+ * ran one. Every write is one row, audited, and edits/deletes are
+ * version-checked so a stale tab is refused instead of overwriting another
+ * admin's change.
  */
 
 type ProductRow = {
@@ -45,7 +50,11 @@ type ReportRow = {
   batch_label: string | null;
   /** YYYY-MM-DD (to_char), never a timestamp — formatted without a timezone shift */
   tested_at: string | null;
+  /** tested mass in mg (NUMERIC as text) */
+  mass_mg: string | null;
   purity_pct: string | null;
+  /** 'pass' | 'fail'; null = the lab did not screen for endotoxin, or the report doesn't say */
+  endotoxin: string | null;
   notes: string | null;
   created_by: string | null;
   created_at: string;
@@ -54,14 +63,20 @@ type ReportRow = {
   version: string;
 };
 
-type Draft = { lab: string; reportUrl: string; batchLabel: string; testedAt: string; purityPct: string; notes: string };
-const EMPTY_DRAFT: Draft = { lab: '', reportUrl: '', batchLabel: '', testedAt: '', purityPct: '', notes: '' };
+/** endotoxin in the form: '' = not screened / not stated */
+type Endotoxin = '' | 'pass' | 'fail';
+type Draft = { lab: string; reportUrl: string; batchLabel: string; testedAt: string; massMg: string; purityPct: string; endotoxin: Endotoxin; notes: string };
+const EMPTY_DRAFT: Draft = { lab: '', reportUrl: '', batchLabel: '', testedAt: '', massMg: '', purityPct: '', endotoxin: '', notes: '' };
 type Editing = { mode: 'add'; gbpId: number } | { mode: 'edit'; report: ReportRow };
 
 // mirror the action's checks so the page explains a refusal before sending it
 const URL_RE = /^https?:\/\/[^/\s]+([/?#]\S*)?$/i;
 const PURITY_RE = /^\d{1,3}(\.\d{1,2})?$/;
+const MASS_RE = /^\d{1,6}(\.\d{1,2})?$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// the Select cannot hold an empty value, so "not screened" has a word of its own there
+const NOT_SCREENED = 'none';
+const ENDOTOXIN_LABEL: Record<string, string> = { pass: 'Pass', fail: 'Fail' };
 
 function draftProblem(d: Draft, hasPdf: boolean): string | null {
   const url = d.reportUrl.trim();
@@ -70,8 +85,13 @@ function draftProblem(d: Draft, hasPdf: boolean): string | null {
   } else if (url.length > 2000 || !URL_RE.test(url)) {
     return 'The report link must be a web address starting with http:// or https://, with no spaces.';
   }
+  // every report states the tested mass and the purity: the library summarises a COA by those two
+  const m = d.massMg.trim();
+  if (!m) return 'Enter the tested mass in mg, as the report states it (e.g. 10.48).';
+  if (!MASS_RE.test(m) || Number(m) <= 0) return 'Tested mass is a number of mg above zero with at most two decimals, e.g. 10.48.';
   const p = d.purityPct.trim();
-  if (p && (!PURITY_RE.test(p) || Number(p) > 100)) return 'Purity is a percentage from 0 to 100 with at most two decimals, e.g. 99.12.';
+  if (!p) return 'Enter the purity the report states, as a percentage (e.g. 99.12).';
+  if (!PURITY_RE.test(p) || Number(p) > 100) return 'Purity is a percentage from 0 to 100 with at most two decimals, e.g. 99.12.';
   if (d.testedAt && !DATE_RE.test(d.testedAt)) return 'Tested on must be a date.';
   return null;
 }
@@ -140,7 +160,11 @@ export function CoaReportsPage() {
     setEditing({ mode: 'edit', report: r });
     setDraft({
       lab: r.lab ?? '', reportUrl: r.report_url ?? '', batchLabel: r.batch_label ?? '',
-      testedAt: r.tested_at ?? '', purityPct: r.purity_pct != null ? String(Number(r.purity_pct)) : '', notes: r.notes ?? '',
+      testedAt: r.tested_at ?? '',
+      massMg: r.mass_mg != null ? String(Number(r.mass_mg)) : '',
+      purityPct: r.purity_pct != null ? String(Number(r.purity_pct)) : '',
+      endotoxin: r.endotoxin === 'pass' || r.endotoxin === 'fail' ? r.endotoxin : '',
+      notes: r.notes ?? '',
     });
     setFormMsg(''); setPageMsg(''); setConfirmDelete(null);
   };
@@ -159,7 +183,9 @@ export function CoaReportsPage() {
         report_url: draft.reportUrl.trim(),
         batch_label: draft.batchLabel.trim(),
         tested_at: draft.testedAt,
+        mass_mg: draft.massMg.trim(),
         purity_pct: draft.purityPct.trim(),
+        endotoxin: draft.endotoxin,
         notes: draft.notes.trim(),
         actor: userName,
       };
@@ -231,8 +257,26 @@ export function CoaReportsPage() {
           <Input id="coa-tested" type="date" value={draft.testedAt} onChange={e => setDraft({ ...draft, testedAt: e.target.value })} />
         </div>
         <div className="space-y-1">
+          <Label htmlFor="coa-mass">Tested mass (mg)</Label>
+          <Input id="coa-mass" value={draft.massMg} onChange={e => setDraft({ ...draft, massMg: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" placeholder="e.g. 10.48" className="font-mono" required aria-required="true" />
+          <p className="text-xs text-muted-foreground">Required. What the lab measured in the vial, not the label.</p>
+        </div>
+        <div className="space-y-1">
           <Label htmlFor="coa-purity">Purity %</Label>
-          <Input id="coa-purity" value={draft.purityPct} onChange={e => setDraft({ ...draft, purityPct: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" placeholder="e.g. 99.12" className="font-mono" />
+          <Input id="coa-purity" value={draft.purityPct} onChange={e => setDraft({ ...draft, purityPct: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" placeholder="e.g. 99.12" className="font-mono" required aria-required="true" />
+          <p className="text-xs text-muted-foreground">Required.</p>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="coa-endotoxin">Endotoxin screening</Label>
+          <Select value={draft.endotoxin || NOT_SCREENED} onValueChange={v => setDraft({ ...draft, endotoxin: v === 'pass' || v === 'fail' ? v : '' })}>
+            <SelectTrigger id="coa-endotoxin"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NOT_SCREENED}>Not screened</SelectItem>
+              <SelectItem value="pass">Pass</SelectItem>
+              <SelectItem value="fail">Fail</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">Pass or Fail when the report has an endotoxin result.</p>
         </div>
         <div className="space-y-1 sm:col-span-2">
           <Label htmlFor="coa-notes">Notes</Label>
@@ -308,7 +352,9 @@ export function CoaReportsPage() {
                           <TableHead>Lab</TableHead>
                           <TableHead>Batch</TableHead>
                           <TableHead>Tested</TableHead>
+                          <TableHead className="text-right">Mass</TableHead>
                           <TableHead className="text-right">Purity</TableHead>
+                          <TableHead>Endotoxin</TableHead>
                           <TableHead>Report</TableHead>
                           <TableHead>Notes</TableHead>
                           <TableHead>Added</TableHead>
@@ -323,7 +369,9 @@ export function CoaReportsPage() {
                               <TableCell>{r.lab || '—'}</TableCell>
                               <TableCell className="font-mono text-xs">{r.batch_label || '—'}</TableCell>
                               <TableCell className="whitespace-nowrap">{fmtYmd(r.tested_at)}</TableCell>
+                              <TableCell className="text-right font-mono text-xs whitespace-nowrap">{r.mass_mg != null ? `${Number(r.mass_mg)} mg` : '—'}</TableCell>
                               <TableCell className="text-right font-mono text-xs">{r.purity_pct != null ? `${Number(r.purity_pct)}%` : '—'}</TableCell>
+                              <TableCell className={`text-xs ${r.endotoxin === 'fail' ? 'text-rose-400' : ''}`}>{r.endotoxin ? ENDOTOXIN_LABEL[r.endotoxin] ?? r.endotoxin : 'Not screened'}</TableCell>
                               <TableCell className="text-xs">
                                 {r.report_url ? (
                                   <a href={r.report_url} target="_blank" rel="noreferrer" className="text-cyan-300 hover:underline inline-flex items-center gap-1 max-w-[200px]" title={r.report_url}>
@@ -357,6 +405,7 @@ export function CoaReportsPage() {
                     <p className="font-semibold text-amber-200">Delete the {confirmDelete.lab || 'unnamed lab'} report for {lineName}?</p>
                     <p>
                       {confirmDelete.batch_label ? `Batch ${confirmDelete.batch_label}, ` : ''}tested {fmtYmd(confirmDelete.tested_at)}
+                      {confirmDelete.mass_mg != null ? `, ${Number(confirmDelete.mass_mg)} mg` : ''}
                       {confirmDelete.purity_pct != null ? `, ${Number(confirmDelete.purity_pct)}% purity` : ''}. It is removed from the COA library for good; the audit log keeps a copy of what it said.
                     </p>
                     <div className="flex gap-2">

@@ -230,6 +230,24 @@ where the code fails to honour one; do not propose replacing the decision.
   digital copy of a lab report; the product it certifies carries the
   testing cost. Settled with the owner 2026-10-25.
 
+- **A COA report states the tested mass and the purity, and the endotoxin
+  screening when the lab ran one** (`1790104000`). Every row of
+  `storefront.coa_reports` carries `mass_mg` (what the lab measured, mg)
+  and `purity_pct` — required by the COA Reports form, by
+  `add/updateStorefrontCoaReport` (a missing or malformed one refuses
+  with zero rows, never raises) and by the table itself
+  (`coa_reports_mass_and_purity`), because p2collective.app's COA library
+  summarises every report by those two. `endotoxin` is `pass` / `fail`
+  when the report has a screening and NULL when it has none: an outcome,
+  never a number (labs report it against a limit, and a bare value reads
+  as a measurement). The version digest that guards edits and deletes
+  covers all three (the same column list in the list, update and delete
+  actions). The house shops' reports (P², PRT) are NOT here: the library
+  reads those live from each house's batch records. Flag a writer that
+  files a report without mass or purity, or a place that prints an
+  endotoxin value; do not propose making the two optional. Settled with
+  the owner 2026-11-09.
+
 - **A vendor payment is one batch: product lines plus the sends that
   carried the money, on any mix of rails** (`1790102100`). The Vendors
   page records through `addVendorPaymentBatch` → `record_vendor_payment_batch()`
