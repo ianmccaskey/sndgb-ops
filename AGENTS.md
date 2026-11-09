@@ -337,6 +337,23 @@ where the code fails to honour one; do not propose replacing the decision.
   superseded). The PRT row is seeded SUSPENDED; approving it is the launch
   switch. Settled with the owner 2026-11-08.
 
+- **A member listing can set a minimum order and free shipping by the
+  ORDER's item count** (`1790104200`). `store_listings.min_per_order`
+  (1–10) is enforced in the cart and again at placement, and stock under
+  it reads sold out to buyers (the stored status keeps following stock
+  > 0). `free_shipping_min_qty` (2–50, above the minimum, NULL when
+  shipping is 0) waives that listing's fee once the WHOLE order from the
+  shop reaches the count: every line counts, not only that listing's
+  units. The order still pays ONE fee, the highest among lines not waived
+  (p2collective-app `lib/store/cart-rules.ts` `orderShippingCents`, the
+  same function on the cart and at placement). The checks live in
+  `storefront.shop_check_listing_terms` (portal and core) and in the
+  storefront's `lib/sellers/rules.ts` (its dashboard writes directly), and
+  CHECKs bind every writer. House listings take their minimum from their
+  own app and have no count. Flag a price that counts only the listing's
+  own units, or a writer that skips the checks; do not propose
+  per-listing counting. Settled with the owner 2026-11-09.
+
 ## Loading data
 
 `useLoadAction(action, defaultValue, params, options)`: the SECOND argument
