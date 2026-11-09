@@ -62,7 +62,7 @@ export function TransfersTab({ addresses, destinations, products, packages, tran
   const { userName, groupBuyId, settings } = useApp();
   // outstanding vendor-direct order lines (money-gated server-side) —
   // offered as destinations when the transfer carries their product
-  const [rawDirectShips, , , reloadDirectShips] = useLoadAction(listDirectShipCandidates, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
+  const [rawDirectShips, , , reloadDirectShips] = useLoadAction(listDirectShipCandidates, [], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
   const allDirectShips = rows<DirectShipCandidate>(rawDirectShips);
   // the action fetches 1001 as an overflow sentinel — never silently
   // hide eligible lines behind the window

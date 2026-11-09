@@ -337,6 +337,20 @@ where the code fails to honour one; do not propose replacing the decision.
   superseded). The PRT row is seeded SUSPENDED; approving it is the launch
   switch. Settled with the owner 2026-11-08.
 
+## Loading data
+
+`useLoadAction(action, defaultValue, params, options)`: the SECOND argument
+is the value the hook returns WHILE the action loads (`@uibakery/data`
+d.ts), not a dependency list — a re-read follows `params` (and `enabled`).
+Pass `[]`. Every call here once passed ids there (`[groupBuyId]`,
+`[orderId]`), which came back as fake "rows" during loading; swept
+2026-11-09. Read results through `rows()` / `firstRow()` (`src/lib/rows.ts`),
+treat an empty list as "none" only once the loading flag is false. A dialog
+that must read fresh each time it opens on the same params calls
+`useReloadOnOpen(<its enabled condition>, reload…)`
+(`src/hooks/use-reload-on-open.ts`) or reloads in its open effect, as
+AddOrderDialog does.
+
 ## Verifying changes
 
 Serena's LSP diagnostics are the only type check. SQL actions are probed on

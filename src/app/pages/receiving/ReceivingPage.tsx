@@ -45,18 +45,18 @@ export function ReceivingPage() {
   // MB5's receiving view). Drains stay physical/all-campaign — a drained
   // product from another campaign simply never matches a listed box.
   const enabled = groupBuyId != null;
-  const [rawPackages, packagesLoading, , reloadPackages] = useLoadAction(listInboundPackages, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawInventory, inventoryLoading, , reloadInventory] = useLoadAction(listAddressInventory, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawTransfers, transfersLoading, , reloadTransfers] = useLoadAction(listTransfers, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawPackages, packagesLoading, , reloadPackages] = useLoadAction(listInboundPackages, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawInventory, inventoryLoading, , reloadInventory] = useLoadAction(listAddressInventory, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawTransfers, transfersLoading, , reloadTransfers] = useLoadAction(listTransfers, [], { group_buy_id: groupBuyId }, { enabled });
   // fulfillment packing depletion for the box display (FIFO in boxConsumption)
   const [rawDrains] = useLoadAction(listShipmentDrains, [], {});
   const [rawDestinations, , , reloadDestinations] = useLoadAction(listDestinations, [], {});
-  const [rawProducts] = useLoadAction(listCampaignCatalogProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProducts] = useLoadAction(listCampaignCatalogProducts, [], { group_buy_id: groupBuyId }, { enabled });
   // only vendors that actually ship product IN THE SELECTED CAMPAIGN (no
   // COA vendors, no niche/unused vendor rows) — see listShippingVendors.
   // Gated like every other campaign-scoped load: groupBuyId is null until
   // AppContext resolves the selection.
-  const [rawVendors, vendorsLoading, vendorsError] = useLoadAction(listShippingVendors, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
+  const [rawVendors, vendorsLoading, vendorsError] = useLoadAction(listShippingVendors, [], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
   // the list is AUTHORITATIVE (safe to invalidate selections against, even
   // when empty) only once it has resolved cleanly for the current campaign
   const vendorsReady = groupBuyId != null && !vendorsLoading && !vendorsError;

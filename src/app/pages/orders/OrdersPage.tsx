@@ -40,7 +40,7 @@ export function OrdersPage() {
   const canAdd = enabled && !groupBuy?.storefront_code;
   const [raw, loading, , reload] = useLoadAction(
     listOrders,
-    [groupBuyId, search, status, rail, recon],
+    [],
     { group_buy_id: groupBuyId, search, status, rail, recon },
     { enabled },
   );

@@ -114,9 +114,9 @@ export function CoaReportsPage() {
   const { groupBuyId, groupBuy, userName } = useApp();
   const enabled = groupBuyId != null;
 
-  const [rawProducts, productsLoading, productsError, reloadProducts] = useLoadAction(listStorefrontCoaProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProducts, productsLoading, productsError, reloadProducts] = useLoadAction(listStorefrontCoaProducts, [], { group_buy_id: groupBuyId }, { enabled });
   const products = rows<ProductRow>(rawProducts);
-  const [rawReports, reportsLoading, reportsError, reloadReports] = useLoadAction(listStorefrontCoaReports, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawReports, reportsLoading, reportsError, reloadReports] = useLoadAction(listStorefrontCoaReports, [], { group_buy_id: groupBuyId }, { enabled });
   const reports = rows<ReportRow>(rawReports);
 
   const [doAdd] = useMutateAction(addStorefrontCoaReport);

@@ -64,7 +64,7 @@ export function ImportPage() {
   // pull and a reload, unlike the in-memory results below.
   // the error slot matters here: a surface promising "failures survive
   // reloads" must never render a load error as the all-clear empty state
-  const [rawFailures, , failuresError, reloadFailures] = useLoadAction(listImportFailures, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawFailures, , failuresError, reloadFailures] = useLoadAction(listImportFailures, [], { group_buy_id: groupBuyId }, { enabled });
   const failures = rows<FailureRow>(rawFailures);
   const [doResolveFailure] = useMutateAction(resolveImportFailure);
   const [resolvingId, setResolvingId] = useState<number | null>(null);
@@ -154,12 +154,12 @@ export function ImportPage() {
   // on entering storefront mode and on every campaign switch.
   const pasteText = sfMode ? '' : text;
   useEffect(() => { setText(''); }, [groupBuyId, sfMode]);
-  const [rawSf, sfLoading, , reloadSf] = useLoadAction(listStorefrontOrders, [groupBuyId, sfMode], { group_buy_id: groupBuyId }, { enabled: enabled && sfMode });
+  const [rawSf, sfLoading, , reloadSf] = useLoadAction(listStorefrontOrders, [], { group_buy_id: groupBuyId }, { enabled: enabled && sfMode });
   const sfMapped = useMemo<MappedOrders | null>(
     () => (sfMode ? mapStorefrontOrders(rows<StorefrontOrderRow>(rawSf)) : null),
     [sfMode, rawSf],
   );
-  const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProducts] = useLoadAction(listCampaignProducts, [], { group_buy_id: groupBuyId }, { enabled });
   const campaignSkus = useMemo(
     () => new Set(rows<CampaignProduct>(rawProducts).map(p => p.sku_code)),
     [rawProducts],
@@ -167,7 +167,7 @@ export function ImportPage() {
   // Pulled items map through THIS campaign's ordering-app product links:
   // base44 keeps a separate Product record per group buy, so one id per
   // product could only ever be right for one campaign (1790101900).
-  const [rawLinks, catalogLoading] = useLoadAction(listCampaignProductLinks, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawLinks, catalogLoading] = useLoadAction(listCampaignProductLinks, [], { group_buy_id: groupBuyId }, { enabled });
   const skuByExternalId = useMemo(() => {
     const m = new Map<string, string>();
     for (const l of rows<ProductLink>(rawLinks)) {
@@ -181,7 +181,7 @@ export function ImportPage() {
   const [doCancelDeleted] = useMutateAction(cancelDeletedUpstream);
   const [rawLocalExt, , , reloadLocalExt] = useLoadAction(
     listActiveExternalOrders,
-    [groupBuyId, groupBuy?.external_id],
+    [],
     { group_buy_id: groupBuyId, gb_external_id: groupBuy?.external_id || '' },
     { enabled: enabled && !!groupBuy?.external_id },
   );

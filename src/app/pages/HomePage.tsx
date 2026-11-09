@@ -96,13 +96,13 @@ function StatTile({ label, value, tone, sub }: { label: string; value: string; t
 export function HomePage() {
   const { groupBuyId, groupBuy } = useApp();
   const enabled = groupBuyId != null;
-  const [rawStats] = useLoadAction(getDashboardStats, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawMoq] = useLoadAction(getMoqProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawProductOrders, productOrdersLoading, productOrdersError] = useLoadAction(getProductOrderCounts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawDaily] = useLoadAction(getDailyOrderSeries, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawRails] = useLoadAction(listRailRecon, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawStats] = useLoadAction(getDashboardStats, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawMoq] = useLoadAction(getMoqProgress, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProductOrders, productOrdersLoading, productOrdersError] = useLoadAction(getProductOrderCounts, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawDaily] = useLoadAction(getDailyOrderSeries, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawRails] = useLoadAction(listRailRecon, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawPnl] = useLoadAction(getPnl, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProducts] = useLoadAction(listCampaignProducts, [], { group_buy_id: groupBuyId }, { enabled });
   const s = firstRow<Stats>(rawStats);
   const moq = rows<MoqRow>(rawMoq);
   const productOrders = rows<ProductOrderRow>(rawProductOrders);

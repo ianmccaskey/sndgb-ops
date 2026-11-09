@@ -88,7 +88,7 @@ export function FulfillmentPage() {
   const productIdsCsv = Array.from(filterIds).sort((a, b) => a - b).join(',');
   const enabled = groupBuyId != null;
   const [raw, queueLoading, , reload] = useLoadAction(listFulfillmentQueue,
-    [groupBuyId, stage, productIdsCsv, filterMode],
+    [],
     { group_buy_id: groupBuyId, stage, product_ids: productIdsCsv, filter_mode: filterMode },
     { enabled });
   const queue = rows<QueueRow>(raw);
@@ -109,7 +109,7 @@ export function FulfillmentPage() {
   // filter and the session picker a wall of every buy's SKUs (Ian,
   // 2026-10-21). Digital products (COA certificates) are never packed —
   // they don't belong in the filter chips or the session pool either.
-  const [rawProducts] = useLoadAction(listCampaignCatalogProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProducts] = useLoadAction(listCampaignCatalogProducts, [], { group_buy_id: groupBuyId }, { enabled });
   const products = useMemo(() => rows<CatalogProduct>(rawProducts).filter(p => p.active && !p.digital), [rawProducts]);
   const [doMarkDirect] = useMutateAction(markOrderDirectFulfilled);
 
@@ -652,7 +652,7 @@ export function FulfillmentPage() {
   // and cannot be shipped again ----
   const [adopting, setAdopting] = useState<QueueRow | null>(null);
   const [rawAdoptLines, adoptLinesLoading] = useLoadAction(getPackableItems,
-    [adopting?.id ?? 0], { order_id: adopting?.id ?? 0 }, { enabled: !!adopting });
+    [], { order_id: adopting?.id ?? 0 }, { enabled: !!adopting });
   const [doAdopt] = useMutateAction(adoptUpstreamShipment);
   const [adoptBusy, setAdoptBusy] = useState(false);
   const [adoptMsg, setAdoptMsg] = useState('');
@@ -814,7 +814,7 @@ export function FulfillmentPage() {
   // ids so one shared tracking never lands on half its lines ----
   const [directing, setDirecting] = useState<QueueRow | null>(null);
   const [rawDirectLines, directLinesLoading] = useLoadAction(getPackableItems,
-    ['direct', directing?.id ?? 0], { order_id: directing?.id ?? 0 }, { enabled: !!directing });
+    [], { order_id: directing?.id ?? 0 }, { enabled: !!directing });
   type DirectLine = { order_item_id: number; sku_code: string; effective_qty: string; direct_ship: boolean; direct_fulfilled_at: string | null; digital: boolean };
   // NOT digital mirrors the queue's direct-side projection — a misflagged
   // digital+direct line is not vendor shipping work and must never be

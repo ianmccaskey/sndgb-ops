@@ -51,7 +51,7 @@ export function SettingsPage() {
 
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
   const wallets = rows<WalletRow>(rawWallets);
-  const [rawPnl, pnlLoading, , reloadPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
+  const [rawPnl, pnlLoading, , reloadPnl] = useLoadAction(getPnl, [], { group_buy_id: groupBuyId }, { enabled: groupBuyId != null });
   const splits = firstRow<PnlRow>(rawPnl)?.splits || [];
 
   // API keys / addresses

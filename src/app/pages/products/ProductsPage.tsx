@@ -66,13 +66,13 @@ export function ProductsPage() {
   // ordering-app links are per campaign (1790101900): the catalog shows and
   // the sync matches the SELECTED campaign's — rows a campaign switch left
   // in flight are dropped
-  const [rawLinks, , , reloadLinks] = useLoadAction(listCampaignProductLinks, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawLinks, , , reloadLinks] = useLoadAction(listCampaignProductLinks, [], { group_buy_id: groupBuyId }, { enabled });
   const links = rows<CampaignProductLink>(rawLinks).filter(l => Number(l.group_buy_id) === groupBuyId);
   const linkByProduct = new Map(links.map(l => [Number(l.product_id), l.external_id]));
   const [rawVendors] = useLoadAction(listVendors, [], {});
-  const [rawCampaign, , , reloadCampaign] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawAdj, , , reloadAdj] = useLoadAction(listAdjustments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawCampaign, , , reloadCampaign] = useLoadAction(listCampaignProducts, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawAdj, , , reloadAdj] = useLoadAction(listAdjustments, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawPnl] = useLoadAction(getPnl, [], { group_buy_id: groupBuyId }, { enabled });
   const splitParties: SplitParty[] = (firstRow<{ splits: SplitParty[] | null }>(rawPnl)?.splits) || [];
 
   const products = rows<Product>(rawProducts);
@@ -108,7 +108,7 @@ export function ProductsPage() {
   const [doMarkReceived] = useMutateAction(markAdjustmentReceived);
   const [doUpdateOther] = useMutateAction(updateOtherAdjustment);
   const [doReallocate] = useMutateAction(reallocateAtCostAdjustment);
-  const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets] = useLoadAction(listWallets, [], {});
   const progress = rows<{ group_buy_product_id: number; sku_code: string; kits_demand: string; kits_paid: string }>(rawProgress);
 

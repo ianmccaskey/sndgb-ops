@@ -97,10 +97,10 @@ export function PollsPage() {
   const selected = selectedId == null ? null : polls.find(p => Number(p.id) === selectedId) ?? null;
   const optsEnabled = selectedId != null;
 
-  const [rawOpts, optsLoading, , reloadOpts] = useLoadAction(listStorefrontPollOptions, [selectedId], { poll_id: selectedId }, { enabled: optsEnabled });
+  const [rawOpts, optsLoading, , reloadOpts] = useLoadAction(listStorefrontPollOptions, [], { poll_id: selectedId }, { enabled: optsEnabled });
   // a previous poll's rows can linger while the next one loads
   const options = rows<OptionRow>(rawOpts).filter(o => Number(o.poll_id) === selectedId);
-  const [rawComments, commentsLoading, , reloadComments] = useLoadAction(listStorefrontPollComments, [selectedId], { poll_id: selectedId }, { enabled: optsEnabled });
+  const [rawComments, commentsLoading, , reloadComments] = useLoadAction(listStorefrontPollComments, [], { poll_id: selectedId }, { enabled: optsEnabled });
   // same guard as options: a previous poll's comments can linger while the next poll's load
   const comments = rows<CommentRow>(rawComments).filter(c => Number(c.poll_id) === selectedId);
 

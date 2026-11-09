@@ -92,11 +92,11 @@ export function VendorsPage() {
   const { groupBuyId, userName } = useApp();
   const enabled = groupBuyId != null;
   const [rawVendors, , , reloadVendors] = useLoadAction(listVendors, [], {});
-  const [rawBalances, , , reloadBalances] = useLoadAction(listVendorBalances, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawPayments, , , reloadPayments] = useLoadAction(listVendorPayments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawBalances, , , reloadBalances] = useLoadAction(listVendorBalances, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawPayments, , , reloadPayments] = useLoadAction(listVendorPayments, [], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets] = useLoadAction(listWallets, [], {});
-  const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawOther] = useLoadAction(listVendorOtherItems, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawOther] = useLoadAction(listVendorOtherItems, [], { group_buy_id: groupBuyId }, { enabled });
 
   const vendors = rows<Vendor>(rawVendors);
   const balances = rows<Balance>(rawBalances);

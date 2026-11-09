@@ -277,13 +277,13 @@ function PlannerLink(props: { sourceX?: number; targetX?: number; sourceY?: numb
 export function PlannerPage() {
   const { groupBuyId, userName, settings } = useApp();
   const enabled = groupBuyId != null;
-  const [rawPlan, , , reloadPlan] = useLoadAction(getStockPlan, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawPlan, , , reloadPlan] = useLoadAction(getStockPlan, [], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
   const [rawOwed] = useLoadAction(listNonCoaVendorOwed, [], {});
-  const [rawReserve] = useLoadAction(getShippingReserve, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawRecv] = useLoadAction(listAtCostReceivables, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawProducts] = useLoadAction(listCampaignProducts, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawReserve] = useLoadAction(getShippingReserve, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawRecv] = useLoadAction(listAtCostReceivables, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProducts] = useLoadAction(listCampaignProducts, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawProgress, , , reloadProgress] = useLoadAction(listVendorProductProgress, [], { group_buy_id: groupBuyId }, { enabled });
 
   const plan = firstRow<Plan>(rawPlan);
   const wallets = rows<Wallet>(rawWallets);

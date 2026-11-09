@@ -128,8 +128,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   settings: Record<string, string>; cfg: B44Config; userName: string; groupBuyId: number | null;
   onClose: () => void; onShipped: (items: { product_id: number; qty: number }[]) => void; reload: () => void;
 }) {
-  const [rawPackable, , , reloadPackable] = useLoadAction(getPackableItems, [order.id], { order_id: order.id });
-  const [rawShipments, , , reloadShipments] = useLoadAction(listOrderShipments, [order.id], { order_id: order.id });
+  const [rawPackable, , , reloadPackable] = useLoadAction(getPackableItems, [], { order_id: order.id });
+  const [rawShipments, , , reloadShipments] = useLoadAction(listOrderShipments, [], { order_id: order.id });
   // row boundary: the transport re-types digit-only text — re-string
   const packable = useMemo(() => rows<PackableLine>(rawPackable).map(l => ({
     ...l,
@@ -186,7 +186,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // like the refusals (rose), and fix feedback must not blur into the
   // row's other amber messages
   const [fixMsg, setFixMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [rawPhotos, , , reloadPhotos] = useLoadAction(listShipmentPhotos, [order.id], { order_id: order.id });
+  const [rawPhotos, , , reloadPhotos] = useLoadAction(listShipmentPhotos, [], { order_id: order.id });
   const photos = rows<{ id: number; shipment_id: number; thumb_data: string; created_by: string | null; created_at: string }>(rawPhotos);
   // read action invoked imperatively (getOrderTxRefs precedent): the push's
   // fully-shipped decision needs a JUST-IN-TIME authoritative read, never

@@ -51,11 +51,11 @@ export function StorefrontPage() {
   const { groupBuyId, groupBuy, reloadGroupBuys } = useApp();
   const enabled = groupBuyId != null;
 
-  const [rawCs, csLoading, , reloadCs] = useLoadAction(getStorefrontCampaign, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawCs, csLoading, , reloadCs] = useLoadAction(getStorefrontCampaign, [], { group_buy_id: groupBuyId }, { enabled });
   const cs = rows<CampaignSettingsRow>(rawCs)[0] ?? null;
-  const [rawOpts, , , reloadOpts] = useLoadAction(listStorefrontPaymentOptions, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawOpts, , , reloadOpts] = useLoadAction(listStorefrontPaymentOptions, [], { group_buy_id: groupBuyId }, { enabled });
   const options = rows<OptionRow>(rawOpts);
-  const [rawStats, , , reloadStats] = useLoadAction(getStorefrontOrderStats, [groupBuyId], { group_buy_id: groupBuyId }, { enabled: enabled && !!cs });
+  const [rawStats, , , reloadStats] = useLoadAction(getStorefrontOrderStats, [], { group_buy_id: groupBuyId }, { enabled: enabled && !!cs });
   const stats = rows<StatsRow>(rawStats)[0] ?? null;
 
   const [doUpsert] = useMutateAction(upsertStorefrontCampaign);

@@ -47,9 +47,9 @@ export function ReconPage() {
   const [openOrderId, setOpenOrderId] = useState<number | null>(null);
   const enabled = groupBuyId != null;
 
-  const [rawRecon, , , reloadRecon] = useLoadAction(listOrderRecon, [groupBuyId, filter, railFilter], { group_buy_id: groupBuyId, recon: filter, rail: railFilter }, { enabled });
-  const [rawRails, , , reloadRails] = useLoadAction(listRailRecon, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawPending, , , reloadPending] = useLoadAction(listPendingCryptoPayments, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawRecon, , , reloadRecon] = useLoadAction(listOrderRecon, [], { group_buy_id: groupBuyId, recon: filter, rail: railFilter }, { enabled });
+  const [rawRails, , , reloadRails] = useLoadAction(listRailRecon, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawPending, pendingLoading, pendingError, reloadPending] = useLoadAction(listPendingCryptoPayments, [], { group_buy_id: groupBuyId }, { enabled });
 
   const recon = rows<ReconRow>(rawRecon);
   const rails = rows<RailRow>(rawRails);
@@ -76,12 +76,18 @@ export function ReconPage() {
   // the lists here refresh when it ends.
   const autoRecon = useAutoRecon();
   const autoRanFor = useRef<number | null>(null);
+  // Until the pending list's read lands, rawPending is [] (useLoadAction's
+  // while-loading value), which reads as "nothing pending". So the open-time
+  // decision waits for a read of THIS campaign to finish: seen loading, then
+  // settled without an error. A read never seen loading never decides.
+  const pendingReadFor = useRef<number | null>(null);
   useEffect(() => {
-    if (!enabled || groupBuyId == null || rawPending == null) return;
+    if (pendingLoading) { pendingReadFor.current = groupBuyId; return; }
+    if (!enabled || groupBuyId == null || pendingError || pendingReadFor.current !== groupBuyId) return;
     if (autoRanFor.current === groupBuyId) return;
     autoRanFor.current = groupBuyId;
     if (pending.length > 0) void autoRecon.run(groupBuyId, 'recon page');
-  }, [enabled, groupBuyId, rawPending]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [enabled, groupBuyId, rawPending, pendingLoading, pendingError]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!autoRecon.state.running && autoRecon.state.summary) reloadAll();
   }, [autoRecon.state.running]); // eslint-disable-line react-hooks/exhaustive-deps

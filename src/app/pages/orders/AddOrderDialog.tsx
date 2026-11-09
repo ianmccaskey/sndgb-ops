@@ -61,10 +61,10 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
 }) {
   const { groupBuyId, groupBuy, userName } = useApp();
   const [rawNext, nextLoading, , reloadNext] = useLoadAction(
-    nextManualOrderNumber, [groupBuyId, open], { group_buy_id: groupBuyId }, { enabled: open && groupBuyId != null },
+    nextManualOrderNumber, [], { group_buy_id: groupBuyId }, { enabled: open && groupBuyId != null },
   );
-  const [rawProducts] = useLoadAction(
-    listCampaignProducts, [groupBuyId, open], { group_buy_id: groupBuyId }, { enabled: open && groupBuyId != null },
+  const [rawProducts, , , reloadProducts] = useLoadAction(
+    listCampaignProducts, [], { group_buy_id: groupBuyId }, { enabled: open && groupBuyId != null },
   );
   const [doCreate] = useMutateAction(createManualOrder);
   const [doAddLine] = useMutateAction(addLocalOrderItem);
@@ -114,7 +114,10 @@ export function AddOrderDialog({ open, onClose, onCreated }: {
     setLines([{ key: 1, sku: '', qty: '1' }]);
     setRequestId(mintRequestId());
     setMsg(''); setFieldErr({}); setPartial(null); setSaving(false);
+    // a fresh read per open too: useLoadAction re-reads on params / enabled,
+    // and its second argument is the while-loading value, not a dep list
     reloadNext();
+    if (groupBuyId != null) reloadProducts();
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const priceOf = (sku: string) => Number(products.find(p => p.sku_code === sku)?.gb_price_usd || 0);

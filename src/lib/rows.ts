@@ -1,14 +1,16 @@
 /**
  * Normalize a useLoadAction result for safe iteration.
  *
- * When a load is disabled (`enabled: false`) or still resolving, UI Bakery's
- * useLoadAction can hand back a placeholder like `[null]` instead of an empty
- * array — so `.map`/`.filter` directly on the raw result crashes on the null
- * entry. Route every action result through rows() before iterating.
+ * Until an action resolves (or while it is disabled), useLoadAction returns
+ * its SECOND argument — the while-loading value — not rows. Every call here
+ * passes `[]`, so a load reads as "no rows yet"; the placeholders this helper
+ * used to meet (`[null]`, `[groupBuyId]`) were ids passed there as if it were
+ * a dependency list. rows() still keeps only object entries (a primitive is
+ * never a row) and anything that is not an array becomes `[]`. Route every
+ * action result through rows() before iterating, and check the hook's
+ * loading flag before reading an empty list as "none".
  */
 export function rows<T>(data: unknown): T[] {
-  // Placeholders can also be the defaultValue array (e.g. [groupBuyId] → [1])
-  // — a primitive is never a row, so require object entries.
   return Array.isArray(data)
     ? (data.filter(x => x != null && typeof x === 'object') as T[])
     : [];

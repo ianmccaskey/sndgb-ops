@@ -79,14 +79,14 @@ function walletBreakdown(w: Wallet): { usdc: number; usdt: number; pyusd: number
 export function FinancialsPage() {
   const { groupBuyId, settings } = useApp();
   const enabled = groupBuyId != null;
-  const [rawPnl, , , reloadPnl] = useLoadAction(getPnl, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawFreight] = useLoadAction(listFreightByVendor, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
-  const [rawExpenses, , , reloadExpenses] = useLoadAction(listExpenses, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawPnl, , , reloadPnl] = useLoadAction(getPnl, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawFreight] = useLoadAction(listFreightByVendor, [], { group_buy_id: groupBuyId }, { enabled });
+  const [rawExpenses, , , reloadExpenses] = useLoadAction(listExpenses, [], { group_buy_id: groupBuyId }, { enabled });
   const [rawWallets, , , reloadWallets] = useLoadAction(listWallets, [], {});
   // the dispersion tab's itemized rows load LAZILY on first tab activation —
   // Overview must never pay for (or depend on) a query it doesn't render
   const [finTab, setFinTab] = useState('overview');
-  const [rawAdjustments, adjustmentsLoading, adjustmentsError] = useLoadAction(listAdjustments, [groupBuyId, finTab], { group_buy_id: groupBuyId }, { enabled: enabled && finTab === 'dispersion' });
+  const [rawAdjustments, adjustmentsLoading, adjustmentsError] = useLoadAction(listAdjustments, [], { group_buy_id: groupBuyId }, { enabled: enabled && finTab === 'dispersion' });
   // a failed fetch must read as FAILURE, never as an empty dataset — an
   // empty stock table on a financial screen would be a silent lie
   const adjustmentsState: 'loading' | 'error' | 'ready' =
@@ -115,7 +115,7 @@ export function FinancialsPage() {
   // opening balance = chain state at the campaign's FIRST ORDER (placed_at
   // survives import, so this works no matter when the local campaign row
   // was scaffolded — Ian's snapshots don't reach back, the chain does)
-  const [rawFirstOrder] = useLoadAction(getCampaignFirstOrder, [groupBuyId], { group_buy_id: groupBuyId }, { enabled });
+  const [rawFirstOrder] = useLoadAction(getCampaignFirstOrder, [], { group_buy_id: groupBuyId }, { enabled });
   const firstOrderAt = firstRow<{ first_order_at: string | null; order_count: string }>(rawFirstOrder)?.first_order_at || null;
   type OpeningResult = { bd: WalletBalances; block: number; blockTime: string | null };
   // keyed by campaign AND wallet: a campaign switch must never relabel the
