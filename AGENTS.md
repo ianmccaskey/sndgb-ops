@@ -380,10 +380,20 @@ where the code fails to honour one; do not propose replacing the decision.
     with (snapshotted at the draw), never by name or email.
   - **Ship-to:** the address is snapshotted at the claim, for the
     organizers only. It is never written to an audit row.
+  - **Off Home** (`1790104400`, Ian 2026-11-10): an organizer can take a
+    DRAWN giveaway off members' Home and put it back
+    (`giveaway_set_hidden`, `hidden_at` / `hidden_by`, audited
+    `giveaway_hidden` / `giveaway_shown`). Home skips it everywhere (no
+    announcement, no previous-winners line, no past result), but a
+    winner's claim still open in it keeps showing to that winner and
+    settling runs as before: hiding changes what members see, never who
+    won. A CHECK keeps an undrawn giveaway from being hidden; one still
+    running is cancelled instead.
 
   Flag a draw that can pick a forfeited or ineligible member, an entry
-  that can land after the draw read the entrants, or a writer that
-  bypasses the functions. Do not propose letting unverified members
+  that can land after the draw read the entrants, a writer that
+  bypasses the functions, or a hidden giveaway that voids or hides a
+  winner's open claim. Do not propose letting unverified members
   enter, or showing winners by name. Settled with the owner 2026-11-09.
 
 ## Loading data
