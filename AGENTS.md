@@ -361,6 +361,19 @@ where the code fails to honour one; do not propose replacing the decision.
   own units, or a writer that skips the checks; do not propose
   per-listing counting. Settled with the owner 2026-11-09.
 
+- **A listing's product type picks what the stage shows** (`1790104700`).
+  `store_listings.product_kind` is `vial` (peptides, bac water, anything
+  sold in a vial: the shared gold vial loop; the default and every older
+  row) or `storage` (3D-printed cases and racks for vials, first sold by
+  K&K 3D Designs: the closed storage case loop). The seller picks it on
+  each listing (Ian chose per listing over per shop: one shop may sell
+  both), through `storefront.shop_check_listing_kind` (portal and core) and
+  the storefront's `lib/sellers/rules.ts` `checkProductKind`; a CHECK binds
+  every writer. It picks the render only: no price, cap, ship or payment
+  rule reads it. House mirror rows stay `vial`. A new type widens the CHECK
+  and adds its render; flag a writer that skips the check or a reader that
+  prices or gates by it. Settled with the owner 2026-11-10.
+
 - **Member giveaways: set up in P2 Collective Orders, shown on the
   storefront's Home, every rule in this database** (`1790104300`). The
   organizers create, edit, end early, cancel and force-redraw in P2
