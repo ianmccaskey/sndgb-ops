@@ -396,6 +396,31 @@ where the code fails to honour one; do not propose replacing the decision.
   winner's open claim. Do not propose letting unverified members
   enter, or showing winners by name. Settled with the owner 2026-11-09.
 
+- **A store payment a person must see is flagged, listed and emailed; the
+  organizer converts it by recording the swap** (`1790104600`). The
+  storefront nets each token in minus out for the receiving wallet per
+  transaction and counts only stablecoin gains (`onchain.gains`): ST-2026-0017's
+  Jupiter swap had read $320.51 for $160.34 of USDT. It flags
+  `storefront.payments.flags`: `off_token` (a token the order didn't ask for;
+  native / unlisted not counted, another stablecoin at face value) and
+  `self_signed` (the receiving wallet signed it — the shop's own swap — which
+  pays nothing on a buyer's claim), with a one-sentence `flag_note` that never
+  carries the buyer's email, address or a key. P2 Collective Orders →
+  Payments to check (`store_payments_to_check`, owner-only) lists every
+  shop's flags; the storefront worker emails each to `ORGANIZER_ALERT_EMAIL`
+  and stamps `flag_notified_at` only once sent. The organizer records the swap
+  (`store_record_conversion`: under the storefront's tx-hash lock 42022 and
+  the order's row lock; a PENDING claim with `conversion_of` on the SAME order
+  by composite FK; a buyer-pasted copy of that swap on the order is closed
+  and recorded fresh; a newer record replaces one still being checked) — the
+  storefront verifies it, credits the net gain, pays the order and resolves
+  the flag — or marks it handled (`store_resolve_payment_flag`, reason
+  required, money untouched). The portal role gets none of these. Flag a
+  writer that edits a flagged claim's amount by hand, a reader that sums
+  inbound transfers when gains exist, or a grant of these to the portal role;
+  do not propose pricing a native coin automatically. Settled with the owner
+  2026-11-10.
+
 ## Loading data
 
 `useLoadAction(action, defaultValue, params, options)`: the SECOND argument
