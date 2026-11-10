@@ -90,17 +90,21 @@ CREATE INDEX IF NOT EXISTS sf_payments_conversion_of_idx ON storefront.payments 
 -- is that no buyer email, address or key is ever written. People explaining a
 -- refund write such things, so they are replaced on the way in (Codex,
 -- 2026-11-10): an email, a phone number, a street address and a key-shaped
--- secret. Amounts, tokens, wallet addresses and transaction ids are left alone
--- — they are what a resolution is about.
+-- secret (Stripe/Shippo/Anthropic/OpenAI-style sk-/pk- keys, GitHub, Slack,
+-- AWS, PEM private keys, "api key: …"). Amounts of any precision, tokens,
+-- wallet addresses, order numbers and transaction ids are left alone — they
+-- are what a resolution is about. A bare 10-digit number reads as a phone
+-- number and is removed: ambiguous, and privacy wins (the payment row keeps
+-- the on-chain amounts anyway).
 CREATE OR REPLACE FUNCTION storefront.scrub_organizer_text(p text) RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = pg_catalog AS $fn$
   SELECT regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(
            btrim(COALESCE(p, '')),
            '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[email removed]', 'g'),
-           '(\+?1[ .-]?)?(\(\d{3}\)|\m\d{3})[ .-]?\d{3}[ .-]?\d{4}\M', '[phone removed]', 'g'),
+           '(^|[^\w.])(\+?1[ -]?)?(\(\d{3}\)|\d{3})[ -]?\d{3}[ -]?\d{4}(?![\w.])', '\1[phone removed]', 'g'),
            '(^|[\s,(])\d{1,6}( [A-Za-z][A-Za-z0-9.''-]*){1,4} (street|st|avenue|ave|road|rd|lane|ln|drive|dr|boulevard|blvd|court|ct|circle|cir|way|place|pl|parkway|pkwy|terrace|ter|trail|trl|highway|hwy)\M(?![-\w])\.?', '\1[address removed]', 'gi'),
            '\m(p\.?\s?o\.?\s?box|apt|suite|unit)\.?\s*#?\s*[A-Za-z0-9-]+', '[address removed]', 'gi'),
-           '\m(shippo_(live|test)_[A-Za-z0-9]+|sk_(live|test)_[A-Za-z0-9]+|(api|secret)[_-]?key[:= ]+\S+)', '[key removed]', 'gi')
+           '\m(shippo_(live|test)_[A-Za-z0-9]+|(sk|pk|rk)_(live|test)_[A-Za-z0-9]+|(sk|pk|rk)[-_][A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|(api|secret|private)[_-]?key[:= ]+\S+)|-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]*(-----END [A-Z ]*PRIVATE KEY-----)?', '[key removed]', 'gi')
 $fn$;
 
 -- ── 2. what arrived, as one line (the drawers, the organizer list) ──────────
