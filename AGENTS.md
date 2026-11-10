@@ -29,6 +29,19 @@ where the code fails to honour one; do not propose replacing the decision.
   which bypass RLS — the function boundary IS the tenant boundary for the
   portal. Revisit RLS if any role is ever given direct table access or the
   Data API is enabled. Settled with the owner 2026-11-08.
+  Since `1790104800` (2026-11-10, Ian: "Can I be setup as an admin so I
+  can see everyone else's?") a live ORGANIZER in
+  `storefront.portal_organizers` (owner-written, no portal grant) may VIEW
+  any member shop in the portal, read-only: the ten READ wrappers resolve
+  through `portal_resolve_viewer` (a live operator's own shop first, else
+  the member shop the organizer picked with `portal_organizer_view`,
+  audited `portal_organizer_viewing`); every WRITE wrapper and
+  `portal_get_shippo_key` keep `portal_resolve_seller`, which refuses an
+  organizer with a read-only sentence (42501, HINT `organizer-read-only`).
+  Organizer-run shops (`managed_in_ops`) are never viewable there. Flag a
+  write wrapper or the key on the viewer resolver, or an organizer path that
+  writes; changes to member shops by organizers stay in P2 Collective
+  Orders → Shop orders.
 - **One implementation of the seller rules, two entry points**
   (`1790103600`). Every rule a shop operator can exercise — mark shipped /
   fix tracking / mark delivered, the draft-first Shippo label (a
