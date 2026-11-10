@@ -84,6 +84,25 @@ CREATE INDEX IF NOT EXISTS sf_payments_flag_open_idx ON storefront.payments (cre
   WHERE cardinality(flags) > 0 AND flag_resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS sf_payments_conversion_of_idx ON storefront.payments (conversion_of) WHERE conversion_of IS NOT NULL;
 
+-- ── 1b. organizer free text, scrubbed before it is stored ───────────────────
+-- An organizer's note on a recorded swap and the "what did you do" of a
+-- handled flag land in audit_log and on the payment row, where the house rule
+-- is that no buyer email, address or key is ever written. People explaining a
+-- refund write such things, so they are replaced on the way in (Codex,
+-- 2026-11-10): an email, a phone number, a street address and a key-shaped
+-- secret. Amounts, tokens, wallet addresses and transaction ids are left alone
+-- — they are what a resolution is about.
+CREATE OR REPLACE FUNCTION storefront.scrub_organizer_text(p text) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog AS $fn$
+  SELECT regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(
+           btrim(COALESCE(p, '')),
+           '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[email removed]', 'g'),
+           '(\+?1[ .-]?)?(\(\d{3}\)|\m\d{3})[ .-]?\d{3}[ .-]?\d{4}\M', '[phone removed]', 'g'),
+           '(^|[\s,(])\d{1,6}( [A-Za-z][A-Za-z0-9.''-]*){1,4} (street|st|avenue|ave|road|rd|lane|ln|drive|dr|boulevard|blvd|court|ct|circle|cir|way|place|pl|parkway|pkwy|terrace|ter|trail|trl|highway|hwy)\M(?![-\w])\.?', '\1[address removed]', 'gi'),
+           '\m(p\.?\s?o\.?\s?box|apt|suite|unit)\.?\s*#?\s*[A-Za-z0-9-]+', '[address removed]', 'gi'),
+           '\m(shippo_(live|test)_[A-Za-z0-9]+|sk_(live|test)_[A-Za-z0-9]+|(api|secret)[_-]?key[:= ]+\S+)', '[key removed]', 'gi')
+$fn$;
+
 -- ── 2. what arrived, as one line (the drawers, the organizer list) ──────────
 -- Prefers onchain.gains (net per token, written since this migration); older
 -- rows fall back to the inbound transfers they recorded. Unlisted tokens are
@@ -215,7 +234,8 @@ RETURNS TABLE (conversion_id bigint, message text)
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
 DECLARE
   v_actor text := btrim(COALESCE(p_actor, ''));
-  v_note text := NULLIF(btrim(COALESCE(p_note, '')), '');
+  v_note_raw text := btrim(COALESCE(p_note, ''));
+  v_note text := NULLIF(storefront.scrub_organizer_text(p_note), '');
   v_hash text := btrim(COALESCE(p_tx_hash, ''));
   v_pid bigint;
   v_p storefront.payments%ROWTYPE;
@@ -231,7 +251,7 @@ BEGIN
     RAISE EXCEPTION 'That payment isn''t on the list. Reload the page.' USING ERRCODE = 'no_data_found';
   END IF;
   v_pid := btrim(p_payment_id)::bigint;
-  IF v_note IS NOT NULL AND char_length(v_note) > 300 THEN
+  IF char_length(v_note_raw) > 300 THEN
     RAISE EXCEPTION 'Keep the note under 300 characters.' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:note';
   END IF;
 
@@ -315,7 +335,8 @@ RETURNS TABLE (payment_id bigint, message text)
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, storefront, public, pg_temp AS $fn$
 DECLARE
   v_actor text := btrim(COALESCE(p_actor, ''));
-  v_why text := btrim(COALESCE(p_resolution, ''));
+  v_why_raw text := btrim(COALESCE(p_resolution, ''));
+  v_why text := storefront.scrub_organizer_text(p_resolution);
   v_pid bigint;
   v_p storefront.payments%ROWTYPE;
   v_order text;
@@ -327,7 +348,7 @@ BEGIN
     RAISE EXCEPTION 'That payment isn''t on the list. Reload the page.' USING ERRCODE = 'no_data_found';
   END IF;
   v_pid := btrim(p_payment_id)::bigint;
-  IF char_length(v_why) < 3 OR char_length(v_why) > 300 THEN
+  IF char_length(v_why_raw) < 3 OR char_length(v_why_raw) > 300 THEN
     RAISE EXCEPTION 'Say what you did, in 3 to 300 characters (for example "refunded 1.87 SOL to the buyer").' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:resolution';
   END IF;
   SELECT * INTO v_p FROM storefront.payments WHERE id = v_pid FOR UPDATE;
