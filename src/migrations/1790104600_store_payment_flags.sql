@@ -102,7 +102,7 @@ LANGUAGE sql IMMUTABLE SET search_path = pg_catalog AS $fn$
            btrim(COALESCE(p, '')),
            '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[email removed]', 'g'),
            '(^|[^\w.])(\+?1[ -]?)?(\(\d{3}\)|\d{3})[ -]?\d{3}[ -]?\d{4}(?![\w.])', '\1[phone removed]', 'g'),
-           '(^|[\s,(])\d{1,6}( [A-Za-z][A-Za-z0-9.''-]*){1,4} (street|st|avenue|ave|road|rd|lane|ln|drive|dr|boulevard|blvd|court|ct|circle|cir|way|place|pl|parkway|pkwy|terrace|ter|trail|trl|highway|hwy)\M(?![-\w])\.?', '\1[address removed]', 'gi'),
+           '(^|[\s,(])\d{1,6}( ([A-Za-z][A-Za-z0-9.''-]*|\d{1,4}(st|nd|rd|th))){1,4} (street|st|avenue|ave|road|rd|lane|ln|drive|dr|boulevard|blvd|court|ct|circle|cir|way|place|pl|parkway|pkwy|terrace|ter|trail|trl|highway|hwy)\M(?![-\w])\.?', '\1[address removed]', 'gi'),
            '\m(p\.?\s?o\.?\s?box|apt|suite|unit)\.?\s*#?\s*[A-Za-z0-9-]+', '[address removed]', 'gi'),
            '\m(shippo_(live|test)_[A-Za-z0-9]+|(sk|pk|rk)_(live|test)_[A-Za-z0-9]+|(sk|pk|rk)[-_][A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|(api|secret|private|access)[\s_-]?(key|token)\s*[:=]?\s+\S+|(api|secret|private|access)[\s_-]?(key|token)\s*[:=]\s*\S+)|-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]*(-----END [A-Z ]*PRIVATE KEY-----)?', '[key removed]', 'gi')
 $fn$;
