@@ -354,6 +354,38 @@ where the code fails to honour one; do not propose replacing the decision.
   own units, or a writer that skips the checks; do not propose
   per-listing counting. Settled with the owner 2026-11-09.
 
+- **Member giveaways: set up in P2 Collective Orders, shown on the
+  storefront's Home, every rule in this database** (`1790104300`). The
+  organizers create, edit, end early, cancel and force-redraw in P2
+  Collective Orders (`/store/giveaways`); members enter and claim on
+  p2collective.app. Both call the `storefront.giveaway_*` functions, and
+  nothing writes the three tables directly. The admin path is owner-only.
+  The member path (`giveaway_enter`, `_claim`, `_settle`, `_take_notice`,
+  `_due_ids`) is SECURITY DEFINER and takes the member from the
+  storefront's session.
+  - **Entering** needs a verified Telegram or Discord identity and no ban
+    in force. The per-member Store switch does not apply.
+  - **One giveaway at a time:** an EXCLUDE constraint on the window, for
+    every writer.
+  - **The draw** is `ORDER BY gen_random_uuid()` over eligible entrants
+    never drawn in that giveaway, under lock 42040.
+    - Entering holds the lock shared; the draw, a claim and every admin
+      write hold it exclusive. So no entry lands in a giveaway being
+      drawn, and a claim at the last second beats the redraw.
+  - **Claiming:** a winner has `claim_minutes` (30 by default) to claim.
+    After that `giveaway_settle` forfeits the winner (`expired`) and
+    draws the slot again. An organizer's redraw forfeits the winner
+    (`rerolled`, reason required), even after a claim.
+  - **Display:** members see winners only by the handle they verified
+    with (snapshotted at the draw), never by name or email.
+  - **Ship-to:** the address is snapshotted at the claim, for the
+    organizers only. It is never written to an audit row.
+
+  Flag a draw that can pick a forfeited or ineligible member, an entry
+  that can land after the draw read the entrants, or a writer that
+  bypasses the functions. Do not propose letting unverified members
+  enter, or showing winners by name. Settled with the owner 2026-11-09.
+
 ## Loading data
 
 `useLoadAction(action, defaultValue, params, options)`: the SECOND argument
