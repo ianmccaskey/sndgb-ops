@@ -3,7 +3,8 @@
  *
  * - Payment verification: the Enhanced Transactions API returns parsed
  *   token transfers per signature, so a USDC payment's exact amount and
- *   recipient come back without manual pre/post balance math.
+ *   recipient come back without manual pre/post balance math; the RPC's
+ *   getTransaction supplies the full signer list.
  * - Wallet snapshots: standard JSON-RPC via the Helius mainnet endpoint.
  */
 
@@ -28,11 +29,17 @@ export type SolTransfer = {
   at: string | null;
 };
 
+/** One signature, parsed: listed token and SOL transfers in BOTH directions, and every account that signed. */
+export type SolTx = { transfers: SolTransfer[]; signers: string[] };
+
 /**
- * Parsed transfers for one transaction signature. The caller matches `to`
- * against the receiving wallet.
+ * The parsed transaction. Transfers come back in both directions — the
+ * caller nets what its wallet kept (src/lib/txNet.ts), because a swap
+ * routes tokens through the wallet and out again — and `signers` lists
+ * every account that signed, so a swap the receiving wallet made itself is
+ * recognisable even when another account paid the fee.
  */
-export async function getSolTxTransfers(heliusKey: string, signature: string): Promise<SolTransfer[]> {
+export async function getSolTx(heliusKey: string, signature: string): Promise<SolTx> {
   let res: Response;
   try {
     res = await fetchWithBackoff(apiUrl(heliusKey), {
@@ -77,7 +84,34 @@ export async function getSolTxTransfers(heliusKey: string, signature: string): P
       transfers.push({ token: 'SOL', amount, to: String(n.toUserAccount || ''), from: n.fromUserAccount || null, at });
     }
   }
-  return transfers;
+  // Every account that signed, not just the fee payer (the enhanced API
+  // lists neither in full), from the RPC. An answer we cannot read is a
+  // retry, never "nobody signed".
+  const parsed = await getParsedTransaction(heliusKey, signature) as
+    { transaction?: { message?: { accountKeys?: { pubkey?: string; signer?: boolean }[] } } } | null;
+  if (!parsed) throw new Error('Transaction not indexed yet — Helius has not answered for its signers. Wait a minute and click Verify again (the signature stays saved).');
+  const keys = parsed.transaction?.message?.accountKeys;
+  if (!Array.isArray(keys)) throw new Error('Could not read the transaction\'s signers from Helius — click Verify again.');
+  const signers = keys.filter(k => k?.signer === true && typeof k.pubkey === 'string').map(k => k.pubkey as string);
+  return { transfers, signers };
+}
+
+/**
+ * getTransaction, jsonParsed. Jupiter swaps are version-1 transactions
+ * (ST-2026-0017's was), and the RPC refuses any version above the one the
+ * request allows — naming the one it needs — so allow 1 and, when a newer
+ * version is named, ask once more with it.
+ */
+async function getParsedTransaction(heliusKey: string, signature: string): Promise<unknown> {
+  const ask = (version: number) => rpc(heliusKey, 'getTransaction', [signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: version, commitment: 'confirmed' }]);
+  try {
+    return await ask(1);
+  } catch (e) {
+    const named = /Transaction version \((\d+)\) is not supported/i.exec(e instanceof Error ? e.message : '');
+    const version = named ? Number(named[1]) : NaN;
+    if (Number.isSafeInteger(version) && version > 1 && version < 100) return ask(version);
+    throw e;
+  }
 }
 
 async function rpc(heliusKey: string, method: string, params: unknown[]): Promise<unknown> {

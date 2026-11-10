@@ -4,8 +4,8 @@
  * x-api-key header allowed, so the browser can call it directly.
  *
  * Used for:
- *  - verifying a customer payment by transaction hash (stablecoin transfer
- *    amount + recipient decoded from the tx logs)
+ *  - verifying a customer payment by transaction hash (stablecoin transfers
+ *    in both directions decoded from the tx logs, plus the sender)
  *  - wallet balance snapshots
  */
 
@@ -58,11 +58,16 @@ export type ChainTransfer = {
   at: string | null;   // ISO timestamp of the block
 };
 
+/** One hash, parsed: listed transfers in BOTH directions, and the account that signed it. */
+export type EvmTx = { transfers: ChainTransfer[]; signers: string[] };
+
 /**
- * All stablecoin (and native ETH) transfers inside one transaction.
- * The caller matches `to` against the receiving wallet and sums amounts.
+ * All stablecoin (and native ETH) transfers inside one transaction, in
+ * both directions — the caller nets what its wallet kept
+ * (src/lib/txNet.ts) — and its signer, so a swap the receiving wallet made
+ * itself is recognisable.
  */
-export async function getEvmTxTransfers(apiKey: string, chain: EvmChain, txHash: string): Promise<ChainTransfer[]> {
+export async function getEvmTx(apiKey: string, chain: EvmChain, txHash: string): Promise<EvmTx> {
   let d: {
     to_address?: string; from_address?: string; value?: string; block_timestamp?: string;
     receipt_status?: string;
@@ -89,7 +94,7 @@ export async function getEvmTxTransfers(apiKey: string, chain: EvmChain, txHash:
 
   const native = Number(d.value || 0) / 1e18;
   if (native > 0) {
-    transfers.push({ token: 'ETH', amount: native, to: String(d.to_address || '').toLowerCase(), from: d.from_address || null, at });
+    transfers.push({ token: 'ETH', amount: native, to: String(d.to_address || '').toLowerCase(), from: d.from_address ? d.from_address.toLowerCase() : null, at });
   }
 
   for (const log of d.logs || []) {
@@ -101,7 +106,9 @@ export async function getEvmTxTransfers(apiKey: string, chain: EvmChain, txHash:
     const amount = parseInt(String(log.data || '0x0'), 16) / Math.pow(10, meta.decimals);
     if (amount > 0) transfers.push({ token: meta.symbol, amount, to, from, at });
   }
-  return transfers;
+  // an EVM transaction has exactly one signer: its sender
+  const signer = d.from_address ? d.from_address.toLowerCase() : null;
+  return { transfers, signers: signer ? [signer] : [] };
 }
 
 export type WalletBalances = { usdc: number; usdt: number; pyusd: number; native: number };

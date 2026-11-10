@@ -2,6 +2,7 @@ import type { AssistantHttp } from './useAssistantHttp';
 import { dbText } from './rows';
 import { CRYPTO_METHODS, hashFitsNetwork, shortHash } from './chains';
 import type { CryptoMethod } from './chains';
+import type { TxLookupResult } from './verifyPayment';
 
 /*
  * The read-only "Ask about this" assistant.
@@ -67,8 +68,8 @@ export type ReconRail = typeof RECON_RAILS[number];
 export { CRYPTO_METHODS, hashFitsNetwork, shortHash };
 export type { CryptoMethod };
 
-/** What the read-only on-chain lookup reports (src/lib/verifyPayment.ts shape). */
-export type TxLookup = { amountUsd: number; nativeAmount: number | null; nativeSymbol: string | null; note: string };
+/** What the read-only on-chain lookup reports (src/lib/verifyPayment.ts). */
+export type TxLookup = TxLookupResult;
 
 /** Read-only tools the caller wires to campaign-pinned load actions. */
 export type AssistantTools = {
@@ -182,7 +183,7 @@ WHERE THINGS LIVE
 TOOLS
 - get_order_timeline: the audited history of an order in this campaign (payments, verifications, overrides, comps, credits, refunds, write-offs, item edits, shipments, note lines). Call it for "what happened", "when did", "who did".
 - list_recon: the campaign's reconciliation rows by status and rail. Call it for questions across orders ("which orders are short on SOL").
-- lookup_tx: a read-only on-chain lookup of ONE hash on ONE network (eth, base or sol) — the same lookup the Verify button runs, without writing anything. It reports the USD stablecoin amount sent to our receiving wallet, any native coin amount, or why nothing counted (not found on that network, failed, paid another wallet). Call it before proposing anything about a pending hash, to test whether a hash recorded on one network actually lives on another (a 0x hash is eth or base; a base58 signature is sol), or when the operator asks what a hash paid.
+- lookup_tx: a read-only on-chain lookup of ONE hash on ONE network (eth, base or sol) — the same lookup the Verify button runs, without writing anything. It reports the USD stablecoin amount our receiving wallet kept (what came in minus what left, so a swap's pass-through hop counts nothing), any native coin amount, needs_person when our own wallet signed the transaction or its own stablecoins left (a swap we made, never a buyer's payment — the Verify button records nothing for it), or why nothing counted (not found on that network, failed, paid another wallet). Call it before proposing anything about a pending hash, to test whether a hash recorded on one network actually lives on another (a 0x hash is eth or base; a base58 signature is sol), or when the operator asks what a hash paid.
 - propose_fix (only on the order sheet): records a proposed correction for the operator to apply — see FIXES.
 Call a tool when the facts do not already answer the question; do not call tools for drafting.
 
@@ -190,7 +191,7 @@ FIXES (only when propose_fix is available)
 - propose_fix changes nothing. The operator sees each proposal as a card with your reason and an Apply button; the click runs the same audited control as the order sheet, under the operator's name, with the same guards (a reason is required, the payment's status is re-checked, a hash lives on one order). Say "I propose …", what it will do, and what to check before clicking. Never say it is done.
 - Propose only what the evidence supports, and put the evidence in the reason — amount, network, hash shortened to first 10 and last 6 characters, what lookup_tx found. The reason is written to the audit trail. No evidence → no proposal; say what is missing instead.
 - Only payments listed in the facts, by their id, and only on this order. Never propose touching another order's payment: a hash held elsewhere is settled on that order (see "payment NOT attached" above).
-- Kinds: verify_payment — a PENDING crypto payment with a hash, after lookup_tx found a transfer to our wallet on its network. reject_payment — a pending or mismatch payment that lookup_tx shows is not ours on that network, failed, or duplicates a verified one (a reason is required; never reject a verified payment just because the order is over — ask first). undo_rejection — a rejection that was a mistake (reason required). reopen_on_network — a REJECTED payment whose hash fits another network, method = the target network; for a PENDING payment recorded on the wrong network propose reject_payment first and reopen_on_network second, and say the operator applies them in that order. add_hash — a hash the operator gave you or that an upstream ref lists but this order lacks; method must fit the hash shape (0x → eth or base, base58 → sol) and lookup_tx should have found it there. set_override — the order's TOTAL received in USD (it replaces the verified sum), only with a USD figure the operator stated or the facts carry; never price a coin yourself.
+- Kinds: verify_payment — a PENDING crypto payment with a hash, after lookup_tx found a transfer to our wallet on its network and needs_person is null (when it is set, Verify records nothing: explain what lookup_tx found and let the operator choose between reject_payment and an override). reject_payment — a pending or mismatch payment that lookup_tx shows is not ours on that network, failed, or duplicates a verified one (a reason is required; never reject a verified payment just because the order is over — ask first). undo_rejection — a rejection that was a mistake (reason required). reopen_on_network — a REJECTED payment whose hash fits another network, method = the target network; for a PENDING payment recorded on the wrong network propose reject_payment first and reopen_on_network second, and say the operator applies them in that order. add_hash — a hash the operator gave you or that an upstream ref lists but this order lacks; method must fit the hash shape (0x → eth or base, base58 → sol) and lookup_tx should have found it there. set_override — the order's TOTAL received in USD (it replaces the verified sum), only with a USD figure the operator stated or the facts carry; never price a coin yourself.
 - At most three proposals per answer, in the order they should be applied. If the operator says an apply was refused, read the refusal and explain — do not repeat the proposal blindly.
 
 DRAFTS
@@ -231,7 +232,7 @@ const TOOL_DEFS: Record<ToolName, Record<string, unknown>> = {
   },
   lookup_tx: {
     name: 'lookup_tx',
-    description: 'Read-only on-chain lookup of ONE transaction hash on ONE network. Returns the USD stablecoin amount it transferred to our receiving wallet (USDC/USDT/PYUSD at face value), any native ETH/SOL amount, or why nothing counted (not found on that network, failed on-chain, paid another wallet). Nothing is written. Call it before proposing verify_payment, to test a hash against another network (0x hashes: eth or base; base58 signatures: sol), or when asked what a hash paid.',
+    description: 'Read-only on-chain lookup of ONE transaction hash on ONE network. Returns the USD stablecoin amount our receiving wallet NETTED in it (in minus out, USDC/USDT/PYUSD at face value), any native ETH/SOL it kept, needs_person when our own wallet signed it or our own stablecoins left in it (a swap we made, never a buyer\'s payment), or why nothing counted (not found on that network, failed on-chain, paid another wallet, passed through and left). Nothing is written. Call it before proposing verify_payment, to test a hash against another network (0x hashes: eth or base; base58 signatures: sol), or when asked what a hash paid.',
     input_schema: {
       type: 'object',
       properties: {
@@ -666,6 +667,10 @@ async function runTool(name: string, input: unknown, tools: AssistantTools, sink
           content: JSON.stringify({
             network: method, found_transfer_to_our_wallet: true,
             stablecoin_usd: r.amountUsd, native_amount: r.nativeAmount, native_symbol: r.nativeSymbol,
+            kept_by_our_wallet: r.gains,
+            signed_by_our_wallet: r.selfSigned,
+            our_stablecoins_spent: r.spent.length ? r.spent : null,
+            needs_person: r.needsPerson,
             note: r.note || null,
           }),
           isError: false,

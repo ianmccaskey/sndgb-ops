@@ -23,6 +23,12 @@ import { correctOrderRail, RailDeps } from '@/lib/railCorrection';
  *     reported for the member to fix the claim; Base has no ordering-app
  *     value, so it is reported too.
  *
+ * What counts is what our wallet NETTED in the transaction (2026-11-10,
+ * src/lib/txNet.ts). A transaction our receiving wallet signed itself, or
+ * one in which its own stablecoins left, is a swap we made, never a
+ * buyer's payment: the lookup sets `needsPerson`, and the pass neither
+ * verifies nor re-points it — it is listed under "needs you".
+ *
  * NEVER: reject a payment, set an override, price a native coin, move a
  * hash between orders, or touch a hash another order claims. Those are the
  * operator's calls — the assistant proposes them, the pass lists them
@@ -102,11 +108,10 @@ const LOOKUP_GAP_MS = 300;
 const WALLET_KEY: Record<string, string> = { eth: 'eth_wallet_address', base: 'base_wallet_address', sol: 'sol_wallet_address' };
 
 /**
- * Without a receiving wallet for the network, lookupTxPayment counts EVERY
- * transfer in the transaction and only notes that the amount was not
- * recipient-checked. An operator reads that note; an unattended pass must
- * not act on it — so a network with no wallet configured is treated like
- * one with no API key: its payments are skipped and the card says why.
+ * Without a receiving wallet for the network there is nothing to net
+ * against, and lookupTxPayment refuses. The pass checks first so a network
+ * with no wallet configured is treated like one with no API key: its
+ * payments are skipped and the card says why.
  */
 function missingWallet(method: string, settings: Record<string, string>): string | null {
   const key = WALLET_KEY[method];
@@ -121,7 +126,7 @@ type LookupOutcome =
 
 /** The lookup's operator-readable errors, sorted into what they mean for the pass. */
 export function classifyLookupError(message: string): Exclude<LookupOutcome, { ok: true }>['kind'] {
-  if (/API key/i.test(message)) return 'config';
+  if (/API key|wallet address in Settings/i.test(message)) return 'config';
   if (/not indexed|not found/i.test(message)) return 'not_found';
   if (/No transfer|No stablecoin/i.test(message)) return 'no_transfer';
   if (/failed on-chain/i.test(message)) return 'failed';
@@ -177,7 +182,12 @@ export async function runAutoRecon(groupBuyId: number, deps: AutoReconDeps): Pro
 
   // Writes the lookup result the way the Verify button does: stablecoin
   // at face value → verified; native-only → mismatch until priced.
+  // A result that needs a person (our own wallet's swap) is never written.
   const record = async (p: PendingPayment, onMethod: string, res: TxLookupResult, repointedFrom?: string): Promise<void> => {
+    if (res.needsPerson) {
+      push({ kind: 'needs_you', orderNumber: p.order_number, orderId: p.order_id, paymentId: p.payment_id, message: `${shortHash(p.tx_hash)} on ${onMethod.toUpperCase()}: ${res.needsPerson} Nothing was recorded.` });
+      return;
+    }
     const status: 'verified' | 'mismatch' = res.amountUsd > 0 ? 'verified' : 'mismatch';
     const wrote = wroteRows(await deps.recordVerification({
       payment_id: p.payment_id,
@@ -239,6 +249,12 @@ export async function runAutoRecon(groupBuyId: number, deps: AutoReconDeps): Pro
       else elsewhere.push(`${m.toUpperCase()}: ${r.message}`);
     }
 
+    if (found.length === 1 && found[0].res.needsPerson) {
+      // our own wallet's swap on the other network is no evidence this
+      // payment lives there — nothing is re-pointed
+      push({ kind: 'needs_you', orderNumber: p.order_number, orderId: p.order_id, paymentId: p.payment_id, message: `${shortHash(p.tx_hash)} is not on ${p.method.toUpperCase()} (${first.message.slice(0, 120)}); on ${found[0].method.toUpperCase()}: ${found[0].res.needsPerson} Nothing was re-pointed or recorded.` });
+      continue;
+    }
     if (found.length === 1) {
       const hit = found[0];
       const ts = `[${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;

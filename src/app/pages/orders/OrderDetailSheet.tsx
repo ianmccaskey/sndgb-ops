@@ -514,6 +514,15 @@ export function OrderDetailSheet({ orderId, onClose }: { orderId: number | null;
     setSaving(true); setPayMsg('');
     try {
       const res = await lookupTxPayment(p.method, p.tx_hash, settings);
+      // Our own wallet's swap (it signed, or its stablecoins left) is never
+      // a buyer's payment: nothing is written, the payment stays pending,
+      // and the operator rejects it or sets an override — an assistant
+      // proposal applied here is refused the same way
+      if (res.needsPerson) {
+        const message = `Not recorded — ${res.needsPerson}`;
+        setPayMsg(message);
+        return { ok: false, message };
+      }
       // Native-token payments without a USD value become mismatch so someone
       // prices them; stablecoin payments verify at face value — order-level
       // recon decides matched/short/over.

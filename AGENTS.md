@@ -129,6 +129,13 @@ where the code fails to honour one; do not propose replacing the decision.
   Flag a place where the pass would act on ambiguous evidence (two
   networks, a hash another order holds); do not propose widening it to
   rejections or overrides. Settled with the owner 2026-10-25.
+  Since 2026-11-10 `lookupTxPayment` counts what our wallet NETTED per
+  token in the transaction (`src/lib/txNet.ts`, the storefront's
+  `classify.ts` rule after ST-2026-0017), and a transaction our wallet
+  signed itself or that spent its own stablecoins comes back with
+  `needsPerson`: no caller records it (the pass lists it under "needs
+  you", Verify leaves it pending). Flag a reader that sums inbound
+  transfers or records a `needsPerson` result.
 
 - **The ordering-app shipments pass acts only on hand marks with nothing
   recorded here.** `src/lib/autoAdopt.ts` (run by `AutoAdoptProvider`

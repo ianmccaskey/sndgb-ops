@@ -97,6 +97,12 @@ export function ReconPage() {
     setVerifying(v => ({ ...v, [p.payment_id]: 'checking…' }));
     try {
       const res = await lookupTxPayment(p.method, p.tx_hash, settings);
+      // our own wallet's swap: nothing written, the payment stays pending
+      // for the operator to reject or override on the order
+      if (res.needsPerson) {
+        setVerifying(v => ({ ...v, [p.payment_id]: `Not recorded — ${res.needsPerson}` }));
+        return;
+      }
       const billed = parseFloat(p.total_usd);
       const tolerance = parseFloat(groupBuy?.reconcile_tolerance_usd || '1');
       // Native-token payments without a USD value stay pending-equivalent as
