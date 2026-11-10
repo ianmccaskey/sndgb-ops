@@ -106,9 +106,12 @@ export async function getEvmTx(apiKey: string, chain: EvmChain, txHash: string):
     const amount = parseInt(String(log.data || '0x0'), 16) / Math.pow(10, meta.decimals);
     if (amount > 0) transfers.push({ token: meta.symbol, amount, to, from, at });
   }
-  // an EVM transaction has exactly one signer: its sender
-  const signer = d.from_address ? d.from_address.toLowerCase() : null;
-  return { transfers, signers: signer ? [signer] : [] };
+  // An EVM transaction has exactly one signer: its sender. Fail closed — an
+  // answer without a readable sender must never read as "our wallet did
+  // not sign" (Codex, 2026-11-10)
+  const signer = String(d.from_address || '').toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(signer)) throw new Error('Could not read the transaction\'s sender from Moralis — click Verify again.');
+  return { transfers, signers: [signer] };
 }
 
 export type WalletBalances = { usdc: number; usdt: number; pyusd: number; native: number };
