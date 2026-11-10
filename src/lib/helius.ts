@@ -90,9 +90,18 @@ export async function getSolTx(heliusKey: string, signature: string): Promise<So
   const parsed = await getParsedTransaction(heliusKey, signature) as
     { transaction?: { message?: { accountKeys?: { pubkey?: string; signer?: boolean }[] } } } | null;
   if (!parsed) throw new Error('Transaction not indexed yet — Helius has not answered for its signers. Wait a minute and click Verify again (the signature stays saved).');
+  // Fail closed: every entry must name its account and say whether it
+  // signed, and a transaction has at least one signer — a degraded answer
+  // must never read as "our wallet did not sign" (Codex, 2026-11-10)
   const keys = parsed.transaction?.message?.accountKeys;
-  if (!Array.isArray(keys)) throw new Error('Could not read the transaction\'s signers from Helius — click Verify again.');
-  const signers = keys.filter(k => k?.signer === true && typeof k.pubkey === 'string').map(k => k.pubkey as string);
+  const unreadable = new Error('Could not read the transaction\'s signers from Helius — click Verify again.');
+  if (!Array.isArray(keys) || keys.length === 0) throw unreadable;
+  const signers: string[] = [];
+  for (const k of keys) {
+    if (!k || typeof k !== 'object' || typeof k.pubkey !== 'string' || !k.pubkey || typeof k.signer !== 'boolean') throw unreadable;
+    if (k.signer) signers.push(k.pubkey);
+  }
+  if (signers.length === 0) throw unreadable;
   return { transfers, signers };
 }
 
