@@ -8,7 +8,8 @@ import { action } from '@uibakery/data';
  * changed since the page loaded it (`expected_version`, same digest as the
  * edit), or when a P² store listing cites it — store listings are managed
  * in the P2 Collective Orders app, and the foreign key would refuse anyway.
- * An uploaded PDF (media_id) is not removed with it.
+ * An uploaded PDF (media_id) is not removed with it. A blend's components
+ * (1790104900) go with the row and are in the audit copy.
  */
 function deleteStorefrontCoaReport() {
   return action('deleteStorefrontCoaReport', 'SQL', {
@@ -26,10 +27,10 @@ function deleteStorefrontCoaReport() {
           AND gbp.id = c.group_buy_product_id
           AND gbp.group_buy_id = inp.group_buy_id
           AND md5(row(c.group_buy_product_id, c.lab, c.report_url, c.media_id, c.batch_label,
-                      c.tested_at, c.mass_mg, c.purity_pct, c.endotoxin, c.notes)::text) = inp.expected_version
+                      c.tested_at, c.mass_mg, c.purity_pct, c.endotoxin, c.components, c.notes)::text) = inp.expected_version
           AND NOT EXISTS (SELECT 1 FROM storefront.store_listings sl WHERE sl.coa_report_id = c.id)
         RETURNING c.id, c.group_buy_product_id, c.lab, c.report_url, c.media_id, c.batch_label,
-                  c.tested_at, c.mass_mg, c.purity_pct, c.endotoxin, c.notes, c.created_by, c.created_at
+                  c.tested_at, c.mass_mg, c.purity_pct, c.endotoxin, c.components, c.notes, c.created_by, c.created_at
       ), audit AS (
         INSERT INTO audit_log (table_name, row_pk, action, actor, old_data)
         SELECT 'storefront.coa_reports', del.id::text, 'coa_report_deleted', inp.actor,
@@ -37,7 +38,7 @@ function deleteStorefrontCoaReport() {
                                   'lab', del.lab, 'report_url', del.report_url, 'media_id', del.media_id,
                                   'batch_label', del.batch_label, 'tested_at', del.tested_at,
                                   'mass_mg', del.mass_mg, 'purity_pct', del.purity_pct,
-                                  'endotoxin', del.endotoxin, 'notes', del.notes,
+                                  'endotoxin', del.endotoxin, 'components', del.components, 'notes', del.notes,
                                   'created_by', del.created_by, 'created_at', del.created_at)
         FROM del, inp
         RETURNING row_pk

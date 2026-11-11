@@ -274,6 +274,23 @@ where the code fails to honour one; do not propose replacing the decision.
   files a report without mass or purity, or a place that prints an
   endotoxin value; do not propose making the two optional. Settled with
   the owner 2026-11-09.
+  **A blend's report also lists its components** (`1790104900`, Ian
+  2026-11-10: "There are 4 components to the KLOW each with their own
+  mass and purity"). `mass_mg` / `purity_pct` stay required and are the
+  BLEND's (the lab's total quantity and blend purity), so every summary
+  keeps its meaning; `components` is NULL for a single substance, else
+  2–12 `{name, mass_mg, purity_pct}` in the report's order, both figures
+  required per component, names unique ignoring case
+  (`storefront.coa_components_valid`, CHECK `coa_reports_components`, for
+  every writer). Nothing adds the components into the total (a lab may
+  measure it on its own; the form only shows the sum). Mass and purity
+  take three decimals (NUMERIC(11,3) / (6,3)), as labs state them. The
+  version digest covers `components` (list, update, delete). The P²
+  house records the same thing as one `batch_tests` row per component
+  figure (P² Orders `1790001100`, `batch_tests.component`), and every
+  batch summary there — QC roll-up, price sheet, the storefront library —
+  reads only the vial's own tests. Flag a reader that lets a component's
+  figure stand in for the blend's.
 
 - **A vendor payment is one batch: product lines plus the sends that
   carried the money, on any mix of rails** (`1790102100`). The Vendors

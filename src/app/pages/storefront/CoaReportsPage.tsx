@@ -14,9 +14,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { FlaskConical, ExternalLink, Plus } from 'lucide-react';
+import { FlaskConical, ExternalLink, Plus, X } from 'lucide-react';
 
 /**
  * Lab reports (COAs) for the selected campaign's lines, kept in
@@ -25,9 +26,12 @@ import { FlaskConical, ExternalLink, Plus } from 'lucide-react';
  * states the tested mass and the purity — the two figures the library
  * summarises it by (Ian, 2026-11-09; required by the form, the actions and
  * the table, 1790104000) — and the endotoxin screening's outcome when the lab
- * ran one. Every write is one row, audited, and edits/deletes are
- * version-checked so a stale tab is refused instead of overwriting another
- * admin's change.
+ * ran one. A BLEND's report (KLOW and the like, 1790104900) states the
+ * blend's total mass and purity in those two fields and lists its components,
+ * each with its own mass and purity, as the report prints them; nothing adds
+ * the components up into the total. Every write is one row, audited, and
+ * edits/deletes are version-checked so a stale tab is refused instead of
+ * overwriting another admin's change.
  */
 
 type ProductRow = {
@@ -55,6 +59,8 @@ type ReportRow = {
   purity_pct: string | null;
   /** 'pass' | 'fail'; null = the lab did not screen for endotoxin, or the report doesn't say */
   endotoxin: string | null;
+  /** a blend's components as JSON text, [{name, mass_mg, purity_pct}]; null = a single substance */
+  components: string | null;
   notes: string | null;
   created_by: string | null;
   created_at: string;
@@ -65,15 +71,30 @@ type ReportRow = {
 
 /** endotoxin in the form: '' = not screened / not stated */
 type Endotoxin = '' | 'pass' | 'fail';
-type Draft = { lab: string; reportUrl: string; batchLabel: string; testedAt: string; massMg: string; purityPct: string; endotoxin: Endotoxin; notes: string };
-const EMPTY_DRAFT: Draft = { lab: '', reportUrl: '', batchLabel: '', testedAt: '', massMg: '', purityPct: '', endotoxin: '', notes: '' };
+/** one component of a blend as the form holds it (figures as typed) */
+type ComponentDraft = { name: string; massMg: string; purityPct: string };
+type Draft = {
+  lab: string; reportUrl: string; batchLabel: string; testedAt: string; massMg: string; purityPct: string; endotoxin: Endotoxin; notes: string;
+  /** a blend: massMg / purityPct are the blend's total and purity, and the components are listed */
+  blend: boolean; components: ComponentDraft[];
+};
+const EMPTY_COMPONENT: ComponentDraft = { name: '', massMg: '', purityPct: '' };
+const EMPTY_DRAFT: Draft = { lab: '', reportUrl: '', batchLabel: '', testedAt: '', massMg: '', purityPct: '', endotoxin: '', notes: '', blend: false, components: [] };
 type Editing = { mode: 'add'; gbpId: number } | { mode: 'edit'; report: ReportRow };
+
+/** a stored component as the list returns it */
+type Component = { name: string; mass_mg: number; purity_pct: number };
 
 // mirror the action's checks so the page explains a refusal before sending it
 const URL_RE = /^https?:\/\/[^/\s]+([/?#]\S*)?$/i;
-const PURITY_RE = /^\d{1,3}(\.\d{1,2})?$/;
-const MASS_RE = /^\d{1,6}(\.\d{1,2})?$/;
+// three decimals: labs state 57.569 mg and 99.639% (1790104900)
+const PURITY_RE = /^\d{1,3}(\.\d{1,3})?$/;
+const MASS_RE = /^\d{1,6}(\.\d{1,3})?$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// a component's name: one line, as the report prints it (the action refuses control characters)
+const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
+const MIN_COMPONENTS = 2;
+const MAX_COMPONENTS = 12;
 // the Select cannot hold an empty value, so "not screened" has a word of its own there
 const NOT_SCREENED = 'none';
 const ENDOTOXIN_LABEL: Record<string, string> = { pass: 'Pass', fail: 'Fail' };
@@ -86,14 +107,62 @@ function draftProblem(d: Draft, hasPdf: boolean): string | null {
     return 'The report link must be a web address starting with http:// or https://, with no spaces.';
   }
   // every report states the tested mass and the purity: the library summarises a COA by those two
+  // (a blend's: its total quantity and blend purity)
   const m = d.massMg.trim();
-  if (!m) return 'Enter the tested mass in mg, as the report states it (e.g. 10.48).';
-  if (!MASS_RE.test(m) || Number(m) <= 0) return 'Tested mass is a number of mg above zero with at most two decimals, e.g. 10.48.';
+  if (!m) return d.blend ? "Enter the blend's total mass in mg, as the report states it (e.g. 88.421)." : 'Enter the tested mass in mg, as the report states it (e.g. 10.48).';
+  if (!MASS_RE.test(m) || Number(m) <= 0) return `${d.blend ? 'Blend total mass' : 'Tested mass'} is a number of mg above zero with at most three decimals, e.g. 10.48.`;
   const p = d.purityPct.trim();
-  if (!p) return 'Enter the purity the report states, as a percentage (e.g. 99.12).';
-  if (!PURITY_RE.test(p) || Number(p) > 100) return 'Purity is a percentage from 0 to 100 with at most two decimals, e.g. 99.12.';
+  if (!p) return d.blend ? 'Enter the blend purity the report states, as a percentage (e.g. 99.85).' : 'Enter the purity the report states, as a percentage (e.g. 99.12).';
+  if (!PURITY_RE.test(p) || Number(p) > 100) return `${d.blend ? 'Blend purity' : 'Purity'} is a percentage from 0 to 100 with at most three decimals, e.g. 99.12.`;
+  if (d.blend) {
+    const cs = d.components;
+    if (cs.length < MIN_COMPONENTS) return 'A blend lists at least two components. Add the others, or switch Blend off.';
+    if (cs.length > MAX_COMPONENTS) return `A blend lists at most ${MAX_COMPONENTS} components.`;
+    const seen = new Set<string>();
+    for (let i = 0; i < cs.length; i++) {
+      const name = cs[i].name.trim();
+      if (!name) return `Component ${i + 1} needs a name, as the report prints it (e.g. BPC-157).`;
+      if (name.length > 60 || CONTROL_RE.test(name)) return `Component ${i + 1}: the name is at most 60 characters, on one line.`;
+      if (seen.has(name.toLowerCase())) return `${name} is listed twice. Each component appears once.`;
+      seen.add(name.toLowerCase());
+      const cm = cs[i].massMg.trim();
+      if (!cm) return `Enter ${name}'s mass in mg, as the report states it.`;
+      if (!MASS_RE.test(cm) || Number(cm) <= 0) return `${name}'s mass is a number of mg above zero with at most three decimals, e.g. 9.923.`;
+      const cp = cs[i].purityPct.trim();
+      if (!cp) return `Enter ${name}'s purity, as the report states it.`;
+      if (!PURITY_RE.test(cp) || Number(cp) > 100) return `${name}'s purity is a percentage from 0 to 100 with at most three decimals, e.g. 99.639.`;
+    }
+  }
   if (d.testedAt && !DATE_RE.test(d.testedAt)) return 'Tested on must be a date.';
   return null;
+}
+
+/** A report's stored components; [] for a single substance (or a value that doesn't read as a list). */
+function componentsOf(r: Pick<ReportRow, 'components'>): Component[] {
+  const raw: unknown = r.components;
+  if (raw == null || raw === '') return [];
+  let v: unknown = raw;
+  if (typeof raw === 'string') {
+    try { v = JSON.parse(raw); } catch { return []; }
+  }
+  if (!Array.isArray(v)) return [];
+  return v.filter((c): c is Component =>
+    !!c && typeof c === 'object' && typeof (c as Component).name === 'string'
+    && Number.isFinite(Number((c as Component).mass_mg)) && Number.isFinite(Number((c as Component).purity_pct)));
+}
+
+/** "KPV 11.41 mg · 99.43%" */
+const componentLine = (c: Component) => `${c.name} ${Number(c.mass_mg)} mg · ${Number(c.purity_pct)}%`;
+
+/** what the components add up to, mg in thousandths (no float drift); null while any mass is not a number yet */
+function componentsTotal(cs: ComponentDraft[]): number | null {
+  let thousandths = 0;
+  for (const c of cs) {
+    const t = c.massMg.trim();
+    if (!MASS_RE.test(t)) return null;
+    thousandths += Math.round(Number(t) * 1000);
+  }
+  return thousandths / 1000;
 }
 
 /** "2026-10-01" → "Oct 1, 2026" in local terms (new Date('YYYY-MM-DD') would be UTC midnight). */
@@ -158,7 +227,10 @@ export function CoaReportsPage() {
   };
   const startEdit = (r: ReportRow) => {
     setEditing({ mode: 'edit', report: r });
+    const comps = componentsOf(r);
     setDraft({
+      blend: comps.length > 0,
+      components: comps.map(c => ({ name: c.name, massMg: String(Number(c.mass_mg)), purityPct: String(Number(c.purity_pct)) })),
       lab: r.lab ?? '', reportUrl: r.report_url ?? '', batchLabel: r.batch_label ?? '',
       testedAt: r.tested_at ?? '',
       massMg: r.mass_mg != null ? String(Number(r.mass_mg)) : '',
@@ -186,6 +258,10 @@ export function CoaReportsPage() {
         mass_mg: draft.massMg.trim(),
         purity_pct: draft.purityPct.trim(),
         endotoxin: draft.endotoxin,
+        // '' = a single substance (any stored list is cleared); figures go as typed, the action checks and stores them
+        components: draft.blend
+          ? JSON.stringify(draft.components.map(c => ({ name: c.name.trim(), mass_mg: c.massMg.trim(), purity_pct: c.purityPct.trim() })))
+          : '',
         notes: draft.notes.trim(),
         actor: userName,
       };
@@ -235,6 +311,18 @@ export function CoaReportsPage() {
   const editingLine = editing ? (editing.mode === 'add' ? editing.gbpId : Number(editing.report.group_buy_product_id)) : null;
   const hasPdf = editing?.mode === 'edit' && editing.report.media_id != null;
 
+  // switching Blend on opens two empty component rows; off keeps what was typed until the save drops it
+  const setBlend = (on: boolean) => setDraft(d => ({
+    ...d, blend: on,
+    components: on && d.components.length === 0 ? [{ ...EMPTY_COMPONENT }, { ...EMPTY_COMPONENT }] : d.components,
+  }));
+  const setComponent = (i: number, patch: Partial<ComponentDraft>) =>
+    setDraft(d => ({ ...d, components: d.components.map((c, j) => (j === i ? { ...c, ...patch } : c)) }));
+  // shown, never enforced: a lab may state a total it measured on its own
+  const componentSum = draft.blend && draft.components.length > 0 ? componentsTotal(draft.components) : null;
+  const sumDiffers = componentSum != null && MASS_RE.test(draft.massMg.trim())
+    && Math.round(Number(draft.massMg.trim()) * 1000) !== Math.round(componentSum * 1000);
+
   const renderForm = (lineName: string) => (
     <div className="border-t bg-muted/20 p-3 space-y-3">
       <p className="text-sm font-semibold">{editing?.mode === 'edit' ? 'Edit report' : 'New report'} · {lineName}</p>
@@ -257,16 +345,6 @@ export function CoaReportsPage() {
           <Input id="coa-tested" type="date" value={draft.testedAt} onChange={e => setDraft({ ...draft, testedAt: e.target.value })} />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="coa-mass">Tested mass (mg)</Label>
-          <Input id="coa-mass" value={draft.massMg} onChange={e => setDraft({ ...draft, massMg: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" placeholder="e.g. 10.48" className="font-mono" required aria-required="true" />
-          <p className="text-xs text-muted-foreground">Required. What the lab measured in the vial, not the label.</p>
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="coa-purity">Purity %</Label>
-          <Input id="coa-purity" value={draft.purityPct} onChange={e => setDraft({ ...draft, purityPct: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" placeholder="e.g. 99.12" className="font-mono" required aria-required="true" />
-          <p className="text-xs text-muted-foreground">Required.</p>
-        </div>
-        <div className="space-y-1">
           <Label htmlFor="coa-endotoxin">Endotoxin screening</Label>
           <Select value={draft.endotoxin || NOT_SCREENED} onValueChange={v => setDraft({ ...draft, endotoxin: v === 'pass' || v === 'fail' ? v : '' })}>
             <SelectTrigger id="coa-endotoxin"><SelectValue /></SelectTrigger>
@@ -278,6 +356,65 @@ export function CoaReportsPage() {
           </Select>
           <p className="text-xs text-muted-foreground">Pass or Fail when the report has an endotoxin result.</p>
         </div>
+        <div className="sm:col-span-2 flex items-start gap-3 rounded border px-3 py-2">
+          <Switch id="coa-blend" checked={draft.blend} onCheckedChange={setBlend} className="mt-0.5" />
+          <div>
+            <Label htmlFor="coa-blend" className="cursor-pointer">Blend</Label>
+            <p className="text-xs text-muted-foreground">Several peptides in one vial (e.g. KLOW): the report gives a total and each component's own mass and purity.</p>
+          </div>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="coa-mass">{draft.blend ? 'Blend total mass (mg)' : 'Tested mass (mg)'}</Label>
+          <Input id="coa-mass" value={draft.massMg} onChange={e => setDraft({ ...draft, massMg: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" placeholder={draft.blend ? 'e.g. 88.421' : 'e.g. 10.48'} className="font-mono" required aria-required="true" />
+          <p className="text-xs text-muted-foreground">{draft.blend ? "Required. The report's total quantity for the vial." : 'Required. What the lab measured in the vial, not the label.'}</p>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="coa-purity">{draft.blend ? 'Blend purity %' : 'Purity %'}</Label>
+          <Input id="coa-purity" value={draft.purityPct} onChange={e => setDraft({ ...draft, purityPct: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" placeholder={draft.blend ? 'e.g. 99.85' : 'e.g. 99.12'} className="font-mono" required aria-required="true" />
+          <p className="text-xs text-muted-foreground">{draft.blend ? 'Required. The blend purity the report states.' : 'Required.'}</p>
+        </div>
+        {draft.blend && (
+          <fieldset className="sm:col-span-2 space-y-2 rounded border p-3">
+            <legend className="px-1 text-sm font-medium">Components</legend>
+            <p className="text-xs text-muted-foreground">In the report's order, each with the mass and purity the lab measured for it.</p>
+            {draft.components.map((c, i) => (
+              <div key={i} className="grid grid-cols-12 gap-2 items-end">
+                <div className="col-span-12 sm:col-span-6 space-y-1">
+                  <Label htmlFor={`coa-comp-name-${i}`} className="text-xs">Component {i + 1}</Label>
+                  <Input id={`coa-comp-name-${i}`} value={c.name} onChange={e => setComponent(i, { name: e.target.value })} placeholder={i === 0 ? 'e.g. BPC-157' : ''} maxLength={60} />
+                </div>
+                <div className="col-span-5 sm:col-span-3 space-y-1">
+                  <Label htmlFor={`coa-comp-mass-${i}`} className="text-xs">Mass (mg)</Label>
+                  <Input id={`coa-comp-mass-${i}`} value={c.massMg} onChange={e => setComponent(i, { massMg: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" className="font-mono" />
+                </div>
+                <div className="col-span-5 sm:col-span-2 space-y-1">
+                  <Label htmlFor={`coa-comp-purity-${i}`} className="text-xs">Purity %</Label>
+                  <Input id={`coa-comp-purity-${i}`} value={c.purityPct} onChange={e => setComponent(i, { purityPct: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" className="font-mono" />
+                </div>
+                <div className="col-span-2 sm:col-span-1 flex justify-end">
+                  <Button type="button" size="icon" variant="ghost" className="h-9 w-9 text-muted-foreground"
+                    aria-label={`Remove ${c.name.trim() || `component ${i + 1}`}`}
+                    disabled={busy || draft.components.length <= MIN_COMPONENTS}
+                    onClick={() => setDraft(d => ({ ...d, components: d.components.filter((_, j) => j !== i) }))}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center gap-3 flex-wrap pt-1">
+              <Button type="button" size="sm" variant="outline" disabled={busy || draft.components.length >= MAX_COMPONENTS}
+                onClick={() => setDraft(d => ({ ...d, components: [...d.components, { ...EMPTY_COMPONENT }] }))}>
+                <Plus /> Add component
+              </Button>
+              {componentSum != null && (
+                <span className={`text-xs ${sumDiffers ? 'text-amber-300' : 'text-muted-foreground'}`}>
+                  The components add up to {componentSum} mg
+                  {sumDiffers ? `; the total above is ${Number(draft.massMg)} mg. Check both against the report.` : '.'}
+                </span>
+              )}
+            </div>
+          </fieldset>
+        )}
         <div className="space-y-1 sm:col-span-2">
           <Label htmlFor="coa-notes">Notes</Label>
           <Textarea id="coa-notes" value={draft.notes} onChange={e => setDraft({ ...draft, notes: e.target.value })} rows={2} />
@@ -364,12 +501,17 @@ export function CoaReportsPage() {
                       <TableBody>
                         {lineReports.map(r => {
                           const cited = Number(r.listing_count) > 0;
+                          const comps = componentsOf(r);
                           return (
-                            <TableRow key={r.id}>
+                            <React.Fragment key={r.id}>
+                            <TableRow className={comps.length > 0 ? 'border-b-0' : undefined}>
                               <TableCell>{r.lab || '—'}</TableCell>
                               <TableCell className="font-mono text-xs">{r.batch_label || '—'}</TableCell>
                               <TableCell className="whitespace-nowrap">{fmtYmd(r.tested_at)}</TableCell>
-                              <TableCell className="text-right font-mono text-xs whitespace-nowrap">{r.mass_mg != null ? `${Number(r.mass_mg)} mg` : '—'}</TableCell>
+                              <TableCell className="text-right font-mono text-xs whitespace-nowrap">
+                                {r.mass_mg != null ? `${Number(r.mass_mg)} mg` : '—'}
+                                {comps.length > 0 && <span className="block font-sans text-muted-foreground">blend total</span>}
+                              </TableCell>
                               <TableCell className="text-right font-mono text-xs">{r.purity_pct != null ? `${Number(r.purity_pct)}%` : '—'}</TableCell>
                               <TableCell className={`text-xs ${r.endotoxin === 'fail' ? 'text-rose-400' : ''}`}>{r.endotoxin ? ENDOTOXIN_LABEL[r.endotoxin] ?? r.endotoxin : 'Not screened'}</TableCell>
                               <TableCell className="text-xs">
@@ -394,6 +536,17 @@ export function CoaReportsPage() {
                                 )}
                               </TableCell>
                             </TableRow>
+                            {comps.length > 0 && (
+                              <TableRow className="hover:bg-transparent">
+                                <TableCell colSpan={10} className="pt-0 text-xs text-muted-foreground">
+                                  <span className="font-medium text-foreground">Blend of {comps.length}:</span>{' '}
+                                  {comps.map((c, i) => (
+                                    <span key={i} className="whitespace-nowrap">{i > 0 && <span aria-hidden="true"> • </span>}{componentLine(c)}</span>
+                                  ))}
+                                </TableCell>
+                              </TableRow>
+                            )}
+                            </React.Fragment>
                           );
                         })}
                       </TableBody>
@@ -406,7 +559,8 @@ export function CoaReportsPage() {
                     <p>
                       {confirmDelete.batch_label ? `Batch ${confirmDelete.batch_label}, ` : ''}tested {fmtYmd(confirmDelete.tested_at)}
                       {confirmDelete.mass_mg != null ? `, ${Number(confirmDelete.mass_mg)} mg` : ''}
-                      {confirmDelete.purity_pct != null ? `, ${Number(confirmDelete.purity_pct)}% purity` : ''}. It is removed from the COA library for good; the audit log keeps a copy of what it said.
+                      {confirmDelete.purity_pct != null ? `, ${Number(confirmDelete.purity_pct)}% purity` : ''}
+                      {componentsOf(confirmDelete).length > 0 ? `, a blend of ${componentsOf(confirmDelete).length}` : ''}. It is removed from the COA library for good; the audit log keeps a copy of what it said.
                     </p>
                     <div className="flex gap-2">
                       <Button size="sm" disabled={busy} onClick={() => remove(confirmDelete)}>{busy ? 'Deleting…' : 'Delete report'}</Button>
