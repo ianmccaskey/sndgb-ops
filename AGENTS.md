@@ -119,7 +119,9 @@ where the code fails to honour one; do not propose replacing the decision.
   operator pastes or a field they still submit, member fields are never
   sent (hand-picked facts, `redact()` over facts and tool results drops
   member-field keys and scrubs emails/phones/handles from strings; the
-  tracking-email draft sends the first name only), and every question is
+  tracking-email draft sends the first name only and never names a
+  product or the campaign — Ian 2026-11-10, the same rule as the
+  storefront's emails), and every question is
   audited (`assistant_asked`, question scrubbed). On the order sheet only
   it may also PROPOSE a crypto payment fix (`propose_fix`: verify, reject,
   undo rejection, re-open on another network, add hash, set override) — a

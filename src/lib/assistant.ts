@@ -196,7 +196,7 @@ FIXES (only when propose_fix is available)
 
 DRAFTS
 - Admin note / reason: one or two factual sentences, past tense, with amounts and hashes shortened to first 10 and last 6 characters.
-- Tracking email: subject + body, friendly and brief, first name only, carrier and tracking number, what to do if it stalls; signed "the P² Team". No organizer names, no amounts.`;
+- Tracking email: subject + body, friendly and brief, first name only, carrier and tracking number, what to do if it stalls; signed "the P² Team". No organizer names, no amounts, and never a product, kit, item or campaign name (not even in the subject): say "your order" and the order number.`;
 
 // ---------------------------------------------------------------------------
 // Tool definitions (strict schemas: the model's input validates exactly)
@@ -464,14 +464,17 @@ export function firstName(name: unknown): string {
   return s ? s.split(/\s+/)[0] : 'there';
 }
 
+/**
+ * Facts for the tracking-email draft. No campaign: organizers name campaigns
+ * after what they sell ("R60/T10 Flash Buy"), and no email names a product
+ * (Ian, 2026-11-10; the storefront's ZeptoMail templates follow the same rule).
+ */
 export function shipmentFacts(args: {
-  campaign: CampaignLike | null | undefined;
   orderNumber: string; customerFirstName: string;
   carrier: string; trackingNumber: string; labelKind: 'shippo' | 'manual';
   shippoEmailsTracking: boolean;
 }): Rec {
   return {
-    campaign: campaignFacts(args.campaign),
     shipment: {
       order_number: args.orderNumber,
       customer_first_name: args.customerFirstName,

@@ -46,7 +46,6 @@ const ATTENTION_SUBSTATUSES = ['delivery_attempted', 'address_issue', 'package_d
 const UNLINKED_LABEL_NOTE = 'NOTE: the label could not be linked to a Shippo order, so Shippo will NOT email tracking for this box — email the customer the tracking number yourself.';
 import { rows, dbText } from '@/lib/rows';
 import { Button } from '@/components/ui/button';
-import { useApp } from '@/app/AppContext';
 import { AskAssistant } from '@/components/AskAssistant';
 import { firstName, shipmentFacts } from '@/lib/assistant';
 import { Input } from '@/components/ui/input';
@@ -232,7 +231,6 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // operator sends from their own mail client (manual and unlinked labels
   // get no Shippo email). Carrier comes from the saved shipment row.
   const [draftEmail, setDraftEmail] = useState<{ tracking: string; kind: 'shippo' | 'manual' } | null>(null);
-  const { groupBuy: selectedCampaign } = useApp();
   const [pendingFinalize, setPendingFinalize] = useState<Record<number, PurchaseResult>>({});
   const [recoverTxn, setRecoverTxn] = useState<Record<number, string>>({});
   const [rowMsg, setRowMsg] = useState<Record<number, string>>({});
@@ -1810,7 +1808,6 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                 kind: 'shipment',
                 label: `tracking email for ${order.order_number}, tracking ${draftEmail.tracking}`,
                 facts: shipmentFacts({
-                  campaign: selectedCampaign,
                   orderNumber: order.order_number,
                   customerFirstName: firstName(order.contact_name || order.customer_name),
                   carrier: finals.find(s => s.tracking_number === draftEmail.tracking)?.carrier || '',
