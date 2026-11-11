@@ -478,6 +478,27 @@ where the code fails to honour one; do not propose replacing the decision.
   do not propose pricing a native coin automatically. Settled with the owner
   2026-11-10.
 
+- **A member shop may post each paid order to its OWN webhook, once**
+  (`1790105000`, Ian 2026-11-10, first for ELPEPPYJOE BREWERY, who buys
+  labels in his own system). The seller saves the URL (https, a public
+  domain name — never an IP literal or a local name) and the Authorization
+  header in P2 Seller Portal → Settings (`portal_set_order_webhook` →
+  `shop_set_order_webhook`); no granted function returns the header, and
+  audit rows carry the host and its last 4 only. The storefront posts on
+  the paid transition (`afterStorePaid`) and its worker sweeps what that
+  missed (`order_webhook_due`: paid, after the latest save, within 7
+  days), through `order_webhook_claim` — the send-once ledger
+  `store_order_webhook_sends` is claimed BEFORE the POST — and
+  `order_webhook_finish` (sent / refused / unreachable). A send is NEVER
+  repeated, whatever came of it: a receiver that answered badly may still
+  have bought the label. The payload is the order number, the buyer's name,
+  the full ship-to, the items with quantities and the shipping paid —
+  never the buyer's email or phone. The storefront refuses any address that
+  resolves to a private or reserved network at connect time and follows no
+  redirect. Flag a retry, a second send of one order, a granted path to the
+  header, or a payload field beyond those; do not propose a UI Bakery
+  automation for it (Ian chose the store-built design).
+
 ## Loading data
 
 `useLoadAction(action, defaultValue, params, options)`: the SECOND argument
