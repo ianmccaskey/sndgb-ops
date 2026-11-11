@@ -86,6 +86,16 @@ END $$;
 COMMENT ON FUNCTION storefront.coa_components_valid(jsonb) IS
   'CHECK for coa_reports.components: NULL, or 2-12 {name, mass_mg, purity_pct} with unique names, mass > 0 and purity 0-100 at most three decimals (1790104900).';
 
+-- The report's own figures are numbers a member reads: never NUMERIC 'NaN'
+-- (which sorts above every number, so "mass_mg > 0" alone admits it), and a
+-- purity within 0-100. The Ops actions already refuse both by pattern; this
+-- binds every other writer. The table is empty today, so nothing can fail it.
+ALTER TABLE storefront.coa_reports DROP CONSTRAINT IF EXISTS coa_reports_figures_finite;
+ALTER TABLE storefront.coa_reports ADD CONSTRAINT coa_reports_figures_finite CHECK (
+  (mass_mg IS NULL OR mass_mg <> 'NaN'::numeric)
+  AND (purity_pct IS NULL OR (purity_pct <> 'NaN'::numeric AND purity_pct >= 0 AND purity_pct <= 100))
+);
+
 ALTER TABLE storefront.coa_reports DROP CONSTRAINT IF EXISTS coa_reports_components;
 ALTER TABLE storefront.coa_reports ADD CONSTRAINT coa_reports_components
   CHECK (storefront.coa_components_valid(components));
