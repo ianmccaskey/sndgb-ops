@@ -648,17 +648,23 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   }, [addresses, shipFrom, myDefault]);
   const fromRow = addresses.find(a => String(a.id) === shipFrom) || null;
   // return-address preselection: the ship-from's saved pairing (Receiving >
-  // Addresses). Kept while the ship-from stays and the pick is still
-  // active; re-derived when the ship-from changes or the picked address is
-  // archived. A pairing to an archived address yields '' — never a silent
-  // fall back to the ship-from, which may be the address the operator set
-  // a return address to keep OFF the label.
+  // Addresses), applied only when a ship-from is chosen (or changed). While
+  // the ship-from stays, the value is the operator's: a picked address that
+  // gets archived becomes '' (pick again), never the pairing or the
+  // ship-from. A pairing to an archived address also yields '' — never a
+  // silent fall back to the ship-from, which may be the address the
+  // operator set a return address to keep OFF the label.
   const pairedReturn = fromRow?.return_address_id == null ? null
     : addresses.find(a => Number(a.id) === Number(fromRow.return_address_id)) || null;
   useEffect(() => {
-    if (!shipFrom) return;
-    const cur = /^\d+$/.test(returnTo) ? addresses.find(a => String(a.id) === returnTo) : null;
-    if (returnFor === shipFrom && (!/^\d+$/.test(returnTo) || cur?.active)) return;
+    // an empty list is a load in flight (useLoadAction's while-loading
+    // value), not every address archived — the ship-from effect's guard
+    if (!shipFrom || addresses.length === 0) return;
+    if (returnFor === shipFrom) {
+      const cur = /^\d+$/.test(returnTo) ? addresses.find(a => String(a.id) === returnTo) : null;
+      if (/^\d+$/.test(returnTo) && !cur?.active) setReturnTo('');
+      return;
+    }
     const from = addresses.find(a => String(a.id) === shipFrom);
     if (!from) return;
     const pairedId = from.return_address_id == null ? null : Number(from.return_address_id);
@@ -671,9 +677,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     : null;
   // what stops a quote or purchase on the return address, said up front
   const returnBlocker = !fromRow || returnTo === 'same' || returnRow ? ''
-    : returnTo === '' && pairedReturn
+    : returnTo === '' && pairedReturn && !pairedReturn.active
       ? `"${fromRow.label}" returns to "${pairedReturn.label}", which is archived — pick this label's return address (or restore "${pairedReturn.label}" on Receiving > Addresses).`
-      : 'Pick the return address.';
+      : 'The return address picked for this label is no longer active — pick the return address again.';
   // row boundary: the transport re-types digit-only text (ZIPs, phones)
   // as JS numbers — Shippo 400s a numeric zip ("Invalid input type for
   // field: zip") and the draft CAS compares jsonb content where 92122
