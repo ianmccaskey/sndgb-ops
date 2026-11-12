@@ -53,6 +53,22 @@ function markShipmentPurchaseStarted() {
                                  'city', ra.city, 'state', ra.state, 'zip', ra.zip,
                                  'country', ra.country, 'phone', ra.phone, 'email', ra.email)
               = s.from_address
+          -- and the RETURN address (1790105100), when the label names one:
+          -- the saved row must still be active and equal the draft's
+          -- snapshot, or the operator re-quotes. Read, not locked: an edit
+          -- landing after this statement changes nothing the label carries
+          -- (the rate froze address_return at quote time and the draft
+          -- recorded that content), and a second lock here, taken after
+          -- o and ra, could invert the id-ordered locking the draft uses.
+          AND (s.return_address_id IS NULL
+               OR EXISTS (
+                 SELECT 1 FROM receive_addresses rr
+                 WHERE rr.id = s.return_address_id
+                   AND rr.active
+                   AND jsonb_build_object('name', rr.name, 'street1', rr.street1, 'street2', rr.street2,
+                                          'city', rr.city, 'state', rr.state, 'zip', rr.zip,
+                                          'country', rr.country, 'phone', rr.phone, 'email', rr.email)
+                       = s.return_address))
         FOR UPDATE OF o, ra
       ),
       up AS (

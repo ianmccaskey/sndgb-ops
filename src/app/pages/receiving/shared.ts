@@ -13,6 +13,9 @@ export type RxAddress = {
   is_default_ship_from?: boolean;
   // the group ORIGIN this address's transfers ship from (null = itself)
   transfer_origin_id?: number | null;
+  // the saved address ORDER labels shipped from here return to (null =
+  // itself; 1790105100) — the Ship dialog's preselected address_return
+  return_address_id?: number | null;
 };
 export type PkgItem = { id: number; product_id: number; sku_code: string; name?: string; qty: string };
 export type Pkg = {

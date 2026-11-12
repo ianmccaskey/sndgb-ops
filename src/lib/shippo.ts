@@ -261,7 +261,11 @@ const isPriorityRate = (r: ShippoRate): boolean => {
  * of the contents, not the premium. */
 export type ShippoInsurance = { amount: string; currency: 'USD' };
 
-export async function getRates(http: ShippoHttp, key: string, from: ShippoAddress, to: ShippoAddress, parcel: ShippoParcel, insurance?: ShippoInsurance | null): Promise<{ rates: ShippoRate[]; allRateCount: number; messages: string[] }> {
+/** returnTo: the label's address_return (1790105100) — where the carrier
+ * sends an undelivered package (UPS, USPS and FedEx honour it). Omitted,
+ * Shippo returns the package to `from`. Like every address, it is frozen
+ * into the rate: changing it afterwards needs a re-quote. */
+export async function getRates(http: ShippoHttp, key: string, from: ShippoAddress, to: ShippoAddress, parcel: ShippoParcel, insurance?: ShippoInsurance | null, returnTo?: ShippoAddress | null): Promise<{ rates: ShippoRate[]; allRateCount: number; messages: string[] }> {
   let body: unknown;
   // rate creation costs nothing and every label depends on it — retry
   // EVERY failure with the old client's depth (4 attempts, 0.8/1.6/3.2s;
@@ -272,6 +276,7 @@ export async function getRates(http: ShippoHttp, key: string, from: ShippoAddres
     try {
       body = unwrap(await http.post(key.trim(), '/shipments/', {
         address_from: from, address_to: to, parcels: [parcel], async: false,
+        ...(returnTo ? { address_return: returnTo } : {}),
         ...(insurance ? { extra: { insurance: { amount: insurance.amount, currency: insurance.currency } } } : {}),
       }));
       break;

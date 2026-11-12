@@ -499,6 +499,22 @@ where the code fails to honour one; do not propose replacing the decision.
   header, or a payload field beyond those; do not propose a UI Bakery
   automation for it (Ian chose the store-built design).
 
+- **An order label may return to a saved address other than its
+  ship-from** (`1790105100`, Ian 2026-11-12: "I need to be able to define
+  the return address for the label separately from the ship from address
+  sent to shippo"). `receive_addresses.return_address_id` is the standing
+  pairing (Receiving → Addresses, "Order labels return to", NULL =
+  itself); the Ship dialog preselects it and the operator may pick
+  another for one label. The rate is quoted with Shippo `address_return`
+  (UPS re-quote strips its phone too), and `create_shipment_draft`
+  records `shipments.return_address_id` / `return_address` and
+  content-checks the live active row exactly like the ship-from; the
+  purchase claim re-proves it. A pairing to an archived address is kept
+  and the dialog makes the operator pick — never a silent fall back to
+  the ship-from. Transfers and manual records carry none. Flag a quote
+  that sends one return address and a draft that records another, or a
+  path that falls back to the ship-from without the operator seeing it.
+
 ## Loading data
 
 `useLoadAction(action, defaultValue, params, options)`: the SECOND argument

@@ -208,6 +208,13 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   const [weight, setWeight] = useState('');
   const [weightTouched, setWeightTouched] = useState(false);
   const [shipFrom, setShipFrom] = useState('');
+  // the label's RETURN address (1790105100): 'same' = Shippo returns to the
+  // ship-from; an address id = that saved address; '' = the operator must
+  // pick (the ship-from's saved return address is archived). returnFor is
+  // the ship-from the current value was derived for — a new ship-from
+  // re-derives it from that address's saved pairing.
+  const [returnTo, setReturnTo] = useState('same');
+  const [returnFor, setReturnFor] = useState('');
   // (the free-text "box name" field was removed 2026-09-11 per Ian: it was
   // saved but never displayed anywhere, and Dimensions already captures the
   // carton in structured form. The shipments.box column stays; '' is sent.)
@@ -640,6 +647,33 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     setShipFrom(d ? String(d.id) : '');
   }, [addresses, shipFrom, myDefault]);
   const fromRow = addresses.find(a => String(a.id) === shipFrom) || null;
+  // return-address preselection: the ship-from's saved pairing (Receiving >
+  // Addresses). Kept while the ship-from stays and the pick is still
+  // active; re-derived when the ship-from changes or the picked address is
+  // archived. A pairing to an archived address yields '' — never a silent
+  // fall back to the ship-from, which may be the address the operator set
+  // a return address to keep OFF the label.
+  const pairedReturn = fromRow?.return_address_id == null ? null
+    : addresses.find(a => Number(a.id) === Number(fromRow.return_address_id)) || null;
+  useEffect(() => {
+    if (!shipFrom) return;
+    const cur = /^\d+$/.test(returnTo) ? addresses.find(a => String(a.id) === returnTo) : null;
+    if (returnFor === shipFrom && (!/^\d+$/.test(returnTo) || cur?.active)) return;
+    const from = addresses.find(a => String(a.id) === shipFrom);
+    if (!from) return;
+    const pairedId = from.return_address_id == null ? null : Number(from.return_address_id);
+    const paired = pairedId == null ? null : addresses.find(a => Number(a.id) === pairedId);
+    setReturnTo(pairedId == null ? 'same' : paired?.active ? String(paired.id) : '');
+    setReturnFor(shipFrom);
+  }, [addresses, shipFrom, returnTo, returnFor]);
+  const returnRow = /^\d+$/.test(returnTo)
+    ? addresses.find(a => String(a.id) === returnTo && a.active) || null
+    : null;
+  // what stops a quote or purchase on the return address, said up front
+  const returnBlocker = !fromRow || returnTo === 'same' || returnRow ? ''
+    : returnTo === '' && pairedReturn
+      ? `"${fromRow.label}" returns to "${pairedReturn.label}", which is archived — pick this label's return address (or restore "${pairedReturn.label}" on Receiving > Addresses).`
+      : 'Pick the return address.';
   // row boundary: the transport re-types digit-only text (ZIPs, phones)
   // as JS numbers — Shippo 400s a numeric zip ("Invalid input type for
   // field: zip") and the draft CAS compares jsonb content where 92122
@@ -652,6 +686,22 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
   // the snapshot must keep null as null while still re-stringing numbers.
   // (The ship-TO side COALESCEs to '' server-side, so s() is right there.)
   const sn = (v: unknown): string | null => (v == null ? null : String(v));
+  // the label's address_return (null = Shippo returns to the ship-from).
+  // withPhone false on the UPS re-quote: UPS prints a phone from the
+  // return block, so neither address carries one there.
+  const shippoReturn = (withPhone: boolean): ShippoAddress | null => returnRow ? {
+    name: s(returnRow.name), street1: s(returnRow.street1), street2: s(returnRow.street2) || undefined as unknown as string,
+    city: s(returnRow.city), state: s(returnRow.state), zip: s(returnRow.zip), country: s(returnRow.country) || 'US',
+    ...(withPhone ? { phone: s(returnRow.phone) || undefined as unknown as string } : {}),
+    email: s(returnRow.email) || undefined as unknown as string,
+  } : null;
+  // the return row's content exactly as create_shipment_draft compares it
+  // (null stays null, numbers re-strung — the ship-from CAS's rule)
+  const returnSig = returnRow ? {
+    name: sn(returnRow.name), street1: sn(returnRow.street1), street2: sn(returnRow.street2),
+    city: sn(returnRow.city), state: sn(returnRow.state), zip: sn(returnRow.zip),
+    country: sn(returnRow.country), phone: sn(returnRow.phone), email: sn(returnRow.email),
+  } : null;
   const shipTo: ShippoAddress | null = order.address_line1 ? {
     name: s(order.contact_name) || s(order.customer_name), street1: s(order.address_line1),
     street2: s(order.address_line2) || undefined as unknown as string,
@@ -686,7 +736,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     city: sn(fromRow.city), state: sn(fromRow.state), zip: sn(fromRow.zip),
     country: sn(fromRow.country), phone: sn(fromRow.phone), email: sn(fromRow.email),
   } : null;
-  const quoteSig = JSON.stringify({ shipFrom, from: fromSig, to: expectedTo, dims, packaging, weight, ins: insureBox ? insuredValue.trim() : '', chosen: chosen.map(c => [c.line.order_item_id, c.qty]) });
+  const quoteSig = JSON.stringify({ shipFrom, from: fromSig, returnTo, ret: returnSig, to: expectedTo, dims, packaging, weight, ins: insureBox ? insuredValue.trim() : '', chosen: chosen.map(c => [c.line.order_item_id, c.qty]) });
   useEffect(() => {
     if (ratesResult && ratesResult.sig !== quoteSig) { setRatesResult(null); setPickedRate(''); setPurchaseMsg(''); }
   }, [quoteSig, ratesResult]);
@@ -695,6 +745,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
     setMsg(''); setRatesResult(null); setPickedRate('');
     if (!shippoKey) { setMsg('Add your Shippo API token in Settings first.'); return; }
     if (!fromRow) { setMsg('Pick the ship-from address.'); return; }
+    if (returnBlocker) { setMsg(returnBlocker); return; }
     if (shipBlockers.length > 0 || !shipTo) { setMsg(shipBlockers.join(' ') || 'This order has no street address.'); return; }
     const lineError = validateChosen();
     if (lineError) { setMsg(lineError); return; }
@@ -714,7 +765,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       }, shipTo, {
         length: dims.length.trim(), width: dims.width.trim(), height: heightVal.trim(),
         distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb',
-      }, insureBox ? { amount: insuredValue.trim(), currency: 'USD' } : null);
+      }, insureBox ? { amount: insuredValue.trim(), currency: 'USD' } : null, shippoReturn(true));
       setRatesResult({ ...res, sig: quoteSig });
     } catch (e: unknown) {
       setMsg(e instanceof Error ? e.message : 'Failed to fetch rates');
@@ -813,6 +864,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       }
       const lineError = validateChosen();
       if (lineError) { setPurchaseMsg(lineError + ' Nothing was purchased.'); return; }
+      if (returnBlocker) { setPurchaseMsg(returnBlocker + ' Nothing was purchased.'); return; }
       // UPS prints the sender phone on the label's return address, and
       // UPS is the one major carrier that doesn't require one (USPS does
       // at purchase). Re-quote the identical shipment — same parcel AND
@@ -831,7 +883,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           }, shipTo, {
             length: dims.length.trim(), width: dims.width.trim(), height: heightVal.trim(),
             distance_unit: 'in', weight: weight.trim(), mass_unit: 'lb',
-          }, insureBox ? { amount: insuredValue.trim(), currency: 'USD' } : null);
+          }, insureBox ? { amount: insuredValue.trim(), currency: 'USD' } : null, shippoReturn(false));
           const match = res2.rates.find(r2 => r2.provider === rate.provider
             && (r2.servicelevel?.token || r2.servicelevel?.name) === (rate.servicelevel?.token || rate.servicelevel?.name)
             && r2.amount === rate.amount && r2.currency === rate.currency);
@@ -861,6 +913,9 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
           rate_amount: buyRate.amount, rate_currency: buyRate.currency, shippo_rate_id: buyRate.object_id,
           items: JSON.stringify(chosen.map(c => ({ order_item_id: String(c.line.order_item_id), qty: c.qty }))),
           box: '', note: note.trim(), actor: userName,
+          // the address_return the rate was quoted with ('' = the ship-from)
+          return_address_id: returnRow ? String(returnRow.id) : '',
+          expected_return: returnSig ? JSON.stringify(returnSig) : '',
         }) as unknown[] | null;
         const row = Array.isArray(res) && res.length > 0 ? res[0] as { id: string; claimed_at?: string } : null;
         draftId = row ? Number(row.id) : null;
@@ -873,7 +928,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         return;
       }
       if (!draftId) {
-        setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a quantity exceeds what remains to pack (another box may have just taken it), the order went on hold / its payment state changed, its ship-to address was corrected since the quote, or the ship-from address was edited or archived — reload and re-quote.');
+        setPurchaseMsg('Draft not saved — nothing was purchased. Possible causes: a quantity exceeds what remains to pack (another box may have just taken it), the order went on hold / its payment state changed, its ship-to address was corrected since the quote, or the ship-from or return address was edited or archived — reload and re-quote.');
         reloadPackable(); reloadShipments();
         return;
       }
@@ -908,7 +963,7 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         const hb = await doClaim({ shipment_id: draftId, prior_claimed_at: claimedAt, actor: userName }) as unknown[] | null;
         const hbRow = Array.isArray(hb) && hb.length > 0 ? hb[0] as { claimed_at?: string } : null;
         if (!hbRow) {
-          setPurchaseMsg('Not purchased — this draft was deleted or claimed by another session while this page was idle, or the order\'s address/hold/payment state changed. Nothing was charged; reload and re-quote.');
+          setPurchaseMsg('Not purchased — this draft was deleted or claimed by another session while this page was idle, or the order\'s address/hold/payment state changed, or the ship-from or return address was edited or archived. Nothing was charged; reload and re-quote.');
           reloadShipments();
           return;
         }
@@ -926,8 +981,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
         // ship-from at quote time) — retrying the same rate can never
         // succeed, so say so instead of inviting a retry loop
         setPurchaseMsg((e instanceof Error ? e.message : 'Purchase failed')
-          + (e instanceof ShippoPurchaseRefusedError && /address_from/i.test(e.message)
-            ? ' — this rate was quoted with the ship-from as it was then; fixing the address does NOT fix the rate. Add the missing field on Receiving > Addresses first, then delete the draft below (it verifies no label first) and re-fetch rates.'
+          + (e instanceof ShippoPurchaseRefusedError && /address_(from|return)/i.test(e.message)
+            ? ' — this rate was quoted with the ship-from and return address as they were then; fixing an address does NOT fix the rate. Add the missing field on Receiving > Addresses first, then delete the draft below (it verifies no label first) and re-fetch rates.'
             : ' — the draft is saved below; retry or delete it there.'));
         reloadShipments();
         return;
@@ -1148,8 +1203,8 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
       // the only fix, so the message must not suggest another retry
       setRowMsg(m => ({
         ...m,
-        [s.id]: msg + (e instanceof ShippoPurchaseRefusedError && /address_from/i.test(msg)
-          ? ' This draft\'s rate is frozen with the ship-from as it was quoted — fixing the address does NOT fix the rate. Delete this draft (Delete verifies no label first) and re-fetch rates.'
+        [s.id]: msg + (e instanceof ShippoPurchaseRefusedError && /address_(from|return)/i.test(msg)
+          ? ' This draft\'s rate is frozen with the ship-from and return address as they were quoted — fixing an address does NOT fix the rate. Delete this draft (Delete verifies no label first) and re-fetch rates.'
           : ''),
       }));
     } finally {
@@ -1589,6 +1644,31 @@ export function ShippingModal({ order, addresses, shippoKey, shippoHttp, testMod
                     {addresses.filter(a => a.active).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.label}{String(a.id) === myDefault ? ' (my default)' : a.is_default_ship_from ? ' (fallback)' : ''}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                {!manualMode && fromRow && (
+                  <>
+                    <p className="pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Return address</p>
+                    <Select value={returnTo} onValueChange={v => { setReturnTo(v); setReturnFor(shipFrom); }}>
+                      <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Pick the return address…" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="same">Same as ship-from</SelectItem>
+                        {addresses.filter(a => a.active && String(a.id) !== shipFrom).map(a => (
+                          <SelectItem key={a.id} value={String(a.id)}>
+                            {a.label}{pairedReturn && Number(a.id) === Number(pairedReturn.id) ? ` (saved for ${fromRow.label})` : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {returnRow ? (
+                      <p className="text-[10px] text-muted-foreground">
+                        Shippo gets {returnRow.name} · {returnRow.street1}{returnRow.street2 ? `, ${returnRow.street2}` : ''}, {returnRow.city}, {returnRow.state} {s(returnRow.zip)} as the return address; the ship-from stays the origin.
+                      </p>
+                    ) : returnBlocker ? (
+                      <p className="text-[11px] text-amber-300">{returnBlocker}</p>
+                    ) : (
+                      <p className="text-[10px] text-muted-foreground">Undelivered packages return to the ship-from. Set a standing return address for it on Receiving &gt; Addresses.</p>
+                    )}
+                  </>
+                )}
               </div>
               {!manualMode && (
                 <div className="space-y-1">

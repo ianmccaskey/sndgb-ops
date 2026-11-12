@@ -9,6 +9,9 @@ import { action } from '@uibakery/data';
  * server-side snapshots, per-line attribution validation against
  * remaining-to-pack (drafts reserve), the birth purchase lease, and the
  * audit row. Returns (id, claimed_at); ZERO ROWS = refused.
+ * return_address_id / expected_return (1790105100): the saved address the
+ * label's address_return came from and its content as quoted, both '' when
+ * the label returns to its ship-from; content-checked like the ship-from.
  */
 function createShipmentDraft() {
   return action('createShipmentDraft', 'SQL', {
@@ -29,7 +32,9 @@ function createShipmentDraft() {
         {{params.items}}::jsonb,
         {{params.box}}::text,
         {{params.note}}::text,
-        {{params.actor}}::text
+        {{params.actor}}::text,
+        NULLIF({{params.return_address_id}}::text, '')::bigint,
+        NULLIF({{params.expected_return}}::text, '')::jsonb
       )
     `,
   });

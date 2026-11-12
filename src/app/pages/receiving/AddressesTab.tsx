@@ -4,6 +4,7 @@ import saveReceiveAddress from '@/actions/receiving/saveReceiveAddress';
 import setAddressActive from '@/actions/receiving/setAddressActive';
 import setDefaultShipFrom from '@/actions/receiving/setDefaultShipFrom';
 import setTransferOrigin from '@/actions/receiving/setTransferOrigin';
+import setReturnAddress from '@/actions/receiving/setReturnAddress';
 import setDestinationActive from '@/actions/receiving/setDestinationActive';
 import saveDestination from '@/actions/receiving/saveDestination';
 import saveSetting from '@/actions/settings/saveSetting';
@@ -69,10 +70,11 @@ function AddressForm({ title, hint, onSave, msg }: {
   );
 }
 
-function AddressList({ title, items, onToggle, onMakeDefault, onSetOrigin, myDefaultId, onMakeMyDefault, myDefaultBusy }: {
+function AddressList({ title, items, onToggle, onMakeDefault, onSetOrigin, onSetReturn, myDefaultId, onMakeMyDefault, myDefaultBusy }: {
   title: string; items: RxAddress[]; onToggle?: (a: RxAddress) => void;
   onMakeDefault?: (a: RxAddress) => void;
   onSetOrigin?: (a: RxAddress, originId: string) => void;
+  onSetReturn?: (a: RxAddress, returnId: string) => void;
   myDefaultId?: string;
   onMakeMyDefault?: (a: RxAddress) => void;
   myDefaultBusy?: boolean;
@@ -115,6 +117,26 @@ function AddressList({ title, items, onToggle, onMakeDefault, onSetOrigin, myDef
                   </select>
                 </div>
               )}
+              {onSetReturn && a.active && (() => {
+                const cur = a.return_address_id == null ? null
+                  : items.find(m => Number(m.id) === Number(a.return_address_id)) || null;
+                return (
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-0.5">
+                    Order labels return to:
+                    <select className="border rounded px-1 py-0.5 text-[11px] bg-background"
+                      value={a.return_address_id == null ? '' : String(a.return_address_id)}
+                      title="The return address Shippo gets on order labels shipped from here — the Ship dialog preselects it; the ship-from stays the origin"
+                      onChange={e => onSetReturn(a, e.target.value)}>
+                      <option value="">itself</option>
+                      {items.filter(o => o.active && Number(o.id) !== Number(a.id)).map(o => (
+                        <option key={o.id} value={String(o.id)}>{o.label}</option>
+                      ))}
+                      {cur && !cur.active && <option value={String(cur.id)} disabled>{cur.label} (archived)</option>}
+                    </select>
+                    {cur && !cur.active && <span className="text-amber-300">archived — the Ship dialog asks for a return address</span>}
+                  </div>
+                );
+              })()}
             </div>
             <span className="flex gap-1 shrink-0">
               {onMakeMyDefault && a.active && String(a.id) !== myDefaultId && (
@@ -155,6 +177,7 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
   const [doSetActive] = useMutateAction(setAddressActive);
   const [doSetDefault] = useMutateAction(setDefaultShipFrom);
   const [doSetOrigin] = useMutateAction(setTransferOrigin);
+  const [doSetReturn] = useMutateAction(setReturnAddress);
   const [doSetDestActive] = useMutateAction(setDestinationActive);
   const [doSaveDest] = useMutateAction(saveDestination);
   const [addrMsg, setAddrMsg] = useState('');
@@ -190,7 +213,7 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
     <div className="grid gap-4 lg:grid-cols-2">
       <div className="space-y-4">
         <AddressForm title="Add / update receive address" msg={addrMsg} onSave={save('address')}
-          hint="Saving an existing label updates that address. Receive addresses are the ship-from on transfer labels — every field Shippo needs is required." />
+          hint="Saving an existing label updates that address. Receive addresses are the ship-from on order and transfer labels, and the return address an order label can carry instead of its ship-from — every field Shippo needs is required." />
         <AddressList title="Receive addresses" items={addresses}
           myDefaultId={myDefaultId}
           myDefaultBusy={myDefaultBusy}
@@ -213,9 +236,15 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
               const owners = Object.entries(settings)
                 .filter(([k, v]) => k.startsWith('default_ship_from:') && v === String(a.id))
                 .map(([k]) => k.split(':')[1]);
+              // ...and the return address other ship-froms' labels carry
+              // (1790105100): kept, but the Ship dialog then asks for one
+              const returners = addresses
+                .filter(x => x.active && x.return_address_id != null && Number(x.return_address_id) === Number(a.id))
+                .map(x => `"${x.label}"`);
               const warnings = [
                 a.is_default_ship_from ? 'it is the FALLBACK ship-from (admins without a personal default lose their preselection)' : '',
                 owners.length > 0 ? `it is the personal ship-from default for ${owners.join(' and ')} — their Ship dialog will silently fall back to the fallback address` : '',
+                returners.length > 0 ? `it is the return address on order labels shipped from ${returners.join(' and ')} — the Ship dialog will ask for another until it is restored` : '',
               ].filter(Boolean);
               if (warnings.length > 0
                 && !window.confirm(`Archiving "${a.label}": ${warnings.join('; ')}. Archive anyway?`)) return;
@@ -242,6 +271,18 @@ export function AddressesTab({ addresses, destinations, reloadAddresses, reloadD
               }
             } catch (e: unknown) {
               setAddrMsg(e instanceof Error ? e.message : 'Failed to set the transfer origin');
+            }
+            reloadAddresses();
+          }}
+          onSetReturn={async (a, returnId) => {
+            setAddrMsg('');
+            try {
+              const res = await doSetReturn({ address_id: a.id, return_id: returnId, actor: userName }) as unknown[] | null;
+              if (!(Array.isArray(res) ? res.length > 0 : !!res)) {
+                setAddrMsg('Return address not changed — both addresses must be active, and an address cannot return to itself.');
+              }
+            } catch (e: unknown) {
+              setAddrMsg(e instanceof Error ? e.message : 'Failed to set the return address');
             }
             reloadAddresses();
           }} />
