@@ -194,8 +194,9 @@ REVOKE EXECUTE ON FUNCTION storefront.store_payments_to_check(text) FROM PUBLIC;
 
 -- ── 4. close a problem: a flag as before, or an unflagged problem ───────────
 -- Money and the claim's status are untouched: this records what a person did
--- and why, under the order's row lock so it cannot cross a claim the
--- storefront is applying. A rejected row stands for its order's unhandled
+-- and why, under the claim's and the order's row locks (taken in the
+-- storefront worker's order) so it cannot cross a claim the storefront is
+-- applying. A rejected row stands for its order's unhandled
 -- rejected claims up to the one shown; the others carry "(with payment #N)".
 DROP FUNCTION IF EXISTS storefront.store_resolve_payment_flag(text, text, text);
 CREATE FUNCTION storefront.store_resolve_payment_flag(p_actor text, p_payment_id text, p_resolution text)
@@ -210,7 +211,6 @@ DECLARE
   v_o storefront.store_orders%ROWTYPE;
   v_prob text;
   v_others bigint[];
-  v_oid bigint;
 BEGIN
   IF v_actor = '' THEN
     RAISE EXCEPTION 'Sign in again — this app could not tell who you are.' USING ERRCODE = 'insufficient_privilege';
@@ -222,12 +222,16 @@ BEGIN
   IF char_length(v_why_raw) < 3 OR char_length(v_why_raw) > 300 THEN
     RAISE EXCEPTION 'Say what you did, in 3 to 300 characters (for example "refunded 1.87 SOL to the buyer").' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:resolution';
   END IF;
-  SELECT p.store_order_id INTO v_oid FROM storefront.payments p WHERE p.id = v_pid;
-  IF v_oid IS NULL THEN
+  -- The claim and its order locked in ONE statement, payment first: the storefront
+  -- worker's own order (applyStoreVerification: payments JOIN store_orders ... FOR
+  -- UPDATE), so a click here and a verification of the same claim queue, never deadlock.
+  PERFORM 1 FROM storefront.payments p JOIN storefront.store_orders o ON o.id = p.store_order_id
+   WHERE p.id = v_pid FOR UPDATE OF p, o;
+  IF NOT FOUND THEN
     RAISE EXCEPTION 'That payment isn''t on the list. Reload the page.' USING ERRCODE = 'no_data_found';
   END IF;
-  SELECT * INTO v_o FROM storefront.store_orders WHERE id = v_oid FOR UPDATE;   -- the order, then the claim (the storefront's order)
-  SELECT * INTO v_p FROM storefront.payments WHERE id = v_pid FOR UPDATE;
+  SELECT * INTO v_p FROM storefront.payments WHERE id = v_pid;
+  SELECT * INTO v_o FROM storefront.store_orders WHERE id = v_p.store_order_id;
   v_prob := storefront.store_payment_problem(v_p.flags, v_p.conversion_of, v_p.status::text, v_p.created_at, v_p.verified_at,
                                              v_p.verified_usd, v_p.verify_error, v_o.status::text);
 
