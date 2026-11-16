@@ -194,9 +194,9 @@ REVOKE EXECUTE ON FUNCTION storefront.store_payments_to_check(text) FROM PUBLIC;
 
 -- ── 4. close a problem: a flag as before, or an unflagged problem ───────────
 -- Money and the claim's status are untouched: this records what a person did
--- and why, under the claim's and the order's row locks (taken in the
--- storefront worker's order) so it cannot cross a claim the storefront is
--- applying. A rejected row stands for its order's unhandled
+-- and why, under the order's row lock and the claim's (taken without waiting)
+-- so it cannot cross a claim the storefront is applying and never deadlocks
+-- with it. A rejected row stands for its order's unhandled
 -- rejected claims up to the one shown; the others carry "(with payment #N)".
 DROP FUNCTION IF EXISTS storefront.store_resolve_payment_flag(text, text, text);
 CREATE FUNCTION storefront.store_resolve_payment_flag(p_actor text, p_payment_id text, p_resolution text)
@@ -211,6 +211,7 @@ DECLARE
   v_o storefront.store_orders%ROWTYPE;
   v_prob text;
   v_others bigint[];
+  v_oid bigint;
 BEGIN
   IF v_actor = '' THEN
     RAISE EXCEPTION 'Sign in again — this app could not tell who you are.' USING ERRCODE = 'insufficient_privilege';
@@ -222,16 +223,26 @@ BEGIN
   IF char_length(v_why_raw) < 3 OR char_length(v_why_raw) > 300 THEN
     RAISE EXCEPTION 'Say what you did, in 3 to 300 characters (for example "refunded 1.87 SOL to the buyer").' USING ERRCODE = 'invalid_parameter_value', HINT = 'field:resolution';
   END IF;
-  -- The claim and its order locked in ONE statement, payment first: the storefront
-  -- worker's own order (applyStoreVerification: payments JOIN store_orders ... FOR
-  -- UPDATE), so a click here and a verification of the same claim queue, never deadlock.
-  PERFORM 1 FROM storefront.payments p JOIN storefront.store_orders o ON o.id = p.store_order_id
-   WHERE p.id = v_pid FOR UPDATE OF p, o;
-  IF NOT FOUND THEN
+  -- Locks: the ORDER first, like every organizer writer (store_record_conversion
+  -- too), so two clicks on one order queue there and the batch below never meets a
+  -- claim another handler holds. The storefront worker takes its claim BEFORE the
+  -- order (applyStoreVerification: payments JOIN store_orders FOR UPDATE) and only
+  -- then other claims of the order (a swap's flagged original). So, holding the
+  -- order, never WAIT for a claim: NOWAIT, and a claim the worker is checking this
+  -- very moment is refused with "try again" — no cycle either way.
+  SELECT p.store_order_id INTO v_oid FROM storefront.payments p WHERE p.id = v_pid;
+  IF v_oid IS NULL THEN
     RAISE EXCEPTION 'That payment isn''t on the list. Reload the page.' USING ERRCODE = 'no_data_found';
   END IF;
-  SELECT * INTO v_p FROM storefront.payments WHERE id = v_pid;
-  SELECT * INTO v_o FROM storefront.store_orders WHERE id = v_p.store_order_id;
+  SELECT * INTO v_o FROM storefront.store_orders WHERE id = v_oid FOR UPDATE;
+  BEGIN
+    SELECT * INTO v_p FROM storefront.payments WHERE id = v_pid AND store_order_id = v_oid FOR UPDATE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'The storefront is updating this payment right now. Try again in a minute.' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END;
+  IF v_p.id IS NULL THEN
+    RAISE EXCEPTION 'That payment isn''t on the list. Reload the page.' USING ERRCODE = 'no_data_found';
+  END IF;
   v_prob := storefront.store_payment_problem(v_p.flags, v_p.conversion_of, v_p.status::text, v_p.created_at, v_p.verified_at,
                                              v_p.verified_usd, v_p.verify_error, v_o.status::text);
 
@@ -271,6 +282,16 @@ BEGIN
      SET handled_at = now(), handled_by = v_actor, handled_note = v_why, handled_problem = v_prob
    WHERE id = v_pid;
   IF v_prob = 'rejected' THEN
+    -- the order's other claims too, without waiting while the order is held
+    BEGIN
+      PERFORM 1 FROM storefront.payments r
+       WHERE r.store_order_id = v_o.id AND r.id <> v_pid AND r.status = 'rejected' AND cardinality(r.flags) = 0
+         AND r.conversion_of IS NULL AND r.handled_problem IS DISTINCT FROM 'rejected'
+         AND (r.created_at, r.id) < (v_p.created_at, v_p.id)
+         FOR UPDATE NOWAIT;
+    EXCEPTION WHEN lock_not_available THEN
+      RAISE EXCEPTION 'The storefront is updating a payment on % right now. Try again in a minute.', v_o.order_number USING ERRCODE = 'object_not_in_prerequisite_state';
+    END;
     WITH upd AS (
       UPDATE storefront.payments r
          SET handled_at = now(), handled_by = v_actor, handled_note = format('(with payment #%s) %s', v_pid, v_why), handled_problem = 'rejected'
