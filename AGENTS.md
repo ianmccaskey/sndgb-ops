@@ -477,6 +477,27 @@ where the code fails to honour one; do not propose replacing the decision.
   inbound transfers when gains exist, or a grant of these to the portal role;
   do not propose pricing a native coin automatically. Settled with the owner
   2026-11-10.
+  **Payments to check lists every problem payment, not only flags**
+  (`1790105300`, Ian 2026-11-16: "I need to be able to see these issues …
+  when they are paying PRT" — ST-2026-0080 paid on Base, asked Ethereum, sat
+  "not indexed" unseen; a PRT order is nowhere in P2 Collective Orders until
+  paid). `storefront.store_payment_problem()` is the one rule the list, the
+  sidebar count and Mark handled share: `flagged` first, then `not_found`
+  (pending 30 min after pasting), `rejected` (its order still unpaid — ONE row
+  per order, its latest rejected claim, `rejected_count` in all), `short`
+  (mismatch, order still payment_submitted 30 min on), `not_payable` (money
+  that arrived after paid/cancelled). A recorded swap is never its own row.
+  An unflagged problem is closed in `handled_*` (`handled_problem` names
+  which), kept apart from `flag_resolved_*` because the storefront reads
+  those as "this FLAG was handled"; a claim whose problem changes comes back.
+  Marking a rejected row handled stamps the order's earlier rejected claims
+  ("(with payment #N)") and refuses if a later one exists. Recording a swap
+  stays flagged-only. Nothing here changes a claim's status or money. ST-0080
+  itself was recorded by `1790105200` (claim flagged off_token with what
+  arrived on Base; Ian's ETH→USDT swap recorded through
+  `store_record_conversion`; the worker paid the order). Flag a list, count or
+  handler that decides "open" without `store_payment_problem`, or a
+  `handled_*` write that touches `flag_resolved_*`.
 
 - **A member shop may post each paid order to its OWN webhook, once**
   (`1790105000`, Ian 2026-11-10, first for ELPEPPYJOE BREWERY, who buys
