@@ -393,8 +393,13 @@ where the code fails to honour one; do not propose replacing the decision.
   same function on the cart and at placement). The checks live in
   `storefront.shop_check_listing_terms` (portal and core) and in the
   storefront's `lib/sellers/rules.ts` (its dashboard writes directly), and
-  CHECKs bind every writer. House listings take their minimum from their
-  own app and have no count. Flag a price that counts only the listing's
+  CHECKs bind every writer. House listings take their terms from their
+  own app, through the storefront's house adapter: a hard minimum for most,
+  and since 2026-11-17 PRT's 2-kit-minimum products list with a minimum of
+  1, PRT's $15 under-minimum fee and a count of 2 (one alone pays it, any
+  second item waives it) — the mirror row carries that fee and count. The
+  storefront has no per-order cap of its own since 2026-11-17 (a seller's
+  `max_per_order` still holds; `1790105400` reworded the minimum's refusal). Flag a price that counts only the listing's
   own units, or a writer that skips the checks; do not propose
   per-listing counting. Settled with the owner 2026-11-09.
 
