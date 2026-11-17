@@ -25,18 +25,24 @@ DECLARE
 BEGIN
   WITH r AS (
     SELECT n.id, n.deadline AS was,
-           -- pg_input_is_valid inside CASE, not a WHERE beside the cast: the
-           -- cast never sees a value it would refuse (bad date, bad zone,
-           -- trailing text), and such a row is left as it is
-           CASE WHEN pg_input_is_valid(n.quote->'quoteRequest'->>'deadline', 'timestamptz')
-                THEN (n.quote->'quoteRequest'->>'deadline')::timestamptz END AS requested
+           -- only an absolute ISO 8601 instant with its zone, as the storefront
+           -- writes it (never 'infinity', 'yesterday' or a bare date), that
+           -- Postgres also accepts (no month 99, no zone +99:99): checked in
+           -- CASE, not a WHERE beside the cast, so the cast never sees
+           -- anything else, and such a row is left as it is
+           CASE WHEN n.quote->'quoteRequest'->>'deadline' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$'
+                 AND pg_input_is_valid(n.quote->'quoteRequest'->>'deadline', 'timestamptz')
+                THEN (n.quote->'quoteRequest'->>'deadline')::timestamptz END AS requested,
+           n.created_at
       FROM storefront.near_swaps n
      FOR UPDATE
   ), fixed AS (
     UPDATE storefront.near_swaps n
        SET deadline = r.requested
       FROM r
-     WHERE n.id = r.id AND r.requested IS NOT NULL AND r.requested < r.was
+     -- a deadline after the swap was quoted and before the one stored: the
+     -- window can only shrink to what was asked, never to before it opened
+     WHERE n.id = r.id AND r.requested IS NOT NULL AND r.requested > r.created_at AND r.requested < r.was
     RETURNING n.id, r.was, r.requested
   )
   INSERT INTO public.audit_log (table_name, row_pk, action, actor, old_data, new_data)
