@@ -25,8 +25,10 @@ DECLARE
 BEGIN
   WITH r AS (
     SELECT n.id, n.deadline AS was,
-           -- CASE, not a WHERE beside the cast: the cast must never see a malformed value
-           CASE WHEN n.quote->'quoteRequest'->>'deadline' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}'
+           -- pg_input_is_valid inside CASE, not a WHERE beside the cast: the
+           -- cast never sees a value it would refuse (bad date, bad zone,
+           -- trailing text), and such a row is left as it is
+           CASE WHEN pg_input_is_valid(n.quote->'quoteRequest'->>'deadline', 'timestamptz')
                 THEN (n.quote->'quoteRequest'->>'deadline')::timestamptz END AS requested
       FROM storefront.near_swaps n
      FOR UPDATE
