@@ -451,11 +451,24 @@ where the code fails to honour one; do not propose replacing the decision.
     settling runs as before: hiding changes what members see, never who
     won. A CHECK keeps an undrawn giveaway from being hidden; one still
     running is cancelled instead.
+  - **Claim for them** (`1790105600`, Ian 2026-11-24: "if a person we
+    want to have the prize is chosen they dont have to claim themselves
+    we can do it for them"): an admin claims a live, unclaimed winner's
+    prize inside the SAME claim window (`giveaway_claim_for`, owner-only,
+    lock 42040, audited `giveaway_claimed_for`). The window binds the
+    organizers too (CHECK `claim_in_time`): once it closes the slot is
+    being drawn again. The ship-to is snapshotted by the one rule both
+    claims share (`giveaway_ship_to`); a member with no complete address
+    is still claimed for, with none (the organizers get it from them),
+    while the member's own claim still requires one. `claimed_by` names
+    the organizer and is final (guard trigger); members, Home and the
+    claimed email only say THAT the P² Team claimed it, never who.
 
   Flag a draw that can pick a forfeited or ineligible member, an entry
   that can land after the draw read the entrants, a writer that
-  bypasses the functions, or a hidden giveaway that voids or hides a
-  winner's open claim. Do not propose letting unverified members
+  bypasses the functions, a hidden giveaway that voids or hides a
+  winner's open claim, an organizer claim outside the winner's window,
+  or a member-facing read of `claimed_by`. Do not propose letting unverified members
   enter, or showing winners by name. Settled with the owner 2026-11-09.
 
 - **A store payment a person must see is flagged, listed and emailed; the
