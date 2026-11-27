@@ -37,7 +37,11 @@
 --     sections open, which is what "no row" already meant), stamp
 --     updated_at / updated_by like the switches, audit old → new into
 --     public.audit_log ('storefront.member_access', member_store_grant /
---     member_store_grant_revoked), and return the member's grant state.
+--     member_store_grant_revoked), and return the member's grant state
+--     with the Store switch as it stood under the lock (`store`), so the
+--     caller words its answer from what is true, not from its last read
+--     (Codex review: a switch flipped while the grant was in flight made
+--     the dialog say "open" over a closed store).
 -- Owner-only: P2 Collective Orders connects as the owner. The storefront
 -- reads the columns (its role, when it exists, gets SELECT through
 -- 1790101500's "ALL TABLES IN SCHEMA storefront") and never writes them;
@@ -79,6 +83,7 @@ RETURNS TABLE (
   store_granted_at timestamptz,
   store_granted_by text,
   store_grant_reason text,
+  store boolean,
   changed boolean
 )
 LANGUAGE plpgsql AS $fn$
@@ -90,6 +95,7 @@ DECLARE
   v_old_at     timestamptz;
   v_old_by     text;
   v_old_reason text;
+  v_store      boolean;
   v_now        timestamptz := now();
 BEGIN
   IF v_open_txt NOT IN ('true', 'false') THEN
@@ -111,10 +117,12 @@ BEGIN
   -- its own statement: everything below reads what was committed before the lock was granted
   PERFORM pg_advisory_xact_lock(42003, hashtext(v_id::text));
 
-  SELECT ma.store_granted_at, ma.store_granted_by, ma.store_grant_reason
-    INTO v_old_at, v_old_by, v_old_reason
+  SELECT ma.store, ma.store_granted_at, ma.store_granted_by, ma.store_grant_reason
+    INTO v_store, v_old_at, v_old_by, v_old_reason
   FROM storefront.member_access ma WHERE ma.auth_user_id = v_id FOR UPDATE;
-  -- no row: no grant (the SELECT INTO leaves all three NULL)
+  IF NOT FOUND THEN
+    v_store := true;   -- no row: both sections open, no grant (the grant columns stay NULL)
+  END IF;
 
   IF v_open_txt = 'true' THEN
     IF v_old_at IS NOT NULL THEN
@@ -135,7 +143,7 @@ BEGIN
             jsonb_build_object('store_granted', false),
             jsonb_build_object('store_granted', true, 'reason', v_reason));
 
-    RETURN QUERY SELECT v_id::text, true, v_now, v_actor, v_reason, true;
+    RETURN QUERY SELECT v_id::text, true, v_now, v_actor, v_reason, v_store, true;
   ELSE
     IF v_old_at IS NULL THEN
       RETURN;   -- no grant to take back
@@ -150,7 +158,7 @@ BEGIN
             jsonb_build_object('store_granted', true, 'granted_at', v_old_at, 'granted_by', v_old_by, 'reason', v_old_reason),
             jsonb_build_object('store_granted', false, 'reason', nullif(v_reason, '')));
 
-    RETURN QUERY SELECT v_id::text, false, NULL::timestamptz, NULL::text, NULL::text, true;
+    RETURN QUERY SELECT v_id::text, false, NULL::timestamptz, NULL::text, NULL::text, v_store, true;
   END IF;
 END
 $fn$;
