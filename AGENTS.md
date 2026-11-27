@@ -554,6 +554,28 @@ where the code fails to honour one; do not propose replacing the decision.
   that sends one return address and a draft that records another, or a
   path that falls back to the ship-from without the operator seeing it.
 
+- **The organizers can open the store to one member by hand**
+  (`1790105700`, Ian 2026-11-27: "HOW CAN I MANUALLY TURN ON STORE ACCESS
+  FOR THEM THEY ARE HAVING ISSUES WITH TELEGRAM LINKING", then "Yes, build
+  it"). The store used to open only on a verified Telegram / Discord link,
+  and the Store switch of `1790103500` was a veto, never a grant; a link
+  row written by hand does not hold, because the storefront's six-hourly
+  sweep deletes a Telegram link the Bot API places outside the P² group.
+  So the grant is on `storefront.member_access`
+  (`store_granted_at / _by / store_grant_reason`, all or none, reason ≤ 500,
+  CHECK `member_access_store_grant_whole`), written only by
+  `storefront.set_member_store_grant()` (P2 Collective Orders Members
+  dialog → `setStoreMemberGrant`: lock 42003 as its own statement, then a
+  FOR UPDATE read; opening needs a reason; audited `member_store_grant` /
+  `member_store_grant_revoked`). The storefront opens the store on a link
+  OR a grant (`decideStore` in its `lib/customers/access-rules.ts`), the
+  Store switch off still closes it, and the grant covers the STORE only:
+  giveaways (the `giveaway_*` functions read `customer_identities`) and
+  selling still need a link. A member opened by hand orders with no handle.
+  Flag a grant read that skips the Store switch, a giveaway or seller path
+  that accepts the grant, or a writer of these columns other than the
+  function.
+
 ## Loading data
 
 `useLoadAction(action, defaultValue, params, options)`: the SECOND argument
