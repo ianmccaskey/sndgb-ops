@@ -395,9 +395,12 @@ where the code fails to honour one; do not propose replacing the decision.
   storefront's `lib/sellers/rules.ts` (its dashboard writes directly), and
   CHECKs bind every writer. House listings take their terms from their
   own app, through the storefront's house adapter: a hard minimum for most,
-  and since 2026-11-17 PRT's 2-kit-minimum products list with a minimum of
-  1, PRT's $15 under-minimum fee and a count of 2 (one alone pays it, any
-  second item waives it) — the mirror row carries that fee and count. The
+  and a house's 2-kit-minimum products (PRT since 2026-11-17, P² since
+  2026-11-27, storefront bc9bd98) list with a minimum of 1, that house's
+  $15 under-minimum fee and a count of 2 (one alone pays it, any second
+  item from the shop waives it; a higher minimum stays hard) — the mirror
+  row carries that fee and count, and P²'s fee lands on its quote as
+  `customer_shipping_charge_usd`. The
   storefront has no per-order cap of its own since 2026-11-17 (a seller's
   `max_per_order` still holds; `1790105400` reworded the minimum's refusal). Flag a price that counts only the listing's
   own units, or a writer that skips the checks; do not propose
